@@ -3703,10 +3703,11 @@
   }
 </script>
 
-<!-- Agents and Artifacts sit over Projects as quiet rows. Each opens its dashboard, Artifacts with its ⌘J shortcut. -->
+<!-- Agents and Artifacts sit over Projects as quiet rows. Each opens its dashboard, Artifacts with its ⌘J shortcut,
+     and while its page shows, the row is the open row: the selection fill and the accent edge. -->
 {#snippet libraryRow()}
-  <button type="button" class="side-action library-entry" aria-label="Agents" aria-expanded={agentsOpen} aria-current={agentsOpen ? 'true' : undefined} disabled={switchLocked} onclick={() => { if (agentsOpen) agentsOpen = false; else void showAgents() }}><LucideIcon name="bot" /><span>Agents</span></button>
-  <button type="button" class="side-action library-entry" aria-label="Artifacts" aria-expanded={artifactsOpen} aria-current={artifactsOpen ? 'true' : undefined} aria-keyshortcuts={artifactShortcut} disabled={switchLocked} onclick={toggleArtifactRail}><LucideIcon name="file-code" /><span>Artifacts</span><kbd>{shortcutDisplayLabel(artifactShortcut)}</kbd></button>
+  <button type="button" class="side-action library-entry" aria-label="Agents" aria-expanded={agentsOpen} aria-current={agentsOpen ? 'true' : undefined} data-accent-edge={agentsOpen ? '' : undefined} disabled={switchLocked} onclick={() => { if (agentsOpen) agentsOpen = false; else void showAgents() }}><LucideIcon name="bot" /><span>Agents</span></button>
+  <button type="button" class="side-action library-entry" aria-label="Artifacts" aria-expanded={artifactsOpen} aria-current={artifactsOpen ? 'true' : undefined} data-accent-edge={artifactsOpen ? '' : undefined} aria-keyshortcuts={artifactShortcut} disabled={switchLocked} onclick={toggleArtifactRail}><LucideIcon name="file-code" /><span>Artifacts</span><kbd>{shortcutDisplayLabel(artifactShortcut)}</kbd></button>
 {/snippet}
 
 {#snippet freshRow()}
@@ -4701,6 +4702,8 @@
   .side-action :global(.lucide) { flex: 0 0 18px; width: 18px; height: 18px; }
   .side-action:hover { background: var(--faint); }
   .side-action[aria-pressed="true"], .side-action[aria-current="true"] { background: var(--selected); color: var(--on-selected); }
+  /* The open page's row keeps its fill under the pointer, as the open thread's row does. */
+  .side-action[aria-current="true"]:hover:not(:disabled) { background: var(--selected); }
   /* An agent's row carries its color: a wash on hover and while open, with an edge in that color. */
   .row-rename { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; }
   .row-rename input { width: 100%; min-width: 0; font: inherit; }

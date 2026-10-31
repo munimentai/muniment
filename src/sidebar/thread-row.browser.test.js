@@ -157,3 +157,29 @@ it('draws each tone in its status color', () => {
     unmount(ring)
   }
 })
+
+it('marks the Agents and Artifacts rows as the open row while their page shows, under the pointer too', async () => {
+  await mountWindow(false)
+  const sidebar = document.getElementById('sidebar')
+  const fill = (element) => getComputedStyle(element).backgroundColor
+  const probe = document.createElement('i')
+  probe.style.backgroundColor = 'var(--selected)'
+  document.body.append(probe)
+  for (const name of ['Agents', 'Artifacts']) {
+    const row = sidebar.querySelector(`button[aria-label="${name}"]`)
+    expect(row).not.toHaveAttribute('aria-current')
+    expect(getComputedStyle(row, '::before').content).toBe('none')
+    await userEvent.click(row)
+    await expect.poll(() => row.getAttribute('aria-current')).toBe('true')
+    // The pointer still rests on the row it pressed.
+    expect(fill(row)).toBe(fill(probe))
+    await userEvent.unhover(row)
+    await userEvent.hover(document.querySelector('.catalog-title'))
+    expect(fill(row)).toBe(fill(probe))
+    // The accent edge runs down its left side, as on an open thread's row.
+    const edge = getComputedStyle(row, '::before')
+    expect(edge.position).toBe('absolute')
+    expect(edge.width).toBe('2px')
+    for (const other of ['Agents', 'Artifacts'].filter((entry) => entry !== name)) expect(sidebar.querySelector(`button[aria-label="${other}"]`)).not.toHaveAttribute('aria-current')
+  }
+})
