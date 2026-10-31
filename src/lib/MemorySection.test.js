@@ -46,13 +46,38 @@ it('shows one compact row per fact and opens its details in place', async () => 
   await fireEvent.click(row)
   expect(row).toHaveAttribute('aria-expanded', 'true')
   const detail = document.getElementById(row.getAttribute('aria-controls'))
-  expect(within(detail).getByText('thread:t2 run:r2')).toBeInTheDocument()
+  // A source written before origins reads in words, with no raw thread or run id.
+  expect(within(detail).getByText('Added in a chat')).toBeInTheDocument()
+  expect(within(detail).queryByText(/thread:t2/)).toBeNull()
   expect(within(detail).getByText('Saved from a chat')).toBeInTheDocument()
   expect(within(detail).getByRole('button', { name: 'Edit' })).toBeInTheDocument()
   expect(within(detail).getByRole('button', { name: 'Delete' })).toBeInTheDocument()
   await fireEvent.click(row)
   expect(row).toHaveAttribute('aria-expanded', 'false')
   expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument()
+})
+
+it('names the thread a memory came from by its title and opens it', async () => {
+  const fact = { id: 'f1', title: 'Fact 1', content: 'Content.', source: 'thread:01a19320-a5a6 run:01a19320-b6b6', trust: 'conversation', origin: { kind: 'chat', thread_id: '01a19320-a5a6', run_id: '01a19320-b6b6' }, origin_label: 'Added in a chat' }
+  const invoke = vi.fn(async (cmd, args) => {
+    if (cmd === 'memory_profile_read') return ''
+    if (cmd === 'memory_facts') return [fact]
+    if (cmd === 'chat_thread_summaries') return args.cursor ? { summaries: [{ threadId: '01a19320-a5a6', title: 'Quarterly taxes' }], nextCursor: null } : { summaries: [{ threadId: 'other', title: 'Other' }], nextCursor: 'next' }
+    return null
+  })
+  const opened = vi.fn()
+  window.addEventListener('muniment:open-thread', opened)
+  render(MemorySection, { tauri: { invoke }, part: 'memory' })
+  await fireEvent.click(await screen.findByRole('button', { name: /^Fact 1/ }))
+  const link = await screen.findByRole('button', { name: 'Open Quarterly taxes' })
+  const source = link.closest('dd')
+  expect(source).toHaveTextContent('Added in a chat · Quarterly taxes')
+  expect(source).not.toHaveTextContent(/thread:|run:|01a19320/)
+  expect(invoke).toHaveBeenCalledWith('chat_thread_summaries', { limit: 100, cursor: 'next' })
+  await fireEvent.click(link)
+  expect(opened).toHaveBeenCalledTimes(1)
+  expect(opened.mock.calls[0][0].detail).toEqual({ threadId: '01a19320-a5a6' })
+  window.removeEventListener('muniment:open-thread', opened)
 })
 
 it('marks only external facts and explains them', async () => {
@@ -282,7 +307,7 @@ it('lists one compact row per suggested change and opens its details', async () 
   expect(within(update).getByText('Content of fact 1.')).toBeInTheDocument()
   expect(within(update).getByText('After')).toBeInTheDocument()
   expect(within(update).getByText('Revised fact 1.')).toBeInTheDocument()
-  expect(within(update).getByText('thread:t8 run:r8')).toBeInTheDocument()
+  expect(within(update).getByText('Added in a chat')).toBeInTheDocument()
   expect(within(update).getByRole('button', { name: 'Apply' })).toBeInTheDocument()
   expect(within(update).getByRole('button', { name: 'Dismiss' })).toBeInTheDocument()
   const removal = await open('Delete Fact 2')

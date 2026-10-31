@@ -14,6 +14,7 @@
   import MemoryImports from './MemoryImports.svelte'
   import { RECALL_DEFAULTS, loadRecall, saveRecall } from './memory-recall.js'
   import { formatDateTime } from './time-format.svelte.js'
+  import { factThread, openThread, sourceLabel, threadTitles } from './memory-source.js'
   // `part` shows one Settings page: profile, memory, or both for an agent.
   // `agent` is the agent whose memory shows from its profile: a new fact's
   // source names it, and its avatar marks that source. `addInPlace` shows
@@ -138,6 +139,14 @@
   const OP = { add: 'Add', update: 'Update', delete: 'Delete' }
   const when = { format: formatDateTime }
   let pending = $state([])
+  // A source names the thread a fact came from by its title, read once per set of threads.
+  let titles = $state(new Map())
+  const threadIds = $derived([...new Set([...facts, ...pending].map(factThread).filter(Boolean))].sort().join(' '))
+  $effect(() => {
+    const ids = threadIds
+    if (!ids) return
+    void threadTitles(tauri, ids.split(' ')).then((found) => { titles = found }).catch(() => {})
+  })
   let reviewing = $state(false)
   // A failed apply keeps its row and error until the user closes it, even
   // after the reload drops the proposal.
@@ -401,7 +410,7 @@
         {:else}
           <p class="fact-content">{fact.content}</p>
           <dl class="fact-meta">
-            <dt>Source</dt><dd class="record">{fact.source}</dd>
+            <dt>Source</dt>{@render source(fact)}
             {#if TRUST[fact.trust]}<dt>Trust</dt><dd>{TRUST[fact.trust]}</dd>{/if}
           </dl>
           <div class="fact-actions">
@@ -418,6 +427,11 @@
       </div>
     {/if}
   </li>
+{/snippet}
+{#snippet source(entry)}
+  {@const thread = factThread(entry)}
+  {@const title = titles.get(thread)}
+  <dd class="source">{sourceLabel(entry)}{#if title}{' · '}<button type="button" class="thread-link" aria-label={`Open ${title}`} onclick={() => openThread(thread)}>{title}</button>{/if}</dd>
 {/snippet}
 {#snippet proposalRow(proposal)}
   {@const key = `pending:${proposal.id}`}
@@ -448,7 +462,7 @@
           </div>
         {/if}
         <dl class="fact-meta">
-          <dt>Source</dt><dd class="record">{proposal.source}</dd>
+          <dt>Source</dt>{@render source(proposal)}
           <dt>Suggested</dt><dd>{suggested(proposal.created)}</dd>
         </dl>
         {#if error}<p class="error" role="alert">{error}</p>{/if}
@@ -527,7 +541,7 @@
   .fact-meta { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 0; font-size: var(--text-12); }
   .fact-meta dt { color: var(--muted); }
   .fact-meta dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
-  .record { font-family: var(--font-mono); }
+  .thread-link { padding: 0; border: 0; background: none; color: var(--ink); font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
   .fact-actions { display: flex; flex-wrap: wrap; gap: 8px; }
   .fact-actions:empty { display: none; }
   .fact-form { display: grid; gap: 12px; }

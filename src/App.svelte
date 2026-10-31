@@ -82,6 +82,7 @@
   import UsagePage from './usage/UsagePage.svelte'
   import LimitBanner from './usage/LimitBanner.svelte'
   import SidebarActions from './lib/SidebarActions.svelte'
+  import { OPEN_THREAD_EVENT } from './lib/memory-source.js'
   import { OPEN_USAGE_EVENT, composerLimit, isUsageShortcut, machineRefs, readUsage, usageShortcut } from './usage/usage.js'
   import ComposerMenuButton from './composer/ComposerMenuButton.svelte'
   import ComposerNotice from './composer/ComposerNotice.svelte'
@@ -3091,6 +3092,19 @@
     const showUsage = () => { if (fullPage !== 'usage' || settingsOpen) toggleFullPage('usage') }
     window.addEventListener(OPEN_USAGE_EVENT, showUsage)
     return () => window.removeEventListener(OPEN_USAGE_EVENT, showUsage)
+  })
+  // A memory's source opens the thread it came from, in place of Settings or a profile.
+  onMount(() => {
+    const showThread = async (event) => {
+      const threadId = event?.detail?.threadId
+      if (!threadId || switchLocked) return
+      if (threadId !== currentThreadId && !await chatController.openThread(threadId, true)) return
+      if (settingsOpen) closeSettings()
+      selectedAgent = null; profileOnlyAgent = null; agentProfileOpen = false
+      projectsOpen = false; agentsOpen = false; fullPage = null; artifactsOpen = false
+    }
+    window.addEventListener(OPEN_THREAD_EVENT, showThread)
+    return () => window.removeEventListener(OPEN_THREAD_EVENT, showThread)
   })
   // The Notifications badge counts what needs the user on every machine, from
   // core's page, and reads again shortly after each run or approval event.
