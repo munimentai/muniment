@@ -205,6 +205,9 @@ pub trait PiLaunchBoundaries {
         None
     }
     fn memory_agent_extension_path(&self) -> Option<PathBuf>;
+    /// Names the run's thread folder after `title` once a run ends, for a
+    /// thread that works in a folder of its own.
+    fn name_thread_folder(&self, _title: &str) {}
     fn prepare_pi_settings(
         &self,
         artifact: PiArtifactDescriptor,

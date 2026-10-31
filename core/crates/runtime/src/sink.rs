@@ -628,6 +628,21 @@ impl PiLaunchBoundaries for RuntimeChatEventSink {
         Ok((!instructions.is_empty()).then_some(instructions))
     }
 
+    fn name_thread_folder(&self, title: &str) {
+        let sessions = self.profile.pi_session_root();
+        let Some(profile) = sessions.parent() else {
+            return;
+        };
+        if let Err(error) = muniment_core::projects::name_thread_workspace(
+            profile,
+            self.memory_runtime.config_directory(),
+            &self.thread_id,
+            title,
+        ) {
+            eprintln!("muniment-runtime: thread_folder name_failed error={error}");
+        }
+    }
+
     fn project_directory(&self) -> Result<Option<PathBuf>, PiLaunchError> {
         let sessions = self.profile.pi_session_root();
         let profile = sessions

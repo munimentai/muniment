@@ -26,6 +26,8 @@ const ARTIFACT: PiArtifactDescriptor = PiArtifactDescriptor {
 };
 
 struct Boundary(PathBuf);
+/// The titles the coordinator named a thread folder with, in order.
+static NAMED: Mutex<Vec<String>> = Mutex::new(Vec::new());
 impl ChatEventSink for Boundary {
     fn provenance(&self) -> (&str, &str) {
         ("test", "1")
@@ -46,6 +48,9 @@ impl PiLaunchBoundaries for Boundary {
     }
     fn prepare_pi_settings(&self, _: PiArtifactDescriptor, _: &Path) -> Result<(), PiLaunchError> {
         Ok(())
+    }
+    fn name_thread_folder(&self, title: &str) {
+        NAMED.lock().unwrap().push(title.to_owned());
     }
 }
 
@@ -199,8 +204,20 @@ fn only_a_completed_run_without_a_saved_fact_learns_after_it_ends() {
     assert!(prompts.lock().unwrap().is_empty());
 
     // A completed reply writes what the model proposed as a conversation fact.
+    NAMED.lock().unwrap().clear();
     let (run, thread, last) = reply(&root, &storage, &runtime, &memory);
     assert_eq!(last, "run.completed");
+    // The ended run names its thread's folder with the thread's title.
+    let title = storage
+        .lock()
+        .unwrap()
+        .journal
+        .summaries_of_threads(std::slice::from_ref(&thread))
+        .unwrap()
+        .remove(0)
+        .title;
+    assert!(!title.is_empty());
+    assert_eq!(*NAMED.lock().unwrap(), vec![title]);
     let sent = prompts.lock().unwrap().clone();
     assert_eq!(sent.len(), 1);
     assert!(sent[0].contains(PROMPT));

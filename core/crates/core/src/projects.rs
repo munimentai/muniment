@@ -434,6 +434,36 @@ pub fn workspace_with_config(
     Ok(folder)
 }
 
+/// Names a thread's own session folder after its title and answers the
+/// folder. A thread that works in an agent's or a project's folder keeps
+/// that folder and answers `None`. The name index lives under `config`.
+pub fn name_thread_workspace(
+    profile: &Path,
+    config: &Path,
+    thread: &str,
+    title: &str,
+) -> Result<Option<PathBuf>, String> {
+    if title.trim().is_empty() || crate::agents::state(profile)?.threads.contains_key(thread) {
+        return Ok(None);
+    }
+    let catalog = read(profile)?;
+    if catalog
+        .threads
+        .get(thread)
+        .is_some_and(|project| !catalog.remote.contains_key(project))
+    {
+        return Ok(None);
+    }
+    let home = crate::home::configured_home(config)
+        .map_err(|e| e.to_string())?
+        .ok_or("The Home folder is unavailable.")?;
+    let sessions = home.join("sessions");
+    if sessions.is_symlink() {
+        return Err("The session folder must not be a symbolic link.".into());
+    }
+    crate::workspace_names::resolve(config, &sessions, thread, Some(title), None).map(Some)
+}
+
 /// Converts legacy session directories using the journal's visible thread titles.
 pub fn migrate_session_names(profile: &Path) -> Result<(), String> {
     let Some(home) = crate::home::configured_home(profile).map_err(|e| e.to_string())? else {
@@ -559,6 +589,46 @@ mod tests {
         assert_eq!(
             fs::read_to_string(first.join("result.txt")).unwrap(),
             "kept"
+        );
+    }
+    #[test]
+    fn a_titled_thread_names_its_own_folder_and_a_project_thread_keeps_the_project() {
+        let fixture = Fixture::new();
+        let profile = fixture.profile();
+        let untitled = workspace(&profile, "db6632f9-thread").unwrap();
+        fs::write(untitled.join("notes.txt"), "kept").unwrap();
+        let named =
+            name_thread_workspace(&profile, &profile, "db6632f9-thread", "Bubbles in water")
+                .unwrap()
+                .unwrap();
+        assert!(named
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("Bubbles_in_water-"));
+        assert!(!untitled.exists());
+        assert_eq!(fs::read_to_string(named.join("notes.txt")).unwrap(), "kept");
+        // The thread's workspace is the named folder from here on.
+        assert_eq!(workspace(&profile, "db6632f9-thread").unwrap(), named);
+        // A second pass with the same title leaves the folder in place.
+        assert_eq!(
+            name_thread_workspace(&profile, &profile, "db6632f9-thread", "Bubbles in water")
+                .unwrap(),
+            Some(named.clone())
+        );
+        assert_eq!(
+            name_thread_workspace(&profile, &profile, "db6632f9-thread", " ").unwrap(),
+            None
+        );
+        let project = create(&profile, "Research").unwrap();
+        assign(&profile, "thread-two", &project).unwrap();
+        assert_eq!(
+            name_thread_workspace(&profile, &profile, "thread-two", "Other").unwrap(),
+            None
+        );
+        assert_eq!(
+            workspace(&profile, "thread-two").unwrap(),
+            folder(&profile, &project).unwrap()
         );
     }
     #[test]

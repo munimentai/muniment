@@ -1833,6 +1833,14 @@ fn coordinate_work(
             }
         }
     }
+    // The thread's folder takes the thread's title once the run ends, never
+    // while Pi works in it. The next launch points the stored session at
+    // the renamed folder.
+    if compaction.is_none() {
+        if let Some(title) = run_thread_title(&journal, &run_id) {
+            app.name_thread_folder(&title);
+        }
+    }
     if compaction.is_none()
         && matches!(
             projector.status(),
@@ -1848,6 +1856,19 @@ fn coordinate_work(
         };
         memory_runtime.extract_after_run(&run_id, messages);
     }
+}
+
+/// The title of the thread `run_id` ran in, when it has one.
+fn run_thread_title(journal: &SharedStorage, run_id: &str) -> Option<String> {
+    let mut storage = journal.lock().ok()?;
+    let thread = storage.journal.run_thread_id(run_id).ok()??;
+    let summary = storage
+        .journal
+        .summaries_of_threads(&[thread])
+        .ok()?
+        .into_iter()
+        .next()?;
+    (!summary.title.trim().is_empty()).then_some(summary.title)
 }
 
 fn stored_prompt(run_id: &str, subject: Option<&str>) -> Vec<String> {
