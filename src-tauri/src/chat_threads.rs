@@ -231,12 +231,36 @@ struct RuntimePage {
     page: serde_json::Value,
 }
 
+/// The threads this computer's runtime deleted, from its page, when it
+/// answered. A runtime that names none answers an empty list.
+#[cfg(any(unix, target_os = "windows"))]
+fn local_deleted_threads(pages: &[RuntimePage]) -> Option<Vec<String>> {
+    let page = pages.iter().find(|page| page.runtime_id == LOCAL_RUNTIME)?;
+    Some(
+        page.page
+            .get("deletedThreadIds")
+            .and_then(serde_json::Value::as_array)
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default(),
+    )
+}
+
 /// Merges each runtime's page into one list, newest first. Each summary names
 /// its runtime, `runtimeIds` names the runtimes that answered, and the next
 /// cursor holds the cursor of every runtime with more threads, as a JSON
-/// object from runtime id to cursor.
+/// object from runtime id to cursor. A paired runtime's copy of a thread this
+/// computer deleted is left out: the delete here holds, whatever another
+/// machine still keeps.
 #[cfg(any(unix, target_os = "windows"))]
-fn merge_thread_pages(pages: Vec<RuntimePage>) -> serde_json::Value {
+fn merge_thread_pages(
+    pages: Vec<RuntimePage>,
+    deleted_here: &std::collections::HashSet<String>,
+) -> serde_json::Value {
     let mut summaries = Vec::new();
     let mut cursors = serde_json::Map::new();
     let mut answered = Vec::new();
@@ -244,6 +268,13 @@ fn merge_thread_pages(pages: Vec<RuntimePage>) -> serde_json::Value {
         answered.push(runtime_id.clone());
         if let Some(listed) = page.get("summaries").and_then(serde_json::Value::as_array) {
             for summary in listed {
+                let thread_id = summary
+                    .get("threadId")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default();
+                if runtime_id != LOCAL_RUNTIME && deleted_here.contains(thread_id) {
+                    continue;
+                }
                 let mut summary = summary.clone();
                 if let Some(object) = summary.as_object_mut() {
                     object.insert("runtimeId".into(), runtime_id.clone().into());
@@ -344,7 +375,10 @@ pub async fn chat_thread_summaries(
         if pages.is_empty() {
             return Err(first_error.unwrap_or_else(auth::background_service_error));
         }
-        let merged = merge_thread_pages(pages);
+        if let Some(deleted) = local_deleted_threads(&pages) {
+            attach.remember_deleted_threads(deleted);
+        }
+        let merged = merge_thread_pages(pages, &attach.deleted_threads());
         if let Some(listed) = merged["summaries"].as_array() {
             attach.remember_thread_runtimes(thread_runtimes(listed));
         }
@@ -1326,7 +1360,8 @@ mod tests {
     #[cfg(any(unix, target_os = "windows"))]
     #[test]
     fn thread_pages_merge_newest_first_with_each_runtime_named() {
-        let merged = merge_thread_pages(vec![
+        let merged = merge_thread_pages(
+            vec![
             RuntimePage {
                 runtime_id: "local".into(),
                 page: serde_json::json!({
@@ -1344,7 +1379,9 @@ mod tests {
                     "nextCursor": null
                 }),
             },
-        ]);
+        ],
+            &Default::default(),
+        );
         let order: Vec<(&str, &str)> = merged["summaries"]
             .as_array()
             .unwrap()
@@ -1369,11 +1406,64 @@ mod tests {
         );
         assert!(merged_cursor_targets(Some("not json"), &[]).is_err());
 
-        let last = merge_thread_pages(vec![RuntimePage {
+        let last = merge_thread_pages(
+            vec![RuntimePage {
+                runtime_id: "local".into(),
+                page: serde_json::json!({"summaries": [], "nextCursor": null}),
+            }],
+            &Default::default(),
+        );
+        assert!(last["nextCursor"].is_null());
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    #[test]
+    fn a_paired_copy_of_a_thread_deleted_here_stays_out_of_the_list() {
+        let pages = vec![
+            RuntimePage {
+                runtime_id: "local".into(),
+                page: serde_json::json!({
+                    "summaries": [{"threadId": "kept", "updatedAt": "2026-10-31T10:00:00Z"}],
+                    "nextCursor": null,
+                    "deletedThreadIds": ["gone"]
+                }),
+            },
+            RuntimePage {
+                runtime_id: "hub".into(),
+                page: serde_json::json!({
+                    "summaries": [
+                        {"threadId": "gone", "updatedAt": "2026-10-31T12:00:00Z", "owner_runtime": "core-local", "replica": true},
+                        {"threadId": "hub-own", "updatedAt": "2026-10-30T12:00:00Z"}
+                    ],
+                    "nextCursor": null
+                }),
+            },
+        ];
+        let deleted: std::collections::HashSet<String> = local_deleted_threads(&pages)
+            .unwrap()
+            .into_iter()
+            .collect();
+        let merged = merge_thread_pages(pages, &deleted);
+        let listed: Vec<&str> = merged["summaries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|summary| summary["threadId"].as_str().unwrap())
+            .collect();
+        assert_eq!(listed, vec!["kept", "hub-own"]);
+
+        // A page without this computer's runtime names no deletes, so the
+        // ones it named before still hold; an older runtime names none.
+        let hub_only = vec![RuntimePage {
+            runtime_id: "hub".into(),
+            page: serde_json::json!({"summaries": [], "nextCursor": null}),
+        }];
+        assert_eq!(local_deleted_threads(&hub_only), None);
+        let older = vec![RuntimePage {
             runtime_id: "local".into(),
             page: serde_json::json!({"summaries": [], "nextCursor": null}),
-        }]);
-        assert!(last["nextCursor"].is_null());
+        }];
+        assert_eq!(local_deleted_threads(&older), Some(Vec::new()));
     }
 
     #[cfg(any(unix, target_os = "windows"))]

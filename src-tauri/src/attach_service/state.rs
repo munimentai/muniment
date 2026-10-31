@@ -67,6 +67,9 @@ pub struct AttachCompanionState {
     pub(super) active: Mutex<Option<String>>,
     /// The runtime each listed thread lives on, from the merged thread list.
     pub(super) thread_runtimes: Mutex<std::collections::HashMap<String, String>>,
+    /// The threads this computer's runtime last named as deleted, which the
+    /// merged thread list leaves out of every paired runtime's page.
+    pub(super) deleted_threads: Mutex<std::collections::HashSet<String>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -536,6 +539,7 @@ impl Default for AttachCompanionState {
             remotes: Mutex::new(std::collections::HashMap::new()),
             active: Mutex::new(None),
             thread_runtimes: Mutex::new(std::collections::HashMap::new()),
+            deleted_threads: Mutex::new(std::collections::HashSet::new()),
         }
     }
 }
@@ -547,6 +551,7 @@ impl Default for AttachCompanionState {
             remotes: Mutex::new(std::collections::HashMap::new()),
             active: Mutex::new(None),
             thread_runtimes: Mutex::new(std::collections::HashMap::new()),
+            deleted_threads: Mutex::new(std::collections::HashSet::new()),
         }
     }
 }
@@ -637,6 +642,16 @@ impl AttachCompanionState {
         threads: impl IntoIterator<Item = (String, String)>,
     ) {
         lock(&self.thread_runtimes).extend(threads);
+    }
+
+    /// Keeps the threads this computer's runtime named as deleted.
+    pub(crate) fn remember_deleted_threads(&self, threads: Vec<String>) {
+        *lock(&self.deleted_threads) = threads.into_iter().collect();
+    }
+
+    /// The threads this computer's runtime last named as deleted.
+    pub(crate) fn deleted_threads(&self) -> std::collections::HashSet<String> {
+        lock(&self.deleted_threads).clone()
     }
 
     /// The runtime a listed thread lives on, when the merged list named it.
