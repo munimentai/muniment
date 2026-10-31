@@ -128,6 +128,8 @@ export function createChatController({
   // the same thread id does not refresh. The set is insertion-ordered and holds
   // at most 256 thread ids. It drops the oldest entry past that bound.
   const signaledThreads = new Set()
+  // The machine each select named, by thread id.
+  const selectedRuntimes = new Map()
   let signaledThreadRefreshInFlight = false
   let signaledThreadRefreshFollowUp = false
   // The signaled-run set marks each new run id once. A later event with the
@@ -522,13 +524,17 @@ export function createChatController({
     switchingThread = true
     onThreadSwitch(true)
     const previousThreadId = readThreadId()
+    // Each select names its thread's machine as the list shows it now, so a
+    // list that changes during the load sends no select to another machine.
+    const target = selection(threadId)
+    const previous = previousThreadId == null ? null : selection(previousThreadId)
     const wasBlocked = switchBlocked
     let selected = false
     historyLoads += 1
     holdBuffer()
     try {
       if (select) {
-        await invoke('chat_select_thread', selection(threadId))
+        await invoke('chat_select_thread', target)
         selected = true
       }
       const history = []
@@ -547,7 +553,7 @@ export function createChatController({
       if (destroyed) return
       // Read first so a failed initial history read still permits a fresh thread.
       if (restoreSelection && !selected) {
-        await invoke('chat_select_thread', selection(threadId))
+        await invoke('chat_select_thread', target)
         selected = true
         if (destroyed) return
       }
@@ -595,7 +601,7 @@ export function createChatController({
             switchBlocked = true
           } else {
             try {
-              await invoke('chat_select_thread', { threadId: previousThreadId })
+              await invoke('chat_select_thread', previous)
               switchBlocked = false
             } catch (_) {
               switchBlocked = true
@@ -867,9 +873,16 @@ export function createChatController({
 
   // A thread's selection names the machine its row lives on, so requests
   // and the model list follow the machine the composer shows.
+  // The machine a select names. A thread the list no longer names keeps the
+  // machine a select last named for it, so a select never falls back to
+  // whichever machine is active.
   function selection(threadId) {
     const runtimeId = readThreadSummaries().find((summary) => summary.threadId === threadId)?.runtimeId
-    return runtimeId ? { threadId, runtimeId } : { threadId }
+      ?? selectedRuntimes.get(threadId)
+    if (!runtimeId) return { threadId }
+    selectedRuntimes.set(threadId, runtimeId)
+    if (selectedRuntimes.size > signaledThreadCap) selectedRuntimes.delete(selectedRuntimes.keys().next().value)
+    return { threadId, runtimeId }
   }
 
   async function sendNewThread(text) {

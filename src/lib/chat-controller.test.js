@@ -1824,6 +1824,45 @@ describe('chat controller', () => {
     })
   })
 
+  it('restores the previous thread on its own machine when a local thread fails to load', async () => {
+    const summaries = [
+      { threadId: 'red-trek', runtimeId: 'local' },
+      { threadId: 'hub-thread', runtimeId: 'hub' },
+    ]
+    const invoke = vi.fn(async (command) => {
+      if (command === 'chat_thread_open') throw new Error('offline')
+    })
+    const context = setup(invoke, { threadId: 'hub-thread', summaries })
+
+    await context.controller.openThread('red-trek', true)
+
+    expect(invoke.mock.calls.filter(([command]) => command === 'chat_select_thread')).toEqual([
+      ['chat_select_thread', { threadId: 'red-trek', runtimeId: 'local' }],
+      ['chat_select_thread', { threadId: 'hub-thread', runtimeId: 'hub' }],
+    ])
+  })
+
+  it('retries Restore history on the thread\'s own machine after the list drops the thread', async () => {
+    const invoke = vi.fn(async (command) => {
+      if (command === 'chat_thread_open') throw new Error('offline')
+    })
+    const context = setup(invoke, {
+      threadId: 'hub-thread',
+      summaries: [{ threadId: 'red-trek', runtimeId: 'local' }, { threadId: 'hub-thread', runtimeId: 'hub' }],
+    })
+    await context.controller.openThread('red-trek', true)
+    const retry = context.onHistoryError.mock.lastCall[1]
+    expect(retry.label).toBe('Restore history')
+    // A reconnect list answered by the paired hub alone leaves the local thread out.
+    context.onThreadSummaries([{ threadId: 'hub-thread', runtimeId: 'hub' }])
+    invoke.mockClear()
+
+    await retry.run()
+
+    expect(invoke.mock.calls.filter(([command]) => command === 'chat_select_thread')[0])
+      .toEqual(['chat_select_thread', { threadId: 'red-trek', runtimeId: 'local' }])
+  })
+
   it('blocks sends after restoration fails until a thread retry succeeds', async () => {
     const invoke = vi.fn()
       .mockResolvedValueOnce()
