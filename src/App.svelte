@@ -1505,7 +1505,8 @@
   let foregroundOnlyDismissed = $state(false)
   let foregroundOnlyNotice = $derived(foregroundOnlyDismissed ? null : runtimeNotice?.foregroundOnly ?? null)
   // Each time the runtime falls back to running as the app's child is a new
-  // cause. The close control keeps it away for the rest of the launch.
+  // cause. The notice stays until the user closes it, and the close control
+  // keeps it away for the rest of the launch. Settings > General keeps the state.
   let foregroundOnlyCause = 0
   let foregroundOnlyWas = false
   $effect(() => {
@@ -1516,7 +1517,7 @@
       foregroundOnlyWas = on
       if (!notice) { composerNotices.withdraw('background-service'); return }
       composerNotices.show({
-        id: 'background-service', cause: foregroundOnlyCause, text: notice.text, label: 'Background service', testid: 'foreground-only-notice',
+        id: 'background-service', cause: foregroundOnlyCause, text: notice.text, label: 'Background service', testid: 'foreground-only-notice', persistent: true,
         action: { label: notice.control, run: () => backgroundServiceNotice.openLoginItems() },
         dismissLabel: 'Dismiss background service notice', ondismiss: () => { foregroundOnlyDismissed = true },
       })
@@ -4393,7 +4394,7 @@
         {#if settingsOpen}
           {#await loadSettings() then module}
           {@const Settings = module.default}
-          <Settings {tauri} bind:section={settingsSection} connectProvider={settingsConnectProvider} onclose={closeSettings} homePath={onboarding.homePath} onchangehome={openHomeSettings} local={auth.name === 'local'} signInDisabled={!!active || !!backgroundRun || localEntryPending} onsignin={signIn} {accountStatus} inventory={inventoryMachine === (remoteRuntime?.id ?? LOCAL_RUNTIME_ID) ? inventory : null} oninventory={(next) => { inventory = next; inventoryMachine = remoteRuntime?.id ?? LOCAL_RUNTIME_ID; if (accountStatus === inventoryError) accountStatus = ''; inventoryError = '' }} oncompanieschange={() => { recordRefresh += 1 }} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} oncreateextension={createExtensionDraft} subject={auth.subject ?? ''} onsignout={() => run('sign-out')} onrecord={openRecordFromSettings} {remoteRuntime} {runtimeList} onselectruntime={(runtime) => { offloadTarget = null; void selectRuntime(runtime) }} runtimeSwitchDisabled={switchLocked || !!active || !!backgroundRun} onpermissions={() => { modesRevision += 1 }} />
+          <Settings {tauri} bind:section={settingsSection} connectProvider={settingsConnectProvider} onclose={closeSettings} homePath={onboarding.homePath} onchangehome={openHomeSettings} local={auth.name === 'local'} signInDisabled={!!active || !!backgroundRun || localEntryPending} onsignin={signIn} {accountStatus} inventory={inventoryMachine === (remoteRuntime?.id ?? LOCAL_RUNTIME_ID) ? inventory : null} oninventory={(next) => { inventory = next; inventoryMachine = remoteRuntime?.id ?? LOCAL_RUNTIME_ID; if (accountStatus === inventoryError) accountStatus = ''; inventoryError = '' }} oncompanieschange={() => { recordRefresh += 1 }} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} oncreateextension={createExtensionDraft} subject={auth.subject ?? ''} onsignout={() => run('sign-out')} onrecord={openRecordFromSettings} {remoteRuntime} {runtimeList} onselectruntime={(runtime) => { offloadTarget = null; void selectRuntime(runtime) }} runtimeSwitchDisabled={switchLocked || !!active || !!backgroundRun} onpermissions={() => { modesRevision += 1 }} foregroundOnly={runtimeNotice?.foregroundOnly ?? null} onopenloginitems={() => backgroundServiceNotice.openLoginItems()} />
           {:catch}<p role="alert">Settings could not load. Close and reopen settings.</p>{/await}
         {/if}
         <!-- Message actions get their own region, outside the thread shell: writing a

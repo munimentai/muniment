@@ -695,7 +695,7 @@ describe('workspace composer entry', () => {
     }
   })
 
-  it('shows the foreground-only notice over the composer once per launch after it times out', async () => {
+  it('keeps the foreground-only notice over the composer past the notice timeout until the user closes it', async () => {
     runtimeState = { revision: 1, lastEvent: 'connected', visible: false, busy: false, foregroundOnly: true }
     invoke.mockImplementation(async (command) => {
       if (command === 'project_list') return { projects: {}, threads: {} }
@@ -716,7 +716,9 @@ describe('workspace composer entry', () => {
       expect(notice.parentElement).toBe(composer.closest('.composer'))
       expect(notice).toHaveAttribute('data-composer-panel')
       expect(within(notice).getByText('Scheduled agents run only while Muniment is open.')).not.toHaveClass('record')
-      await vi.advanceTimersByTimeAsync(6000)
+      await vi.advanceTimersByTimeAsync(30000)
+      expect(screen.getByTestId('foreground-only-notice')).toBeInTheDocument()
+      await fireEvent.click(within(notice).getByRole('button', { name: 'Dismiss background service notice' }))
       await waitFor(() => expect(screen.queryByTestId('foreground-only-notice')).not.toBeInTheDocument())
       runtimeListener({ payload: { revision: 2, lastEvent: 'connected', visible: false, busy: false, foregroundOnly: true } })
       await vi.advanceTimersByTimeAsync(1000)
@@ -724,8 +726,28 @@ describe('workspace composer entry', () => {
       runtimeListener({ payload: { revision: 3, lastEvent: 'connected', visible: false, busy: false, foregroundOnly: false } })
       await vi.advanceTimersByTimeAsync(10)
       runtimeListener({ payload: { revision: 4, lastEvent: 'connected', visible: false, busy: false, foregroundOnly: true } })
-      expect(await screen.findByTestId('foreground-only-notice')).toBeInTheDocument()
+      await vi.advanceTimersByTimeAsync(10)
+      // The close control keeps it away for the launch.
+      expect(screen.queryByTestId('foreground-only-notice')).not.toBeInTheDocument()
     } finally { vi.useRealTimers() }
+  })
+
+  it('keeps the foreground-only state in Settings > General after the composer notice closes', async () => {
+    runtimeState = { revision: 1, lastEvent: 'connected', visible: false, busy: false, foregroundOnly: true }
+    const fallback = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, args) => command === 'open_login_items' ? undefined : fallback(command, args))
+    render(App)
+    await findWorkspaceComposer()
+    const notice = await screen.findByTestId('foreground-only-notice')
+    await fireEvent.click(within(notice).getByRole('button', { name: 'Dismiss background service notice' }))
+    await waitFor(() => expect(screen.queryByTestId('foreground-only-notice')).not.toBeInTheDocument())
+    const dialog = await openSettings('General')
+    const group = await within(dialog).findByRole('region', { name: 'Background service' })
+    expect(within(group).getByText('Scheduled agents run only while Muniment is open.')).toBeVisible()
+    await fireEvent.click(within(group).getByRole('button', { name: 'Open Login Items' }))
+    expect(invoke).toHaveBeenCalledWith('open_login_items')
+    runtimeListener({ payload: { revision: 2, lastEvent: 'connected', visible: false, busy: false, foregroundOnly: false } })
+    await waitFor(() => expect(within(dialog).queryByRole('region', { name: 'Background service' })).not.toBeInTheDocument())
   })
 
   it('says once over the workspace that scheduled agents run only while the app is open', async () => {
