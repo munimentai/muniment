@@ -54,6 +54,27 @@ describe('Hold sign-in here', () => {
   })
 })
 
+describe('Sign-in', () => {
+  it('offers only a fresh sign-in after a cancelled one, never its stale page', async () => {
+    let emit
+    const listen = (_event, handler) => { emit = handler; return Promise.resolve(() => {}) }
+    const invoke = vi.fn(async () => null)
+    const plans = { ...settings, subscriptions: [{ provider: 'openai-codex', family: 'openai', label: 'ChatGPT Plus or Pro' }] }
+    render(ModelAccounts, { tauri: { invoke }, listen, settings: plans, family: 'openai', fleet: null })
+    await fireEvent.click(screen.getByRole('button', { name: 'Add another ChatGPT Plus or Pro account' }))
+    await waitFor(() => expect(emit).toBeTypeOf('function'))
+    emit({ payload: { provider: 'openai-codex', stage: 'event', event: { type: 'auth_url', url: 'https://auth.example/login' } } })
+    expect(await screen.findByRole('button', { name: 'Open again' })).toBeInTheDocument()
+    emit({ payload: { provider: 'openai-codex', stage: 'cancelled' } })
+    expect(await screen.findByText('The sign-in was cancelled.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Open again' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Copy sign-in link' })).toBeNull()
+    invoke.mockClear()
+    await fireEvent.click(screen.getByRole('button', { name: 'Sign in again' }))
+    expect(invoke).toHaveBeenCalledWith('model_router_subscription_start', { provider: 'openai-codex', runtime: 'local' })
+  })
+})
+
 describe('Disconnect', () => {
   it('asks in the app dialog before it removes a key, and keeps the key on Cancel', async () => {
     const key = { ...subscription('k1', 'invalid-test'), source: 'key' }

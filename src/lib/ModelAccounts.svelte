@@ -143,16 +143,16 @@
       }
       case 'failed':
         stopListening()
-        signIn = { ...signIn, stage: 'failed', message: payload.message || 'The sign-in did not finish. Try again.', prompt: null }
+        signIn = { ...signIn, stage: 'failed', message: payload.message || 'The sign-in did not finish. Try again.', url: '', code: '', prompt: null }
         break
       case 'cancelled':
         stopListening()
-        signIn = { ...signIn, stage: 'cancelled', message: 'The sign-in was cancelled.', prompt: null }
+        signIn = { ...signIn, stage: 'cancelled', message: 'The sign-in was cancelled.', url: '', code: '', prompt: null }
         break
       case 'exit':
         if (signIn && signIn.stage !== 'failed' && signIn.stage !== 'cancelled') {
           stopListening()
-          signIn = { ...signIn, stage: 'failed', message: 'The sign-in stopped before it finished. Try again.', prompt: null }
+          signIn = { ...signIn, stage: 'failed', message: 'The sign-in stopped before it finished. Try again.', url: '', code: '', prompt: null }
         }
         break
       default:
@@ -286,7 +286,9 @@
         <button type="button" disabled={!signInAnswer.trim()} onclick={() => answerSignIn(signInAnswer.trim())}>Continue</button>
       {/if}
       {#if signIn.stage === 'failed' || signIn.stage === 'cancelled'}
-        <button type="button" onclick={() => { signIn = null }}>Back</button>
+        <!-- An ended sign-in's page no longer signs in, so only a fresh one starts. -->
+        <button type="button" disabled={pending} onclick={() => startSignIn(signIn)}>{signIn.stage === 'cancelled' ? 'Sign in again' : 'Try again'}</button>
+        <button type="button" class="quiet" onclick={() => { signIn = null }}>Back</button>
       {:else}
         <button type="button" class="quiet" onclick={cancelSignIn}>Cancel</button>
       {/if}

@@ -623,7 +623,7 @@
             <button type="button" data-variant="primary" disabled={!loginAnswer.trim()} onclick={() => answerPrompt(loginAnswer.trim())}>Continue</button>
           {/if}
           {#if login.stage === 'failed' || login.stage === 'cancelled'}
-            <button type="button" data-variant="primary" onclick={startLogin}>Try again</button>
+            <button type="button" data-variant="primary" onclick={startLogin}>{login.stage === 'cancelled' ? 'Sign in again' : 'Try again'}</button>
           {:else}
             <button type="button" class="quiet" onclick={cancelLogin}>Cancel</button>
           {/if}

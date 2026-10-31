@@ -114,6 +114,32 @@ it('lists the Anthropic accounts on its connect page, each with Disconnect, and 
   await waitFor(() => expect(screen.queryByText('work@example.test')).toBeNull())
 })
 
+it('offers only a fresh sign-in after a cancelled Claude Code sign-in, never its stale page', async () => {
+  const router = { families: [{ id: 'anthropic', name: 'Anthropic' }], subscriptions: [{ provider: 'anthropic', family: 'anthropic', label: 'Claude Pro or Max' }], accounts: [claudeAccount('a1', 'work@example.test')] }
+  const claude = { providers: [{ id: 'claude-bridge', name: 'Anthropic', source: 'account', base_url: null, models: [] }], hidden: [], shown: [], default_provider: null, default_model: null }
+  const tauri = { invoke: vi.fn(async (command) => {
+    if (command === 'local_mode_provider_inventory') return claude
+    if (command === 'model_router_settings') return router
+    return null
+  }) }
+  let emit
+  const listen = async (_event, handler) => { emit = handler; return () => {} }
+  render(ModelsSection, { props: { tauri, listen, inventory: claude, connect: 'anthropic' } })
+  await fireEvent.click(await screen.findByRole('button', { name: 'Add another account' }))
+  await waitFor(() => expect(emit).toBeTypeOf('function'))
+  emit({ payload: { provider: 'anthropic', stage: 'event', event: { type: 'auth_url', url: 'https://claude.example/oauth' } } })
+  expect(await screen.findByRole('button', { name: 'Open again' })).toBeInTheDocument()
+  // The browser tab closed, and the sign-in ended.
+  emit({ payload: { provider: 'anthropic', stage: 'cancelled' } })
+  expect(await screen.findByText('The sign-in was cancelled.')).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Open again' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Copy sign-in link' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Open the sign-in page' })).toBeNull()
+  tauri.invoke.mockClear()
+  await fireEvent.click(screen.getByRole('button', { name: 'Sign in again' }))
+  expect(tauri.invoke).toHaveBeenCalledWith('local_mode_account_login_start', { provider: 'anthropic', runtime: 'local' })
+})
+
 it('disconnects a provider connection only after the dialog confirms it, and Cancel keeps it', async () => {
   const keyed = { providers: [{ id: 'openai', name: 'OpenAI', source: 'key', base_url: null, models: [{ id: 'gpt-5.5' }] }], hidden: [], shown: [], default_provider: null, default_model: null }
   const tauri = { invoke: vi.fn(async (command) => {

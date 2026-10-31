@@ -19,6 +19,14 @@ describe('account sign-in events', () => {
     expect(step.open).toBe('https://device.example')
   })
 
+  it('drops the page and code of a cancelled, failed or stopped sign-in, which no longer sign in', () => {
+    const browser = loginEvent(start, { provider: 'openai-codex', stage: 'event', event: { type: 'auth_url', url: 'https://auth.example/login' } }).login
+    const code = loginEvent(start, { stage: 'event', event: { type: 'device_code', userCode: 'ABCD-1234', verificationUri: 'https://device.example' } }).login
+    for (const login of [browser, code]) {
+      for (const stage of ['cancelled', 'failed', 'exit']) expect(loginEvent(login, { stage }).login).toMatchObject({ url: '', code: '' })
+    }
+  })
+
   it('ignores another provider\'s events and fails an exit before done', () => {
     expect(loginEvent(start, { provider: 'kimi', stage: 'done' })).toBeNull()
     expect(loginEvent(start, { stage: 'exit' }).login.stage).toBe('failed')
