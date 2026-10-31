@@ -348,3 +348,42 @@ it('reviews an agent memory change through the agent command', async () => {
   expect(await screen.findByRole('button', { name: 'Standup time Saved from a chat' })).toBeInTheDocument()
   await waitFor(() => expect(screen.queryByText(/suggested change/)).not.toBeInTheDocument())
 })
+
+function setupReach({ providers = [], accounts = [], learn = true } = {}) {
+  const invoke = vi.fn(async (cmd) => {
+    if (cmd === 'memory_profile_read') return ''
+    if (cmd === 'memory_facts') return []
+    if (cmd === 'memory_recall_settings') return { learn, use: true, ask: false }
+    if (cmd === 'local_mode_provider_inventory') return { providers }
+    if (cmd === 'model_router_settings') return { accounts }
+    return null
+  })
+  render(MemorySection, { tauri: { invoke }, part: 'memory' })
+  return invoke
+}
+
+it('says under Save facts from chats when no model can save facts', async () => {
+  const invoke = setupReach()
+  const recall = await screen.findByRole('region', { name: 'Recall' })
+  expect(await within(recall).findByText('No model can save facts. Connect one in Models.')).toBeInTheDocument()
+  expect(invoke).toHaveBeenCalledWith('local_mode_provider_inventory', { cached: true })
+})
+
+it('shows no model notice when a provider or a routing account can save facts', async () => {
+  for (const reach of [{ providers: [{ id: 'openai' }] }, { accounts: [{ id: 'a', enabled: true }] }]) {
+    const invoke = setupReach(reach)
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('model_router_settings'))
+    const recall = await screen.findByRole('region', { name: 'Recall' })
+    await waitFor(() => expect(within(recall).getByRole('switch', { name: 'Save facts from chats' })).toBeEnabled())
+    expect(within(recall).queryByText(/No model can save facts/)).not.toBeInTheDocument()
+    cleanup()
+  }
+})
+
+it('shows no model notice while Save facts from chats is off', async () => {
+  const invoke = setupReach({ learn: false })
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('model_router_settings'))
+  const recall = await screen.findByRole('region', { name: 'Recall' })
+  await waitFor(() => expect(within(recall).getByRole('switch', { name: 'Save facts from chats' })).toHaveAttribute('aria-checked', 'false'))
+  expect(within(recall).queryByText(/No model can save facts/)).not.toBeInTheDocument()
+})

@@ -45,6 +45,20 @@
     ['ask', 'Ask before saving', 'New memories, edits and deletes wait for your approval, in the chat or under Saved memories.'],
     ['use', 'Use memories in replies', 'Each chat starts with your most recalled facts and searches for the rest.'],
   ]
+  // Whether no model can save facts: the inventory names no signed-in
+  // provider and routing names no enabled account. Null until both answer.
+  let noModel = $state(null)
+  async function loadModelReach() {
+    try {
+      const [inventory, routing] = await Promise.all([
+        tauri.invoke('local_mode_provider_inventory', { cached: true }),
+        tauri.invoke('model_router_settings'),
+      ])
+      const providers = inventory?.providers?.length ?? 0
+      const accounts = (routing?.accounts ?? []).filter((account) => account.enabled !== false).length
+      noModel = providers === 0 && accounts === 0
+    } catch (_) { noModel = null }
+  }
   const TRUST = {
     user: 'Added by you',
     conversation: 'Saved from a chat',
@@ -180,6 +194,7 @@
     void loadPending()
     if (part === 'memory' && !agentId) {
       loadRecall(tauri).then((value) => { recall = value; recallLoaded = true }).catch((e) => { status = String(e) })
+      void loadModelReach()
     }
     try {
       const [text, rows] = await Promise.all([agentId ? Promise.resolve('') : memory.invoke('memory_profile_read'), memory.invoke('memory_facts')])
@@ -295,7 +310,10 @@
     {#if part === 'memory'}
       <Group heading="Recall">
         {#each RECALL as [key, label, help] (key)}
-          <Row title={label} info={help}><Toggle checked={recall[key]} {label} disabled={!recallLoaded || recallSaving || (key === 'ask' && !recall.learn)} onchange={(on) => changeRecall(key, on)} /></Row>
+          <Row title={label} info={help}>
+            {#snippet detail()}{#if key === 'learn' && recall.learn && noModel}<p class="recall-notice" role="status">No model can save facts. Connect one in Models.</p>{/if}{/snippet}
+            <Toggle checked={recall[key]} {label} disabled={!recallLoaded || recallSaving || (key === 'ask' && !recall.learn)} onchange={(on) => changeRecall(key, on)} />
+          </Row>
         {/each}
       </Group>
       <MemoryImports {tauri} />
@@ -457,6 +475,7 @@
   /* Profile and Memory build from PageHead, Group and Row like every Settings
      page. Form fields sit in their Group card, one per row. */
   .memory { display: grid; gap: var(--page-gap, 28px); }
+  .recall-notice { margin: 0; color: var(--warning); font-size: var(--text-13); }
   p { margin: 0; color: var(--muted); font-size: var(--text-13); }
   .field { display: grid; gap: 6px; padding: 12px 0; color: var(--muted); font-size: var(--text-13); }
   .field-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 10px 0; }
