@@ -1573,6 +1573,40 @@ describe('workspace composer entry', () => {
     expect(await screen.findByText('Connect a model in the composer to start chatting.')).toBeInTheDocument()
   })
 
+  it('names no model and offers no connection on the chip until the model inventory settles', async () => {
+    localModeStatus = true
+    const router = { id: 'muniment-router', name: 'Muniment router', source: 'router', base_url: null, models: [] }
+    const served = { providers: [router], default_provider: 'muniment-router', default_model: 'openai/gpt-6-astra', hidden: [], shown: [], router_models: [{ id: 'openai/gpt-6-astra', name: 'GPT-6 Astra', family: 'openai', model: 'gpt-6-astra', accounts: 1 }] }
+    const reads = [deferred(), deferred()]
+    let read = 0
+    const defaultInvoke = invoke.getMockImplementation()
+    invoke.mockImplementation((command, ...args) => command === 'local_mode_provider_inventory' ? reads[Math.min(read++, 1)].promise : defaultInvoke(command, ...args))
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      render(App)
+      const chip = await screen.findByRole('button', { name: 'Model: Checking models…' })
+      expect(chip).toBeDisabled()
+      expect(screen.queryByRole('button', { name: 'Model: Connect a model' })).not.toBeInTheDocument()
+      // The router answers before it lists its models, so the read goes on.
+      reads[0].resolve({ ...served, router_models: [] })
+      await vi.advanceTimersByTimeAsync(10)
+      expect(screen.getByRole('button', { name: 'Model: Checking models…' })).toBeDisabled()
+      expect(screen.queryByRole('button', { name: 'Model: Connect a model' })).not.toBeInTheDocument()
+      reads[1].resolve(served)
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(await screen.findByRole('button', { name: 'Model: GPT-6 Astra' })).toBeEnabled()
+    } finally { vi.useRealTimers() }
+  })
+
+  it('offers to connect a model on the chip once a settled inventory names none', async () => {
+    localModeStatus = true
+    const defaultInvoke = invoke.getMockImplementation()
+    invoke.mockImplementation((command, ...args) => command === 'local_mode_provider_inventory' ? Promise.resolve(emptyInventory) : defaultInvoke(command, ...args))
+    render(App)
+    expect(await screen.findByRole('button', { name: 'Model: Connect a model' })).toBeEnabled()
+    expect(screen.queryByRole('button', { name: 'Model: Checking models…' })).not.toBeInTheDocument()
+  })
+
   it('opens Settings in the sidebar column with Models, Preferences, Home, Companies and Account sections', async () => {
     localModeStatus = true
     render(App)

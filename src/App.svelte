@@ -242,8 +242,13 @@
     const model = currentThreadId ? (threadModel?.thread_id === currentThreadId ? threadModel.model : null) : pendingModel
     return model && inventory ? { ...inventory, default_provider: model.provider, default_model: model.model } : inventory
   })
-  const modelSourceLabel = $derived(modelChipLabel(threadInventory))
   const chipModel = $derived(currentModel(threadInventory))
+  // Until a read of the inventory settles, the chip names no model and never
+  // offers to connect one: a launch reads nothing yet, and a connected provider
+  // can list its models only on a later read.
+  let inventorySettled = $state(false)
+  const modelsLoading = $derived(!inventoryError && (!inventory || (!chipModel && !inventorySettled)))
+  const modelSourceLabel = $derived(modelsLoading ? 'Checking models…' : modelChipLabel(threadInventory))
   // The composer warns only at or near a subscription limit of the machine
   // the thread runs on, for the chip's provider when one is known, from core's
   // usage summary. It reads again every two minutes and after each reply.
@@ -2974,6 +2979,7 @@
     try {
       await loadInventory((command) => tauri.invoke(command), (next, final) => {
         inventory = keptInventory(inventory, next, final, { keep })
+        inventorySettled = final
         inventoryMachine = machine
         if (accountStatus === inventoryError) accountStatus = ''
         inventoryError = ''
@@ -3605,7 +3611,7 @@
   // With no model connected, the composer's Send and model chip open the
   // provider catalog in Settings instead of a run that cannot start.
   function needsModel() {
-    return !agentChat && auth.name === 'local' && !!inventory && !chipModel
+    return !agentChat && auth.name === 'local' && !!inventory && !modelsLoading && !chipModel
   }
 
   function openModelProviders() {
@@ -3914,7 +3920,7 @@
               onsend={(text) => sendAgentChat(text)} onsaved={(agent) => agentChatSaved(agent, agentChat.threadId)}
               onopenchat={(agent, run) => (run ? openRunThread(run) : openBuiltAgent(agent)).catch(error => { submitError = String(error) })} />
           {/if}
-          {#if messages.length === 0 && currentPosts.length === 0 && !currentCreation && !agentChat}{#if !threadGroup && !threadAgent && !(auth.name === 'local' && (inventoryError || !inventory || !chipModel || !currentModelAvailable(inventory)))}<ThreadStarters disabled={switchLocked || !!active} onpick={pickThreadStarter} />{:else}<p class="empty">{#if threadGroup}Write to the group. Mention agents with @name or @everyone.{:else}{auth.name === 'local' && inventoryError ? inventoryError : auth.name === 'local' && !inventory ? 'Checking available models…' : auth.name === 'local' && !chipModel ? 'Connect a model in the composer to start chatting.' : auth.name === 'local' && !currentModelAvailable(inventory) ? 'This model needs an account. Connect one or choose another.' : `Chat with ${threadAgent?.name} using ${modelSourceLabel}.`}{/if}</p>{/if}{/if}
+          {#if messages.length === 0 && currentPosts.length === 0 && !currentCreation && !agentChat}{#if !threadGroup && !threadAgent && !(auth.name === 'local' && (inventoryError || !inventory || !chipModel || !currentModelAvailable(inventory)))}<ThreadStarters disabled={switchLocked || !!active} onpick={pickThreadStarter} />{:else}<p class="empty">{#if threadGroup}Write to the group. Mention agents with @name or @everyone.{:else}{auth.name === 'local' && inventoryError ? inventoryError : auth.name === 'local' && modelsLoading ? 'Checking available models…' : auth.name === 'local' && !chipModel ? 'Connect a model in the composer to start chatting.' : auth.name === 'local' && !currentModelAvailable(inventory) ? 'This model needs an account. Connect one or choose another.' : `Chat with ${threadAgent?.name} using ${modelSourceLabel}.`}{/if}</p>{/if}{/if}
           {#if currentCreation && !agentChat}
             {#if !pendingCreation}<details class="creation-goal" aria-label="Creation goal"><summary><strong>{creationName(currentCreation.kind, currentCreation)}</strong> <span>{currentCreation.goal}</span></summary><p>Output: {currentCreation.output}</p></details>{/if}
             {#if !messages.length && pendingCreation && creationStarters[currentCreation.kind].concat(creationDefaults(currentCreation.kind)).some(option=>option.goal===currentCreation.goal)}<div class="creation-suggestions" aria-label="Creation suggestions">{#each creationStarters[currentCreation.kind] as option (option.id)}<button aria-pressed={option.goal===currentCreation.goal} onclick={()=>useCreationSuggestion(option)}>{option.name}</button>{/each}</div>{/if}
@@ -4256,7 +4262,7 @@
             {#if threadGroup}
               <GroupMembers members={threadGroupMembers} live={(agent) => roster.find(entry => entry.id === agent.id)?.activity} />
             {:else if auth.name === 'local'}
-              <ComposerMenuButton menu="model" open={pickerOpen} chevrons haspopup="dialog" label={`Model: ${modelSourceLabel}`} text={modelSourceLabel} compact={chipModel ? null : unconnectedModelIcon} bind:element={modelChip} onclick={togglePicker}>
+              <ComposerMenuButton menu="model" open={pickerOpen} chevrons haspopup="dialog" label={`Model: ${modelSourceLabel}`} text={modelSourceLabel} compact={chipModel ? null : unconnectedModelIcon} disabled={modelsLoading} aria-busy={modelsLoading} bind:element={modelChip} onclick={togglePicker}>
                 {#snippet icon()}{#if chipModel}<ProviderLogo provider={inventory?.router_models?.find(entry => entry.id === chipModel.model)?.family || (chipModel.model === 'auto' ? classifierProvider(inventory?.router_classifier) : null) || chipModel.provider} size={14} />{/if}{/snippet}
               </ComposerMenuButton>
               {#if chipThinking}
@@ -4394,7 +4400,7 @@
         {#if settingsOpen}
           {#await loadSettings() then module}
           {@const Settings = module.default}
-          <Settings {tauri} bind:section={settingsSection} connectProvider={settingsConnectProvider} onclose={closeSettings} homePath={onboarding.homePath} onchangehome={openHomeSettings} local={auth.name === 'local'} signInDisabled={!!active || !!backgroundRun || localEntryPending} onsignin={signIn} {accountStatus} inventory={inventoryMachine === (remoteRuntime?.id ?? LOCAL_RUNTIME_ID) ? inventory : null} oninventory={(next) => { inventory = next; inventoryMachine = remoteRuntime?.id ?? LOCAL_RUNTIME_ID; if (accountStatus === inventoryError) accountStatus = ''; inventoryError = '' }} oncompanieschange={() => { recordRefresh += 1 }} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} oncreateextension={createExtensionDraft} subject={auth.subject ?? ''} onsignout={() => run('sign-out')} onrecord={openRecordFromSettings} {remoteRuntime} {runtimeList} onselectruntime={(runtime) => { offloadTarget = null; void selectRuntime(runtime) }} runtimeSwitchDisabled={switchLocked || !!active || !!backgroundRun} onpermissions={() => { modesRevision += 1 }} foregroundOnly={runtimeNotice?.foregroundOnly ?? null} onopenloginitems={() => backgroundServiceNotice.openLoginItems()} />
+          <Settings {tauri} bind:section={settingsSection} connectProvider={settingsConnectProvider} onclose={closeSettings} homePath={onboarding.homePath} onchangehome={openHomeSettings} local={auth.name === 'local'} signInDisabled={!!active || !!backgroundRun || localEntryPending} onsignin={signIn} {accountStatus} inventory={inventoryMachine === (remoteRuntime?.id ?? LOCAL_RUNTIME_ID) ? inventory : null} oninventory={(next) => { inventory = next; inventorySettled = true; inventoryMachine = remoteRuntime?.id ?? LOCAL_RUNTIME_ID; if (accountStatus === inventoryError) accountStatus = ''; inventoryError = '' }} oncompanieschange={() => { recordRefresh += 1 }} voiceShortcut={globalVoiceShortcutValue} voiceShortcutChanging={globalVoiceChanging} onVoiceShortcutChange={changeVoiceShortcut} defaultVoiceShortcut={holdToTalkShortcut()} oncreateextension={createExtensionDraft} subject={auth.subject ?? ''} onsignout={() => run('sign-out')} onrecord={openRecordFromSettings} {remoteRuntime} {runtimeList} onselectruntime={(runtime) => { offloadTarget = null; void selectRuntime(runtime) }} runtimeSwitchDisabled={switchLocked || !!active || !!backgroundRun} onpermissions={() => { modesRevision += 1 }} foregroundOnly={runtimeNotice?.foregroundOnly ?? null} onopenloginitems={() => backgroundServiceNotice.openLoginItems()} />
           {:catch}<p role="alert">Settings could not load. Close and reopen settings.</p>{/await}
         {/if}
         <!-- Message actions get their own region, outside the thread shell: writing a
