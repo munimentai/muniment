@@ -171,6 +171,15 @@ describe('chat composer and projection', () => {
     expect(runFailureDetails({ failureReason: 'Reply failed.' })).toEqual([])
   })
 
+  it('shows a sentence a stored reason repeats once, live and restored', () => {
+    const failureReason = 'No eligible model served this turn. No eligible model served this turn.'
+    const restored = historyMessages([{ runId: 'r', phase: 'failed', text: '', failureReason }])[0].run
+    expect(runFailureMessage(restored)).toBe('No eligible model served this turn.')
+    expect(runFailureMessage({ failureReason: 'No eligible model served this turn. The OpenAI key was refused. No eligible model served this turn.' }))
+      .toBe('No eligible model served this turn. The OpenAI key was refused.')
+    expect(runAnnouncement({ phase: 'failed', failureReason })).toBe('No eligible model served this turn.')
+  })
+
   it('keeps cause punctuation and folds line breaks without changing addresses or decimals', () => {
     expect(runFailureMessage({ failureReason: '  Cannot reach\nhttps://example.com after 1.5 seconds  ' }))
       .toBe('Cannot reach https://example.com after 1.5 seconds.')

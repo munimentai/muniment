@@ -248,7 +248,19 @@ const REJECTIONS = {
 }
 
 function failureText(run) {
-  return typeof run?.failureReason === 'string' ? run.failureReason.trim().replace(/\s+/g, ' ') : ''
+  return typeof run?.failureReason === 'string' ? uniqueSentences(run.failureReason.trim().replace(/\s+/g, ' ')) : ''
+}
+
+// A reason that says one sentence twice, as a stored reply from an older
+// router can, keeps the first of each.
+function uniqueSentences(text) {
+  const seen = new Set()
+  return text.split(/(?<=[.!?])\s+/).filter((sentence) => {
+    const key = sentence.toLowerCase()
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  }).join(' ')
 }
 
 // The retry button carries the next step, not the recorded cause.
