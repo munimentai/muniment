@@ -367,3 +367,28 @@ pub fn set_state_directory(directory: &Path) {
         directory,
     );
 }
+
+/// Stages this build's runtime at its installed place in a bundle under
+/// `root` and answers its path. The runtime admits the desktop beside it only
+/// from `Contents/Library/LaunchServices`, and its `rpath` reaches the speech
+/// libraries in `Contents/Resources/asr-runtime`, so a launchd-like start
+/// with no loader variable runs the staged copy and never an installed app.
+#[cfg(target_os = "macos")]
+pub fn stage_macos_bundle_runtime(root: &Path) -> PathBuf {
+    let contents = root.join("Muniment.app/Contents");
+    let launch_services = contents.join("Library/LaunchServices");
+    let resources = contents.join("Resources");
+    fs::create_dir_all(&launch_services).unwrap();
+    fs::create_dir_all(&resources).unwrap();
+    std::os::unix::fs::symlink(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../third-party/sherpa-onnx-v1.13.2/macos-universal2"),
+        resources.join("asr-runtime"),
+    )
+    .unwrap();
+    let runtime = launch_services.join("muniment-runtime");
+    // A copy, not a hard link: dyld may resolve `@executable_path` for a
+    // linked file to the build's own path, which has no bundle around it.
+    fs::copy(env!("CARGO_BIN_EXE_muniment-runtime"), &runtime).unwrap();
+    runtime
+}

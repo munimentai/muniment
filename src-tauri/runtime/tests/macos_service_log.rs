@@ -1,5 +1,7 @@
 #![cfg(target_os = "macos")]
 
+mod common;
+
 use std::fs;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -52,8 +54,19 @@ fn hand_launched_runtime_writes_started_with_stderr_discarded_within_one_second(
     let logs = directory.join("logs");
     fs::DirBuilder::new().mode(0o700).create(&logs).unwrap();
     let log = logs.join("runtime-service.log");
+    // launchd starts the bundled runtime with no loader variable, so the
+    // staged bundle's `rpath` alone must find the speech libraries.
+    let executable = common::stage_macos_bundle_runtime(&directory);
+    // The system checks a new executable on its first start. That check is
+    // not the runtime's startup, so it runs before the clock starts.
+    let version = Command::new(&executable)
+        .env_clear()
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert!(version.status.success(), "{version:?}");
     let started = Instant::now();
-    let child = Command::new(env!("CARGO_BIN_EXE_muniment-runtime"))
+    let child = Command::new(&executable)
         // Model launchd with the login home and no variable from the runner.
         .env_clear()
         .env("HOME", &login_home)

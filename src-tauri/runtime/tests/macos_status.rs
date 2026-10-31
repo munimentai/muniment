@@ -1,6 +1,8 @@
+mod common;
+
 use std::fs;
 use std::os::unix::fs::{symlink, PermissionsExt};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
@@ -14,8 +16,9 @@ const MACOS_TEST_EXIT_ENV: &str = "MUNIMENT_RUNTIME_TEST_MACOS_ACTIVATION_EXIT";
 
 fn directory() -> PathBuf {
     static NEXT_DIRECTORY: AtomicUsize = AtomicUsize::new(0);
+    // A short name keeps the attach socket path under the macOS limit.
     let path = std::env::temp_dir().join(format!(
-        "muniment-runtime-macos-status-{}-{}",
+        "mrt-ms-{}-{}",
         std::process::id(),
         NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed)
     ));
@@ -26,9 +29,21 @@ fn directory() -> PathBuf {
     path
 }
 
-fn runtime(directory: &PathBuf, exit: &str) -> Output {
+/// The runtime this test starts. On macOS the runtime binds its attach
+/// socket only at its installed place in a bundle, so the test stages one.
+fn runtime_executable(directory: &Path) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    return common::stage_macos_bundle_runtime(directory);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = directory;
+        PathBuf::from(env!("CARGO_BIN_EXE_muniment-runtime"))
+    }
+}
+
+fn runtime(executable: &Path, directory: &Path, exit: &str) -> Output {
     // The binary reads a temporary home, so this machine's state root stays untouched.
-    Command::new(env!("CARGO_BIN_EXE_muniment-runtime"))
+    Command::new(executable)
         .env("HOME", directory)
         .env("MUNIMENT_STATE_DIR", directory.join(".muniment"))
         .env_remove("XDG_RUNTIME_DIR")
@@ -46,22 +61,23 @@ fn runtime(directory: &PathBuf, exit: &str) -> Output {
 #[test]
 fn maps_macos_activation_outcomes_to_process_statuses() {
     let directory = directory();
+    let executable = runtime_executable(&directory);
 
-    let orderly = runtime(&directory, "orderly");
+    let orderly = runtime(&executable, &directory, "orderly");
     assert!(orderly.status.success());
     assert_exit_line(
         &orderly,
         "muniment-runtime: exit status=0 cause=manager stop",
     );
     for _ in 0..4 {
-        let failed = runtime(&directory, "failed");
+        let failed = runtime(&executable, &directory, "failed");
         assert_eq!(failed.status.code(), Some(1));
         assert_exit_line(
             &failed,
             "muniment-runtime: exit status=1 cause=activation failed",
         );
     }
-    let stopped = runtime(&directory, "failed");
+    let stopped = runtime(&executable, &directory, "failed");
     assert!(stopped.status.success());
     assert_exit_line(
         &stopped,
