@@ -128,6 +128,9 @@ pub(super) struct ProviderInventory {
     /// The classifier model that picks a route per turn, when the router runs
     /// one. The composer's picker puts the router first and names it.
     router_classifier: Option<String>,
+    /// Whether a decision model is connected, whether or not routing runs.
+    /// The picker then says routing is off in place of asking for one.
+    router_decision_model: bool,
     /// Every model the router serves, with the family and model it stands for
     /// and how many accounts stand behind it. The picker lists each under its
     /// provider once and marks the ones two or more accounts serve, because
@@ -794,6 +797,7 @@ fn provider_inventory_with(
         hidden: record_strings(&record, "hidden"),
         shown: record_strings(&record, "shown"),
         router_classifier: router_classifier(agent),
+        router_decision_model: router_decision_model(agent),
         router_models: router_models(agent),
     })
 }
@@ -884,6 +888,17 @@ fn router_classifier(agent: &Path) -> Option<String> {
     }
     let model = config.classifier.model();
     (!model.is_empty()).then(|| model.to_owned())
+}
+
+/// Whether Settings lists a decision model: a saved connection, or a ready
+/// classifier from before connections were saved.
+fn router_decision_model(agent: &Path) -> bool {
+    let Ok(config) = muniment_core::model_router::config::load(agent) else {
+        return false;
+    };
+    config.classifier.ready()
+        || super::connections::views(agent, &config.classifier)
+            .is_ok_and(|connections| !connections.is_empty())
 }
 
 pub(super) fn set_default_model(agent: &Path, provider: &str, model: &str) -> Result<(), String> {
@@ -1332,6 +1347,29 @@ llama     qwen3              32K      16.4K    yes       no\n";
         let mut again = provider_inventory(&agent, &models, &[]).unwrap();
         adopt_shown_default(&agent, &mut again);
         assert_eq!(again.default_model.as_deref(), Some("gpt-5.6-luna"));
+    }
+
+    #[test]
+    fn names_a_connected_decision_model_while_routing_is_off() {
+        use muniment_core::model_router::config::{self, Classifier, RouterConfig};
+        let agent = temporary_directory();
+        assert!(!router_decision_model(&agent));
+        // Routing is off, so no classifier picks a route, but one is connected.
+        let saved = RouterConfig {
+            enabled: false,
+            classifier: Classifier::Typesafe {
+                api_key: "test-key".into(),
+                model: "jev-latest".into(),
+                base_url: None,
+                max_options: None,
+                limits: Default::default(),
+            },
+            ..RouterConfig::default()
+        };
+        config::save(&agent, &saved).unwrap();
+        let inventory = provider_inventory(&agent, &[], &[]).unwrap();
+        assert_eq!(inventory.router_classifier, None);
+        assert!(inventory.router_decision_model);
     }
 
     #[test]
