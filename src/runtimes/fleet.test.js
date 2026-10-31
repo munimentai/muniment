@@ -74,6 +74,33 @@ describe('owners', () => {
     expect(dedupeThreads([{ ...replica, threadId: 't3' }, container], { self: { local: LAPTOP } })).toEqual([container])
   })
 
+  it('keeps one label per thread whichever copy lists first and whatever fleet ids are known', () => {
+    const fleet = { self: { local: LAPTOP, hub: STUDIO, pod: POD }, members: swarm.members }
+    const list = { runtimes: [{ id: 'local', local: true, name: 'This computer' }, { id: 'hub', name: 'Studio' }, { id: 'pod', kind: 'container', name: 'Pod' }] }
+    const label = (rows, ids = fleet) => rows.map((row) => `${row.threadId}:${row.runtimeId}:${threadOwner(row, ids, list)?.name ?? 'holder'}`)
+    // A thread this computer owns, copied to the hub and the pod.
+    const here = { threadId: 'mine', runtimeId: 'local', owner_runtime: LAPTOP, updatedAt: '2026-10-20T08:50:00Z' }
+    const hubCopy = { threadId: 'mine', runtimeId: 'hub', owner_runtime: LAPTOP, replica: true, updatedAt: '2026-10-31T12:00:00Z' }
+    const podCopy = { threadId: 'mine', runtimeId: 'pod', owner_runtime: LAPTOP, replica: true, updatedAt: '2026-10-31T13:00:00Z' }
+    for (const rows of [[here, hubCopy, podCopy], [podCopy, hubCopy, here], [hubCopy, podCopy, here]]) {
+      expect(label(dedupeThreads(rows, fleet))).toEqual(['mine:local:holder'])
+    }
+    // This computer's page missed the thread: the copy lists as its own.
+    expect(label(dedupeThreads([podCopy, hubCopy], fleet))).toEqual(['mine:local:holder'])
+    expect(label(dedupeThreads([hubCopy, podCopy], fleet))).toEqual(['mine:local:holder'])
+    // A thread the pod owns: its own copy, else this computer's copy names it.
+    const own = { threadId: 'pods', runtimeId: 'pod', owner_runtime: POD }
+    const copy = { threadId: 'pods', runtimeId: 'local', owner_runtime: POD, replica: true }
+    const hubHeld = { threadId: 'pods', runtimeId: 'hub', owner_runtime: POD, replica: true }
+    expect(label(dedupeThreads([hubHeld, copy, own], fleet))).toEqual(['pods:pod:holder'])
+    expect(label(dedupeThreads([hubHeld, copy], fleet))).toEqual(['pods:local:Pod'])
+    expect(label(dedupeThreads([copy, hubHeld], fleet))).toEqual(['pods:local:Pod'])
+    // A swarm answer that has not named a holder's fleet id yet still names
+    // the owner of its copy, never the holder.
+    expect(threadOwner(copy, { members: swarm.members, self: {} }, list)?.name).toBe('Pod')
+    expect(threadOwner(hubHeld, { members: swarm.members, self: { local: LAPTOP } }, list)?.name).toBe('Pod')
+  })
+
   it('names the owner of another member\'s project', () => {
     expect(projectOwner({ name: 'Launch', ownerRuntime: STUDIO }, swarm)).toMatchObject({ name: 'Studio' })
     expect(projectOwner({ name: 'Mine', ownerRuntime: LAPTOP }, swarm)).toBeNull()

@@ -140,7 +140,7 @@ pub(crate) fn request_runtime(
     body: Value,
 ) -> Result<Value, String> {
     let attach = app.state::<AttachCompanionState>();
-    forward(runtime, operation, body, |target| {
+    let answer = forward(runtime, operation, body, |target| {
         let session = match target {
             Target::Local => attach.local_client_session_within(AGENT_CONNECT_WAIT),
             Target::Paired(id) => attach.paired_session(id),
@@ -149,7 +149,30 @@ pub(crate) fn request_runtime(
             DesktopClientSession::Connected(client) => Some(client),
             DesktopClientSession::NoSupervisor | DesktopClientSession::Disconnected => None,
         }
+    })?;
+    Ok(if operation == "agent.threads" {
+        without_deleted_threads(answer, &attach.deleted_threads())
+    } else {
+        answer
     })
+}
+
+/// An `agent.threads` answer without the threads this computer deleted,
+/// which another machine can still name under its agent, as the thread
+/// list leaves them out.
+fn without_deleted_threads(
+    mut answer: Value,
+    deleted: &std::collections::HashSet<String>,
+) -> Value {
+    if let Some(threads) = answer.get_mut("threads").and_then(Value::as_array_mut) {
+        threads.retain(|thread| {
+            thread
+                .get("thread_id")
+                .and_then(Value::as_str)
+                .is_none_or(|id| !deleted.contains(id))
+        });
+    }
+    answer
 }
 
 /// The `thread.create` body that starts a thread on the fleet member
@@ -599,5 +622,20 @@ mod tests {
         ] {
             assert_eq!(agent_operation(name), Some(operation));
         }
+    }
+
+    #[test]
+    fn an_agents_threads_leave_out_the_threads_deleted_here() {
+        let answer = serde_json::json!({"threads": [
+            {"thread_id": "kept", "title": "Kept", "primary": true},
+            {"thread_id": "gone", "title": "Gone", "primary": false}
+        ]});
+        let deleted = std::collections::HashSet::from(["gone".to_owned()]);
+        assert_eq!(
+            without_deleted_threads(answer, &deleted),
+            serde_json::json!({"threads": [{"thread_id": "kept", "title": "Kept", "primary": true}]})
+        );
+        let other = serde_json::json!({"agents": []});
+        assert_eq!(without_deleted_threads(other.clone(), &deleted), other);
     }
 }

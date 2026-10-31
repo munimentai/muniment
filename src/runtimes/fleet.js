@@ -28,11 +28,13 @@ export function coreRuntime(swarm, runtimeId) {
 // The machine that owns a thread summary, when another fleet member owns it:
 // its name, shape and whether it answers. Null for a thread this machine
 // owns or one the swarm does not share.
+// A holder whose fleet id the swarm answer has not named yet still names
+// the owner of its synced copy, so the label never falls back to the holder.
 export function threadOwner(summary, swarm, runtimeList = null) {
   const owner = summary?.owner_runtime
   if (!owner) return null
   const holder = coreRuntime(swarm, summary.runtimeId)
-  if (!holder || owner === holder) return null
+  if (holder ? owner === holder : !summary.replica) return null
   return memberMachine(swarm, owner, runtimeList)
 }
 
@@ -285,17 +287,25 @@ export function offloadTargets(swarm, runtimeList) {
     .sort((a, b) => String(a.name).localeCompare(String(b.name)))
 }
 
-// One summary per thread. A thread the app sees both on its owner and as a
-// replica on another machine it reaches lists once, from its owner.
+// One summary per thread, the same one whichever machine lists first: the
+// owner's copy, then this computer's, then the copy of the machine with the
+// lowest id. A copy of a thread this computer owns that only another
+// machine listed, such as while this computer's runtime was busy, lists as
+// this computer's, so its row and its requests stay here.
 export function dedupeThreads(summaries, swarm) {
+  // A runtime that lists a thread it runs marks it no replica, even before
+  // the app knows that runtime's fleet id.
+  const owns = (entry) => !!entry.owner_runtime && (entry.owner_runtime === coreRuntime(swarm, entry.runtimeId) || !entry.replica)
+  const rank = (entry) => (owns(entry) ? 2 : 0) + ((entry.runtimeId ?? LOCAL_RUNTIME_ID) === LOCAL_RUNTIME_ID ? 1 : 0)
   const kept = new Map()
   for (const summary of summaries ?? []) {
     const known = kept.get(summary.threadId)
-    if (!known) { kept.set(summary.threadId, summary); continue }
-    // A runtime that lists a thread it runs marks it no replica, even
-    // before the app knows that runtime's fleet id.
-    const owns = (entry) => !!entry.owner_runtime && (entry.owner_runtime === coreRuntime(swarm, entry.runtimeId) || !entry.replica)
-    if (!owns(known) && owns(summary)) kept.set(summary.threadId, summary)
+    const better = !known || rank(summary) > rank(known)
+      || (rank(summary) === rank(known) && String(summary.runtimeId ?? '') < String(known.runtimeId ?? ''))
+    if (better) kept.set(summary.threadId, summary)
   }
-  return [...kept.values()]
+  const here = coreRuntime(swarm, LOCAL_RUNTIME_ID)
+  return [...kept.values()].map((entry) => here && entry.replica && entry.owner_runtime === here
+    ? { ...entry, runtimeId: LOCAL_RUNTIME_ID, replica: false }
+    : entry)
 }

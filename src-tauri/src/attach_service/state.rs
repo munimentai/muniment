@@ -67,9 +67,13 @@ pub struct AttachCompanionState {
     pub(super) active: Mutex<Option<String>>,
     /// The runtime each listed thread lives on, from the merged thread list.
     pub(super) thread_runtimes: Mutex<std::collections::HashMap<String, String>>,
-    /// The threads this computer's runtime last named as deleted, which the
-    /// merged thread list leaves out of every paired runtime's page.
+    /// The threads this computer's runtime named as deleted, and the ones
+    /// this app deleted, which the merged thread list leaves out of every
+    /// paired runtime's page.
     pub(super) deleted_threads: Mutex<std::collections::HashSet<String>>,
+    /// This computer's fleet id, from the owner its runtime names on the
+    /// threads it runs.
+    pub(super) local_fleet_id: Mutex<Option<String>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -540,6 +544,7 @@ impl Default for AttachCompanionState {
             active: Mutex::new(None),
             thread_runtimes: Mutex::new(std::collections::HashMap::new()),
             deleted_threads: Mutex::new(std::collections::HashSet::new()),
+            local_fleet_id: Mutex::new(None),
         }
     }
 }
@@ -552,6 +557,7 @@ impl Default for AttachCompanionState {
             active: Mutex::new(None),
             thread_runtimes: Mutex::new(std::collections::HashMap::new()),
             deleted_threads: Mutex::new(std::collections::HashSet::new()),
+            local_fleet_id: Mutex::new(None),
         }
     }
 }
@@ -644,9 +650,47 @@ impl AttachCompanionState {
         lock(&self.thread_runtimes).extend(threads);
     }
 
-    /// Keeps the threads this computer's runtime named as deleted.
+    /// Records the runtime of each listed thread that has none yet. A list
+    /// this computer's runtime did not answer keeps each thread it named.
+    pub(crate) fn keep_thread_runtimes(&self, threads: impl IntoIterator<Item = (String, String)>) {
+        let mut known = lock(&self.thread_runtimes);
+        for (thread, runtime) in threads {
+            known.entry(thread).or_insert(runtime);
+        }
+    }
+
+    /// Keeps the threads this computer's runtime named as deleted, beside
+    /// the ones this app deleted.
     pub(crate) fn remember_deleted_threads(&self, threads: Vec<String>) {
-        *lock(&self.deleted_threads) = threads.into_iter().collect();
+        lock(&self.deleted_threads).extend(threads);
+    }
+
+    /// This computer's fleet id, once its runtime named it.
+    pub(crate) fn local_fleet_id(&self) -> Option<String> {
+        lock(&self.local_fleet_id).clone()
+    }
+
+    /// Keeps this computer's fleet id.
+    pub(crate) fn remember_local_fleet_id(&self, id: String) {
+        *lock(&self.local_fleet_id) = Some(id);
+    }
+
+    /// The session of the runtime a listed thread lives on, whichever runtime
+    /// is active, so an action on one thread never selects another machine.
+    /// A thread no list named goes to the active runtime.
+    #[cfg(any(unix, target_os = "windows"))]
+    pub(crate) fn thread_session_within(
+        &self,
+        thread_id: &str,
+        wait: std::time::Duration,
+    ) -> DesktopClientSession {
+        match self.thread_runtime(thread_id) {
+            Some(runtime) if runtime == crate::runtimes::LOCAL_RUNTIME_ID => {
+                self.local_client_session_within(wait)
+            }
+            Some(runtime) => self.paired_session(&runtime),
+            None => self.desktop_client_session_within(wait),
+        }
     }
 
     /// The threads this computer's runtime last named as deleted.
