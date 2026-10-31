@@ -118,6 +118,9 @@ pub(super) struct AccountView {
     errors: u64,
     last_used_ms: Option<i64>,
     last_error: Option<String>,
+    /// The upstream refused this account's sign-in or key on its last turn:
+    /// the sign-in expired or the key no longer holds.
+    credential_refused: bool,
     cooldown_until_ms: Option<i64>,
     /// Turns this account has in flight right now.
     active: u32,
@@ -282,6 +285,9 @@ fn account_view(
         errors: usage.map(|entry| entry.errors).unwrap_or(0),
         last_used_ms: usage.and_then(|entry| entry.last_used_ms),
         last_error: usage.and_then(|entry| entry.last_error.clone()),
+        credential_refused: usage
+            .and_then(|entry| entry.last_error.as_deref())
+            .is_some_and(muniment_core::model_router::usage::last_error_refused_credential),
         cooldown_until_ms: usage.and_then(|entry| entry.cooldown_until_ms),
         active,
         pi_provider,
@@ -465,6 +471,7 @@ fn claude_account_view(account: &muniment_core::models::claude_accounts::Account
         errors: 0,
         last_used_ms: None,
         last_error: None,
+        credential_refused: false,
         cooldown_until_ms: None,
         active: 0,
         pi_provider: muniment_core::models::claude_accounts::PROVIDER.into(),
@@ -1275,6 +1282,19 @@ mod tests {
         assert_eq!(view.active, 2);
         assert!(view.refused_models.is_empty());
         assert!(!view.allowance_readable);
+        assert!(!view.credential_refused);
+    }
+
+    #[test]
+    fn an_account_whose_sign_in_was_refused_says_so_until_a_turn_succeeds() {
+        let mut ledger = Ledger::default();
+        let refused = r#"HTTP 401 model=gpt-6 {"error":{"code":"token_expired"}}"#;
+        ledger.record_error("a1", "2026-09-17", 1_000, refused, true);
+        let view = account_view(&account("a1"), ledger.account("a1"), 0, None, None);
+        assert!(view.credential_refused);
+        ledger.record_success("a1", "2026-09-17", 2_000, 10, 1);
+        let view = account_view(&account("a1"), ledger.account("a1"), 0, None, None);
+        assert!(!view.credential_refused);
     }
 
     fn subscription(id: &str) -> Account {

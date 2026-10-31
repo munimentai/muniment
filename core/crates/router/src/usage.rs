@@ -218,6 +218,36 @@ pub fn status_cools(status: u16) -> bool {
     matches!(status, 401 | 402 | 403 | 429) || status >= 500
 }
 
+/// The end of the sentence a turn reads when a subscription's sign-in expired.
+pub const SIGN_IN_EXPIRED: &str = " sign-in expired. Sign in again in Models.";
+/// The end of the sentence a turn reads when the upstream refused a key.
+pub const KEY_REFUSED: &str = " key was refused. Check it in Models.";
+
+/// Whether an upstream error answer says the account's credential no longer
+/// holds: any 401, or a 403 whose body names an expired token.
+pub fn credential_refused(status: u16, body: &str) -> bool {
+    if status == 401 {
+        return true;
+    }
+    let body = body.to_ascii_lowercase();
+    status == 403
+        && ["token_expired", "token has expired", "token expired"]
+            .iter()
+            .any(|words| body.contains(words))
+}
+
+/// The same answer read back from the ledger's last error, which the router
+/// writes as `HTTP <status> ...`.
+pub fn last_error_refused_credential(last_error: &str) -> bool {
+    let Some(rest) = last_error.strip_prefix("HTTP ") else {
+        return false;
+    };
+    rest.split_whitespace()
+        .next()
+        .and_then(|status| status.parse().ok())
+        .is_some_and(|status| credential_refused(status, rest))
+}
+
 /// Whether an upstream error answer says the account's plan does not offer
 /// the model it was asked for, as opposed to a fault in the request. Only a
 /// 400 or 404 whose message names the model as what is missing or
@@ -336,6 +366,22 @@ pub fn save(agent: &Path, ledger: &Ledger) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_401_or_an_expired_token_refuses_the_credential() {
+        assert!(credential_refused(401, "{}"));
+        assert!(credential_refused(
+            403,
+            r#"{"error":{"code":"token_expired"}}"#
+        ));
+        assert!(!credential_refused(403, "Forbidden"));
+        assert!(!credential_refused(429, "token_expired"));
+        assert!(last_error_refused_credential("HTTP 401 model=gpt-6 {}"));
+        assert!(!last_error_refused_credential(
+            "HTTP 429 model=gpt-6 slow down"
+        ));
+        assert!(!last_error_refused_credential("connection reset"));
+    }
 
     #[test]
     fn a_served_turn_counts_once_in_the_total_and_in_its_day() {

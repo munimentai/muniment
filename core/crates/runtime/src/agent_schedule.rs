@@ -27,6 +27,8 @@ const THREAD_NOT_FOUND: &str = "The thread was not found.";
 /// How recently a client must have used the runtime for a run a person
 /// started to count as attended.
 const ATTENDED_WITHIN_SECONDS: i64 = 120;
+/// What a run reads when it failed before it reached its thread.
+const START_FAILED: &str = "The run could not start.";
 
 /// How a run ended in the journal, as the queue reads it.
 enum JournalOutcome {
@@ -274,7 +276,7 @@ impl RuntimeAttachState {
                     next.lease_expires_at = None;
                     if run.attempt >= MAX_ATTEMPTS {
                         next.status = RunStatus::Failed;
-                        next.error = Some("The run could not start.".into());
+                        next.error = Some(START_FAILED.into());
                     } else {
                         next.status = RunStatus::Queued;
                     }
@@ -459,6 +461,8 @@ impl RuntimeAttachState {
                     run.lease_owner = None;
                     run.lease_expires_at = None;
                 }
+                // The run never reached its thread, so its error says the
+                // run did not start, apart from a reply that failed there.
                 Err(error) => {
                     let error = match run.thread_id.clone() {
                         Some(thread) if error == THREAD_NOT_FOUND => {
@@ -470,7 +474,7 @@ impl RuntimeAttachState {
                     run.status = RunStatus::Failed;
                     run.lease_owner = None;
                     run.lease_expires_at = None;
-                    run.error = Some(error);
+                    run.error = Some(format!("{START_FAILED} {error}"));
                 }
             }
             store.save(&mut run)?;

@@ -521,7 +521,16 @@ pub fn provider_error_detail(text: &str) -> Option<String> {
         return None;
     }
     Some(if clean.chars().count() > PROVIDER_DETAIL_CHARS {
+        // The cut falls between words, so no word shows half.
         let cut: String = clean.chars().take(PROVIDER_DETAIL_CHARS - 1).collect();
+        let whole = clean
+            .chars()
+            .nth(PROVIDER_DETAIL_CHARS - 1)
+            .is_some_and(char::is_whitespace);
+        let cut = match cut.rfind(char::is_whitespace) {
+            Some(at) if !whole => &cut[..at],
+            _ => cut.as_str(),
+        };
         format!("{}…", cut.trim_end())
     } else {
         clean.to_owned()
@@ -1876,6 +1885,8 @@ mod tests {
         let long = provider_error_detail(&"word ".repeat(200)).unwrap();
         assert_eq!(long.chars().count(), PROVIDER_DETAIL_CHARS);
         assert!(long.ends_with('…'));
+        let words = provider_error_detail(&"abcdefg ".repeat(60)).unwrap();
+        assert!(words.ends_with("abcdefg…"), "{words}");
         assert_eq!(provider_error_detail("   "), None);
     }
 

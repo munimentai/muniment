@@ -1464,7 +1464,7 @@ pub(crate) fn complete(
     if requested != config::AUTO_MODEL || thread.is_some() {
         routes.truncate(1);
     }
-    let mut last_failure = (503, "No eligible model served this turn.".to_owned());
+    let mut last_failure = (503, String::new());
     let mut attempted = false;
     // A stall moves the turn to the model's next account, so every connected
     // account of the provider gets one try. Once they all stalled, the turn ends
@@ -1856,7 +1856,20 @@ pub(crate) fn complete(
                         last_failure = (status, String::new());
                         continue;
                     }
-                    last_failure = (status, detail);
+                    // A refused sign-in or key reads as the step that fixes
+                    // it, and the provider's own answer follows for the log.
+                    if usage::credential_refused(status, &detail) {
+                        let provider = account
+                            .family()
+                            .map_or_else(|| account.family.clone(), |family| family.name.into());
+                        let hint = match account.credential {
+                            config::Credential::Subscription { .. } => usage::SIGN_IN_EXPIRED,
+                            config::Credential::ApiKey { .. } => usage::KEY_REFUSED,
+                        };
+                        last_failure = (status, format!("The {provider}{hint} {detail}"));
+                    } else {
+                        last_failure = (status, detail);
+                    }
                     refusals.push(format!("{} answered {status}.", account.label));
                     if !cools {
                         // Another model may accept the request, but repeating it on
@@ -3887,6 +3900,47 @@ mod tests {
         );
         assert_eq!(seen_first.try_iter().count(), 0);
         assert_eq!(seen_second.try_iter().count(), 0);
+        std::fs::remove_dir_all(agent).unwrap();
+    }
+
+    #[test]
+    fn a_refused_key_reads_as_the_step_that_fixes_it_once() {
+        let agent = agent_dir();
+        let expired = json!({
+            "error": {
+                "message": "Your authentication token has expired.",
+                "code": "token_expired"
+            },
+            "status": 401
+        })
+        .to_string();
+        let (url, _) = upstream(vec![(401, expired, false)]);
+        config::save(&agent, &config(vec![account("a1", &url)])).unwrap();
+        let handle = start_with_clock(agent.clone(), fixed_clock).unwrap();
+        let (status, body) = call(
+            handle.endpoint(),
+            "POST",
+            "/v1/chat/completions",
+            Some(&turn("fast", false)),
+            &handle.endpoint().token,
+        );
+        assert_eq!(status, 401, "{body}");
+        let message = serde_json::from_str::<Value>(&body).unwrap()["error"]["message"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(
+            message.starts_with(
+                "No eligible model served this turn. The OpenAI key was refused. Check it in Models. {"
+            ),
+            "{message}"
+        );
+        assert!(message.contains("token_expired"), "{message}");
+        assert_eq!(message.matches("No eligible model").count(), 1, "{message}");
+        let ledger = usage::load(&agent);
+        assert!(usage::last_error_refused_credential(
+            ledger.account("a1").unwrap().last_error.as_deref().unwrap()
+        ));
         std::fs::remove_dir_all(agent).unwrap();
     }
 

@@ -4,8 +4,9 @@
 //! each agent's name, the approvals waiting anywhere in the swarm, the next
 //! scheduled runs and the time the user last marked everything read.
 //! [`merge`] joins the answers of several machines into the page: the items
-//! that need the user (approvals, questions, runs a usage limit stopped and
-//! machines that do not answer), the runs in flight, and the rest by day.
+//! that need the user (approvals, questions, runs a usage limit stopped,
+//! failed runs the user has not read and machines that do not answer), the
+//! runs in flight, and the rest by day.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -179,6 +180,10 @@ pub struct Filter {
     /// The client's offset from UTC, so days start at its midnight.
     #[serde(default)]
     pub utc_offset_minutes: i32,
+    /// When the client last read each thread, by thread id. A run whose
+    /// thread was read after the run ended is read.
+    #[serde(default)]
+    pub read: BTreeMap<String, String>,
 }
 
 /// The machine an item belongs to.
@@ -198,7 +203,7 @@ pub struct MachineAnswer {
 /// One item that needs the user.
 #[derive(Clone, Debug, Serialize)]
 pub struct NeedsYou {
-    /// `approval`, `input`, `limit` or `offline`.
+    /// `approval`, `input`, `limit`, `failed` or `offline`.
     pub kind: String,
     pub id: String,
     pub machine: Machine,
@@ -425,11 +430,35 @@ pub fn merge(answers: Vec<MachineAnswer>, filter: &Filter, now_ms: i64) -> Page 
                 approval: None,
             });
         }
+        let thread_read = item
+            .run
+            .thread_id
+            .as_deref()
+            .and_then(|thread| filter.read.get(thread))
+            .and_then(|time| millis(time));
+        let unread = read_at.is_none_or(|read| at > read)
+            && thread_read.is_none_or(|read| at > read)
+            && state != "running";
+        // An agent's newest run that failed needs the user until they read it.
+        if state == "failed" && !item.limit_stop && newest_of_agent && unread {
+            page.needs_you.push(NeedsYou {
+                kind: "failed".into(),
+                id: item.run.id.clone(),
+                machine: machine.clone(),
+                agent_id: Some(item.run.agent_id.clone()),
+                agent_name: Some(item.agent_name.clone()),
+                detail: item.run.error.clone(),
+                at: item.run.updated_at.clone(),
+                resets_at_ms: None,
+                run: Some(item.run.clone()),
+                approval: None,
+            });
+        }
         let entry = Entry {
             status: state.into(),
             machine: machine.clone(),
             agent_name: item.agent_name.clone(),
-            unread: read_at.is_none_or(|read| at > read) && state != "running",
+            unread,
             run: item.run,
         };
         if state == "running" {
@@ -649,12 +678,63 @@ mod tests {
     }
 
     #[test]
+    fn an_agents_newest_failed_run_needs_the_user_until_its_thread_is_read() {
+        let hour = 60 * 60 * 1000;
+        let mut failed = run("r1", "a", RunStatus::Failed, NOW - hour);
+        failed.run.error = Some("The OpenAI sign-in expired. Sign in again in Models.".into());
+        let listing = Listing {
+            runs: vec![
+                failed,
+                run("r2", "a", RunStatus::Failed, NOW - 2 * hour),
+                run("r3", "b", RunStatus::Failed, NOW - 3 * hour),
+                run("r4", "b", RunStatus::Completed, NOW - 2 * hour),
+            ],
+            ..Listing::default()
+        };
+        let page = |filter: &Filter| {
+            merge(
+                vec![MachineAnswer {
+                    machine: machine("local"),
+                    listing: Ok(listing.clone()),
+                }],
+                filter,
+                NOW,
+            )
+        };
+        let unread = page(&Filter::default());
+        let items: Vec<(&str, &str)> = unread
+            .needs_you
+            .iter()
+            .map(|item| (item.kind.as_str(), item.id.as_str()))
+            .collect();
+        assert_eq!(items, vec![("failed", "r1")]);
+        assert_eq!(unread.counts.needs_you, 1);
+        assert_eq!(
+            unread.needs_you[0].detail.as_deref(),
+            Some("The OpenAI sign-in expired. Sign in again in Models.")
+        );
+
+        let mut read = Filter::default();
+        read.read.insert("thread-a".into(), time(NOW - hour / 2));
+        let opened = page(&read);
+        assert!(opened.needs_you.is_empty());
+        assert_eq!(opened.counts.needs_you, 0);
+        assert!(opened.days[0]
+            .entries
+            .iter()
+            .all(|entry| entry.run.agent_id != "a" || !entry.unread));
+    }
+
+    #[test]
     fn the_request_takes_only_a_limit() {
         let request: Request = serde_json::from_value(json!({"limit": 5})).unwrap();
         assert_eq!(request.limit, Some(5));
         assert!(serde_json::from_value::<Request>(json!({"view": "all"})).is_err());
-        let filter: Filter =
-            serde_json::from_value(json!({"view": "needs_you", "machine": "local"})).unwrap();
+        let filter: Filter = serde_json::from_value(
+            json!({"view": "needs_you", "machine": "local", "read": {"t1": time(NOW)}}),
+        )
+        .unwrap();
         assert_eq!(filter.view, View::NeedsYou);
+        assert_eq!(filter.read.len(), 1);
     }
 }

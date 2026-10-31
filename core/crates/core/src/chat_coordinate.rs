@@ -2529,12 +2529,33 @@ fn readiness_detail(
 }
 
 /// The line a failed reply shows: the provider's own sentence after ours,
-/// when it gave one.
+/// when it gave one. A refused sign-in or key reads as the step that fixes
+/// it, and the provider's answer stays in the detail.
 fn failure_reason(detail: Option<&str>) -> String {
     match detail {
-        Some(detail) => format!("The model could not complete this reply. {detail}"),
+        Some(detail) => credential_step(detail)
+            .unwrap_or_else(|| format!("The model could not complete this reply. {detail}")),
         None => "The model could not complete this reply.".into(),
     }
+}
+
+/// The sentence that names a refused credential and the step that fixes it:
+/// the router's own, such as `The OpenAI sign-in expired. Sign in again in
+/// Models.`, else a provider's answer that its token expired.
+fn credential_step(detail: &str) -> Option<String> {
+    use crate::model_router::usage::{KEY_REFUSED, SIGN_IN_EXPIRED};
+    for hint in [SIGN_IN_EXPIRED, KEY_REFUSED] {
+        if let Some(at) = detail.find(hint) {
+            if let Some(start) = detail[..at].rfind("The ") {
+                return Some(format!("{}{hint}", &detail[start..at]));
+            }
+        }
+    }
+    let lower = detail.to_ascii_lowercase();
+    ["token_expired", "token has expired", "token expired"]
+        .iter()
+        .any(|words| lower.contains(words))
+        .then(|| format!("The{SIGN_IN_EXPIRED}"))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2605,6 +2626,25 @@ mod tests {
     use std::cell::RefCell;
     use std::io;
     use uuid::Uuid;
+
+    #[test]
+    fn a_refused_credential_reads_as_the_step_that_fixes_it() {
+        let routed = "No eligible model served this turn. The OpenAI sign-in expired. Sign in again in Models. { \"error\": { \"code\": \"token_expired\" } } me answered 401.";
+        assert_eq!(
+            failure_reason(Some(routed)),
+            "The OpenAI sign-in expired. Sign in again in Models."
+        );
+        assert_eq!(
+            failure_reason(Some(
+                "Your authentication token has expired. Please sign in."
+            )),
+            "The sign-in expired. Sign in again in Models."
+        );
+        assert_eq!(
+            failure_reason(Some("The model is busy.")),
+            "The model could not complete this reply. The model is busy."
+        );
+    }
 
     fn ledger_of_one_run() -> LocalRunLedger {
         let mut ledger = LocalRunLedger::default();
