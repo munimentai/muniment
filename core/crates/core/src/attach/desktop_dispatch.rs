@@ -681,12 +681,16 @@ fn redacted_run_open_event(
 
 /// Sends a forwardable action on an item another swarm member owns to that
 /// member, and answers the forwarding answer. `None` runs the request here.
+/// A `thread.delete` always runs here too, and forwards itself as it runs.
 pub(super) fn route_to_owner<S: ThreadListService + ?Sized>(
     service: &mut S,
     request: &Request,
     actor: &crate::swarm::FleetActor,
 ) -> Result<Option<serde_json::Value>, ProtocolError> {
-    if !crate::swarm::is_forwardable(request.operation) || !request.body.is_object() {
+    if !crate::swarm::is_forwardable(request.operation)
+        || request.operation == Operation::ThreadDelete
+        || !request.body.is_object()
+    {
         return Ok(None);
     }
     request.validate_idempotency_key()?;
@@ -1864,6 +1868,20 @@ pub(super) fn dispatch_request<S: ThreadListService>(
             serde_json::from_value(request.body).map_err(|_| ProtocolError::invalid_request())?;
         let thread_id =
             super::Id::new(body.thread_id).map_err(|_| ProtocolError::invalid_request())?;
+        // A synced copy of another member's thread asks that owner to delete
+        // the thread, queued while it is away, and its delete then reaches
+        // every member. An owner that cannot take it keeps its thread.
+        if let Err(error) = service.fleet_route(
+            Operation::ThreadDelete,
+            &serde_json::json!({"thread_id": thread_id.as_str()}),
+            &crate::swarm::FleetActor::owner(),
+            Some(idempotency_key.as_str()),
+        ) {
+            crate::runtime_eprintln!(
+                "muniment-runtime: thread delete not forwarded thread_id={} error={error:?}",
+                thread_id.as_str()
+            );
+        }
         service.delete_thread(
             workspace,
             &thread_id,
