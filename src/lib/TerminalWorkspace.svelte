@@ -109,5 +109,6 @@
   .path[data-cut="true"]:hover::after { opacity:1; transition-delay:350ms; }
   button { padding:5px 8px; border:1px solid var(--border); border-radius:var(--radius-control); background:transparent; color:var(--ink); font:var(--text-12) var(--font-human); cursor:pointer; }
   p { margin:8px 12px; color:var(--muted); font:var(--text-12) var(--font-mono); }
-  .terminal-host { flex:1; min-height:0; padding:8px; overflow:hidden; }
+  /* The prompt keeps the header's 12px inset, clear of the panel edge. */
+  .terminal-host { flex:1; min-height:0; padding:8px 12px; overflow:hidden; }
 </style>

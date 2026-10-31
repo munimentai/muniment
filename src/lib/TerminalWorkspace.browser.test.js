@@ -103,3 +103,12 @@ it('draws the shell prompt as soon as the terminal opens', async () => {
   const { target } = await terminal(600, '/tmp/work', PROMPT)
   await expect.poll(() => target.querySelector('.xterm-rows')?.textContent ?? '').toContain('$')
 })
+
+it('insets the prompt from the panel edge as far as the header path, so the two line up', async () => {
+  const { target, line } = await terminal(600, '/tmp/work', PROMPT)
+  await expect.poll(() => target.querySelector('.xterm-rows')?.textContent ?? '').toContain('$')
+  const panel = target.querySelector('.terminal-workspace').getBoundingClientRect()
+  const prompt = [...target.querySelectorAll('.xterm-rows > div')].find((row) => row.textContent.includes('$')).getBoundingClientRect()
+  expect(prompt.left - panel.left).toBeGreaterThanOrEqual(12)
+  expect(prompt.left).toBe(line.getBoundingClientRect().left)
+})
