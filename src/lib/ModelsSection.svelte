@@ -642,7 +642,7 @@
 </div>
 
 {#if confirming}
-  <ConfirmDialog title={`Disconnect ${confirming.name}?`} cancelLabel="Cancel" confirmLabel="Disconnect" onDecision={decideDisconnect}>
+  <ConfirmDialog title={`Disconnect ${confirming.name}?`} cancelLabel="Cancel" confirmLabel="Disconnect" destructive onDecision={decideDisconnect}>
     <p>{confirming.line}</p>
   </ConfirmDialog>
 {/if}

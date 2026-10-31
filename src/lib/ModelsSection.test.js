@@ -197,3 +197,24 @@ it('shows a Claude Code connection from before as one row that signs in again as
   expect(tauri.invoke).toHaveBeenCalledWith('local_mode_account_login_start', { provider: 'anthropic', runtime: 'local' })
   expect(await screen.findByRole('heading', { name: 'Connect Anthropic' })).toBeInTheDocument()
 })
+
+it('closes the decision-model Disconnect dialog on Cancel and on Escape, and disconnects nothing', async () => {
+  const router = { families: [], subscriptions: [], accounts: [], classifier_connections: [{ id: 'jev', name: 'Jev · TypeSafe API', catalog_id: 'openai', active: true, connection: { kind: 'key' } }] }
+  const tauri = { invoke: vi.fn(async (command) => {
+    if (command === 'local_mode_provider_inventory') return inventory
+    if (command === 'model_router_settings') return router
+    return null
+  }) }
+  render(ModelsSection, { props: { tauri, listen: async () => () => {}, inventory } })
+  const unplug = await screen.findByRole('button', { name: 'Disconnect Jev · TypeSafe API' })
+  await fireEvent.click(unplug)
+  let dialog = await screen.findByRole('dialog', { name: 'Disconnect Jev · TypeSafe API?' })
+  expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveFocus()
+  await fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  await fireEvent.click(unplug)
+  dialog = await screen.findByRole('dialog')
+  await fireEvent.keyDown(document.activeElement, { key: 'Escape' })
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  expect(tauri.invoke).not.toHaveBeenCalledWith('model_router_disconnect_classifier', expect.anything())
+})

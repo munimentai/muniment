@@ -317,7 +317,7 @@
 </div>
 
 {#if removing}
-  <ConfirmDialog title={`Disconnect ${removing.label}?`} cancelLabel="Cancel" confirmLabel="Disconnect" onDecision={disconnect}>
+  <ConfirmDialog title={`Disconnect ${removing.label}?`} cancelLabel="Cancel" confirmLabel="Disconnect" destructive onDecision={disconnect}>
     <p>{removing.source === 'key' ? 'Muniment deletes this key. Add it again to use it.' : 'Muniment removes this sign-in. Sign in again to use it.'}</p>
   </ConfirmDialog>
 {/if}
