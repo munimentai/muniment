@@ -1,7 +1,6 @@
 <script>
   import { dialogDismiss } from '../lib/dialog-dismiss.js'
   import PopupClose from '../lib/PopupClose.svelte'
-  import OverflowText from '../lib/OverflowText.svelte'
   import { floatingMenu } from '../lib/floating-menu.js'
   import { panelScroll } from '../lib/panel-scroll.js'
   import { onMount, tick } from 'svelte'
@@ -31,6 +30,16 @@
   let busy = $state(false)
   let status = $state('')
   const revealLabel = /Mac/.test(navigator.platform) ? 'Reveal in Finder' : /Win/.test(navigator.platform) ? 'Reveal in File Explorer' : 'Reveal in File Manager'
+  // A folder path too long for the line drops its start behind a leading
+  // ellipsis, and only then does the line name the full path on hover.
+  let pathCut = $state(false)
+  function cutStart(node) {
+    const measure = () => { pathCut = node.scrollWidth > node.clientWidth }
+    const resize = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure)
+    resize?.observe(node)
+    measure()
+    return { update: measure, destroy: () => resize?.disconnect() }
+  }
   const destination = () => selected?.directory ? selected.path : selected?.parent || listing?.path
   function picked() { return [...selection] }
   async function refresh() {
@@ -207,7 +216,7 @@
     <button type="button" disabled={busy} onclick={choose}>Choose folder…</button>
     <button type="button" aria-label="Refresh files" disabled={busy || !listing} onclick={() => refresh().catch(e => error = String(e))}><LucideIcon name="refresh-cw" /></button>
   </header>
-  {#if listing}<p class="path"><OverflowText text={listing.path} /></p>{/if}
+  {#if listing}<p class="path" data-tooltip={listing.path} data-cut={pathCut}><span class="path-text" use:cutStart={listing.path}><bdi dir="ltr">{listing.path}</bdi></span></p>{/if}
   {#if error}<p role="alert">{error}</p>{/if}
   <div class="files-content">
     <div class="file-list" use:panelScroll role="group" aria-label="File list" oncontextmenu={event => { if (listing) void context(event,{path:listing.path,directory:true,name:''}) }}>
@@ -263,7 +272,11 @@
   header { display:flex; align-items:center; gap:6px; padding:8px; border-bottom:1px solid var(--border); }
   button,input,select { border:1px solid var(--border); border-radius:var(--radius-control); background:var(--surface); color:var(--ink); padding:5px 8px; font:var(--text-12) var(--font-mono); }
   button { display:flex; align-items:center; gap:8px; cursor:pointer; } button:disabled { opacity:.5; } button:hover:not(:disabled),button[aria-selected="true"] { background:var(--faint); }
-  select { flex:1; min-width:0; } p { margin:12px; color:var(--muted); font:var(--text-12) var(--font-mono); } .path { min-width:0; }
+  select { flex:1; min-width:0; } p { margin:12px; color:var(--muted); font:var(--text-12) var(--font-mono); } .path { position:relative; min-width:0; }
+  /* The path reads left to right inside a right-to-left line, so its start drops behind the ellipsis. */
+  .path-text { display:block; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; direction:rtl; text-align:left; }
+  .path[data-cut="true"]::after { content:attr(data-tooltip); position:absolute; left:0; top:calc(100% + 4px); z-index:4; width:max-content; max-width:100%; box-sizing:border-box; padding:6px 9px; border:1px solid var(--border); border-radius:var(--radius-control); background:var(--surface); box-shadow:var(--shadow-overlay); color:var(--ink); font:var(--text-12) var(--font-mono); overflow-wrap:anywhere; pointer-events:none; opacity:0; transition:opacity 80ms ease; }
+  .path[data-cut="true"]:hover::after { opacity:1; transition-delay:350ms; }
   .files-content { flex:1; min-height:0; display:grid; grid-template-columns:minmax(0,1fr); }
   .file-list { min-height:0; overflow:auto; padding:8px; } input { width:100%; margin-bottom:8px; }
   .hidden-toggle { display:flex; align-items:center; gap:6px; margin:4px 0 8px; color:var(--muted); font:var(--text-12) var(--font-human); }
