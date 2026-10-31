@@ -208,15 +208,28 @@ describe('Machines page', () => {
     await waitFor(() => expect(order).toEqual(['prepare', 'machines', 'prepare', 'count', 'install']))
   })
 
-  it('names this computer as current when no app update waits', async () => {
+  it('says every machine is current when Update all finds nothing to update', async () => {
     const bridge = tauri({
-      runtime_update_all: () => ({ results: [], skipped: [] }),
+      runtime_update_all: () => ({ results: [], skipped: [{ id: buildBox.id, name: 'Build box', reason: 'current' }] }),
       app_update_prepare: () => null,
     })
     render(RuntimesSection, { tauri: bridge, listen })
     await fireEvent.click(await screen.findByRole('button', { name: 'Update all' }))
-    expect(await screen.findByText('Skipped: This computer (already current).')).toBeInTheDocument()
+    expect(await screen.findByText('All machines are current.')).toBeInTheDocument()
+    expect(screen.queryByText(/^Skipped:/)).toBeNull()
     expect(bridge.invoke).not.toHaveBeenCalledWith('app_update_install')
+  })
+
+  it('turns Update all off while only a machine that does not answer is behind', async () => {
+    const behind = { ...studio, updateOffered: true }
+    const bridge = tauri({
+      runtime_list: () => runtimeList([local, behind, { ...buildBox, updateOffered: false }]),
+      runtime_refresh: () => runtimeList([local, behind, { ...buildBox, updateOffered: false }]),
+      app_update_prepare: () => null,
+    })
+    render(RuntimesSection, { tauri: bridge, listen })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Update all' })).toBeDisabled())
+    expect(screen.getByText('Every machine that answers is current.')).toBeInTheDocument()
   })
 
   it('renames and removes a machine from its menu, asking once before removal', async () => {

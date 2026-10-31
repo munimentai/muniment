@@ -25,7 +25,7 @@
   import AddMachine from './AddMachine.svelte'
   import ThisComputer from './ThisComputer.svelte'
   import SyncProgress from './SyncProgress.svelte'
-  import { errorText, skipLabel, updatableRuntimes } from './runtimes.js'
+  import { canRequestUpdate, errorText, skipLabel, updatableRuntimes } from './runtimes.js'
   import FailureNote from '../lib/FailureNote.svelte'
   import { linkHolders, machineRows, removable } from './machines.js'
   import { agentRequest } from '../agents/agent-runtime.js'
@@ -64,6 +64,8 @@
   let computerOpen = $state(focus === 'this-computer')
   const rows = $derived(list ? machineRows({ list, swarm, devices, cloudDevices, phone }) : [])
   const updateWaits = $derived(!!localVersion || updatableRuntimes(list).length > 0)
+  // Update all acts only on this computer's waiting update or a machine that answers and is behind.
+  const updateReady = $derived(!!localVersion || updatableRuntimes(list).some(canRequestUpdate))
 
   onMount(() => {
     let alive = true
@@ -218,8 +220,10 @@
       let version = null
       try { version = await tauri.invoke('app_update_prepare') } catch { /* This computer keeps its version. */ }
       if (!version) skips.push({ id: 'local', name: 'This computer', reason: 'current' })
-      skipped = skips
-      notice = asked.length ? `Update requested on ${named(asked)}.` : ''
+      // Nothing to update and nothing skipped for another cause: every machine is current.
+      const current = !asked.length && !failures.length && !version && skips.every((skip) => skip.reason === 'current')
+      skipped = current ? [] : skips
+      notice = asked.length ? `Update requested on ${named(asked)}.` : current ? 'All machines are current.' : ''
       if (version) await updateThisComputer(version)
     } catch (failure) {
       error = errorText(failure)
@@ -317,13 +321,13 @@
 <section class="settings-runtimes" aria-label="Machines" data-settings-controls>
   <PageHead intro="This computer and every machine and device that works with it. Machines you add share agents, threads and approvals.">
     {#snippet actions()}
-      {#if updateWaits}<Button icon="arrow-down" disabled={!list || !!busy} onclick={updateAll}>Update all</Button>{/if}
+      {#if updateWaits}<Button icon="arrow-down" disabled={!list || !!busy || !updateReady} onclick={updateAll}>Update all</Button>{/if}
       <Button icon="plus" variant="primary" aria-expanded={adding} onclick={() => { adding = !adding }}>Add machine</Button>
     {/snippet}
   </PageHead>
 
   {#if error}<FailureNote failure={error} />{/if}
-  {#if notice}<p class="line" role="status">{notice}</p>{/if}
+  {#if notice}<p class="line" role="status">{notice}</p>{:else if list && updateWaits && !updateReady && !busy}<p class="line" role="status">Every machine that answers is current.</p>{/if}
   {#if linkFailure}<FailureNote failure={linkFailure} />{/if}
   {#each failures as failure (failure)}<FailureNote {failure} />{/each}
   {#if skipped.length}<p class="line" role="status">Skipped: {skipped.map(skipLabel).join(', ')}.</p>{/if}
