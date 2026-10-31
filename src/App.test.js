@@ -9689,6 +9689,15 @@ it('keeps the foot row on the Settings side, where Settings is the current page'
     await fireEvent.click(within(foot()).getByRole('button', { name }))
     await waitFor(() => expect(document.querySelector('.catalog-title')).toHaveTextContent(name))
     expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument()
+    expect(within(foot()).getByRole('button', { name })).toHaveAttribute('aria-pressed', 'true')
+    // Settings over the page marks Settings alone, and the page's own press shows it again.
+    await openSettings()
+    expect(within(foot()).getByRole('button', { name })).toHaveAttribute('aria-pressed', 'false')
+    for (const other of ['Usage', 'Notifications']) expect(within(foot()).getByRole('button', { name: other })).toHaveAttribute('aria-pressed', 'false')
+    await fireEvent.click(within(foot()).getByRole('button', { name }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument())
+    expect(document.querySelector('.catalog-title')).toHaveTextContent(name)
+    expect(within(foot()).getByRole('button', { name })).toHaveAttribute('aria-pressed', 'true')
   }
 })
 

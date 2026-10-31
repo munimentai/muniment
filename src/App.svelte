@@ -3076,16 +3076,19 @@
   }
   async function refreshAgentsAndRuns() { await Promise.all([refreshAgents(), refreshRuns()]) }
   // Usage and Notifications take the thread's place. A second press closes them.
+  // Settings covers a full page it leaves open, so a press from Settings
+  // shows the page instead of closing it.
   function toggleFullPage(page) {
+    const fromSettings = settingsOpen
     if (settingsOpen) closeSettings()
-    if (fullPage === page) { fullPage = null; return }
+    if (fullPage === page && !fromSettings) { fullPage = null; return }
     projectsOpen = false; artifactsOpen = false; agentsOpen = false; agentProfileOpen = false; closeRail()
     fullPage = page
   }
-  function showNotifications() { if (fullPage !== 'notifications') toggleFullPage('notifications') }
+  function showNotifications() { if (fullPage !== 'notifications' || settingsOpen) toggleFullPage('notifications') }
   // Settings links to Usage, the one page that shows it.
   onMount(() => {
-    const showUsage = () => { if (fullPage !== 'usage') toggleFullPage('usage') }
+    const showUsage = () => { if (fullPage !== 'usage' || settingsOpen) toggleFullPage('usage') }
     window.addEventListener(OPEN_USAGE_EVENT, showUsage)
     return () => window.removeEventListener(OPEN_USAGE_EVENT, showUsage)
   })
@@ -3877,7 +3880,7 @@
           {#if !sidebarCollapsed}
           <div class="side-foot">
             <div class="settings-block">
-              <SidebarActions bind:settingsButton {settingsOpen} usageOpen={fullPage === 'usage'} notificationsOpen={fullPage === 'notifications'} {needsYou} settingsShortcut={settingsKeyShortcut} usageShortcut={usageShortcut()} notificationsShortcut={notificationsShortcut()} disabled={switchLocked} onsettings={toggleSettings} onusage={() => toggleFullPage('usage')} onnotifications={() => toggleFullPage('notifications')} />
+              <SidebarActions bind:settingsButton {settingsOpen} usageOpen={!settingsOpen && fullPage === 'usage'} notificationsOpen={!settingsOpen && fullPage === 'notifications'} {needsYou} settingsShortcut={settingsKeyShortcut} usageShortcut={usageShortcut()} notificationsShortcut={notificationsShortcut()} disabled={switchLocked} onsettings={toggleSettings} onusage={() => toggleFullPage('usage')} onnotifications={() => toggleFullPage('notifications')} />
             </div>
             {#if featureFlags.cloud}
             {#if auth.name === 'signed-in'}
