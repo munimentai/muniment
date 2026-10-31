@@ -132,9 +132,11 @@ fn main() {
     }
 
     let mut context = tauri::test::mock_context(tauri::test::noop_assets());
-    let config: tauri::utils::config::Config =
+    // The file's version names package.json, so only the window list is parsed as config.
+    let config: serde_json::Value =
         serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
-    context.config_mut().app.windows = config.app.windows;
+    context.config_mut().app.windows =
+        serde_json::from_value(config["app"]["windows"].clone()).unwrap();
     // The context supplies empty assets, but the builder creates real Wry, Tao, and AppKit windows.
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
