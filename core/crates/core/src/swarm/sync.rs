@@ -143,10 +143,12 @@ pub(super) fn ensure_registration(
     Ok(true)
 }
 
-/// Keeps a registration in the `threads` table unless one is held.
+/// Keeps a registration in the `threads` table unless one is held or this
+/// runtime's journal deleted the thread.
 fn keep_registration(inner: &Inner, registration: &ThreadRegistration) -> Result<bool, String> {
     if registration_valid(registration)
         && self::registration(inner, &registration.thread_id).is_none()
+        && !deleted_here(inner, &registration.thread_id)?
     {
         inner.store.put_record(
             "threads",
@@ -193,6 +195,18 @@ pub(super) fn on_changes(inner: &Inner, changes: &[RecordChange]) -> Result<bool
             keys.push(&change.key);
         }
     }
+    // A thread this runtime's journal deleted stays deleted here, whatever
+    // another member still holds of it.
+    let keys = {
+        let mut storage = storage_lock(&inner.storage)?;
+        let mut kept = Vec::with_capacity(keys.len());
+        for key in keys {
+            if !storage.journal.thread_deleted(key).map_err(journal_error)? {
+                kept.push(key);
+            }
+        }
+        kept
+    };
     if keys.is_empty() {
         return Ok(changed);
     }
@@ -537,9 +551,17 @@ pub(super) fn delete_copy(inner: &Inner, thread_id: &str, owner: &str) -> Result
     Ok(())
 }
 
-/// Deletes the record of an ordinary thread this runtime owns once its
-/// journal deleted the thread, so every member forgets it.
-fn retire_plain(inner: &Inner, thread_id: &str) -> Result<(), String> {
+/// Whether this runtime's journal deleted the thread.
+fn deleted_here(inner: &Inner, thread_id: &str) -> Result<bool, String> {
+    storage_lock(&inner.storage)?
+        .journal
+        .thread_deleted(thread_id)
+        .map_err(journal_error)
+}
+
+/// Deletes the record of a thread this runtime runs once its journal
+/// deleted the thread, so every member forgets it and deletes its copy.
+fn retire(inner: &Inner, thread_id: &str) -> Result<(), String> {
     inner
         .store
         .delete_record("threads", "thread_id", thread_id)?;
@@ -547,6 +569,31 @@ fn retire_plain(inner: &Inner, thread_id: &str) -> Result<(), String> {
     inner
         .records
         .delete(&origin, inner.now(), CLASS, thread_id, 0, None)?;
+    inner.changed("threads");
+    Ok(())
+}
+
+/// Forgets a registered thread this runtime's journal deleted. A thread
+/// this runtime runs, or whose agent no member runs, is retired for the
+/// whole fleet. A copy of another member's thread leaves this runtime's
+/// registrations, so its owner's events no longer re-create it here.
+fn retire_deleted(
+    inner: &Inner,
+    self_id: &str,
+    registration: &ThreadRegistration,
+) -> Result<(), String> {
+    let primary = thread_primary(inner, registration);
+    if primary.as_deref().is_none_or(|primary| primary == self_id) {
+        crate::runtime_eprintln!(
+            "muniment-runtime: swarm thread retired thread_id={} kind={} reason=deleted_here",
+            registration.thread_id,
+            registration.kind
+        );
+        return retire(inner, &registration.thread_id);
+    }
+    inner
+        .store
+        .delete_record("threads", "thread_id", &registration.thread_id)?;
     inner.changed("threads");
     Ok(())
 }
@@ -835,14 +882,16 @@ pub(super) fn scan_local(inner: &Inner) -> Result<(), String> {
             None => continue,
         };
         let exists = scan_thread(inner, &self_id, thread_id)?;
-        if registration.kind == PLAIN
-            && registration.owner_runtime.as_deref() == Some(self_id.as_str())
-        {
-            if exists {
+        let owned_plain = registration.kind == PLAIN
+            && registration.owner_runtime.as_deref() == Some(self_id.as_str());
+        if exists {
+            if owned_plain {
                 refresh_summary(inner, &self_id, thread_id)?;
-            } else {
-                retire_plain(inner, thread_id)?;
             }
+        } else if owned_plain {
+            retire(inner, thread_id)?;
+        } else if deleted_here(inner, thread_id)? {
+            retire_deleted(inner, &self_id, &registration)?;
         }
     }
     let mut marks = super::lock(&inner.scan);
@@ -1323,6 +1372,10 @@ fn ensure_thread(
 ) -> Result<bool, String> {
     if journal.thread_exists(thread_id).map_err(journal_error)? {
         return Ok(true);
+    }
+    // A thread this runtime deleted takes no more events.
+    if journal.thread_deleted(thread_id).map_err(journal_error)? {
+        return Ok(false);
     }
     let Some(scope) = scope else {
         return Ok(false);

@@ -118,6 +118,44 @@ impl RunJournal {
             .map_err(Into::into)
     }
 
+    /// Whether the journal holds a delete of the thread.
+    pub fn thread_deleted(&mut self, thread_id: &str) -> Result<bool, JournalError> {
+        let coordination = self.coordination.clone();
+        let _operation = coordination
+            .as_ref()
+            .map(|state| state.operation.lock().unwrap());
+        self.refresh_after_compaction()?;
+        self.connection
+            .as_ref()
+            .expect("journal connection is always present outside compaction")
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM thread_events WHERE thread_id=?1 \
+                 AND event_type='thread.deleted')",
+                [thread_id],
+                |row| row.get(0),
+            )
+            .map_err(Into::into)
+    }
+
+    /// The threads the journal deleted, newest delete first, at most `limit`.
+    pub fn deleted_thread_ids(&mut self, limit: usize) -> Result<Vec<String>, JournalError> {
+        let coordination = self.coordination.clone();
+        let _operation = coordination
+            .as_ref()
+            .map(|state| state.operation.lock().unwrap());
+        self.refresh_after_compaction()?;
+        let connection = self
+            .connection
+            .as_ref()
+            .expect("journal connection is always present outside compaction");
+        let mut statement = connection.prepare_cached(
+            "SELECT thread_id FROM thread_events WHERE event_type='thread.deleted' \
+             GROUP BY thread_id ORDER BY MAX(recorded_at) DESC, thread_id LIMIT ?1",
+        )?;
+        let rows = statement.query_map([limit as i64], |row| row.get(0))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     /// Creates a thread under a given id, the id its primary runtime chose,
     /// and answers whether it was created. An existing thread stays as it is.
     pub fn create_thread_with_id(

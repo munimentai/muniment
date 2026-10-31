@@ -28,6 +28,11 @@ pub struct ThreadSummary {
 pub struct ThreadSummaryPage {
     pub summaries: Vec<ThreadSummary>,
     pub next_cursor: Option<String>,
+    /// The threads this journal deleted, newest delete first, which the
+    /// runtime fills in. A client that merges other machines' lists leaves
+    /// their copies of these threads out.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub deleted_thread_ids: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -62,6 +67,16 @@ impl From<rusqlite::Error> for ThreadSummaryListError {
         Self::Journal(JournalError::Sqlite(value))
     }
 }
+
+/// A thread's own event times: `content_at` leaves out its creation, and
+/// `any_at` keeps it.
+const THREAD_TIMES: &str = "MAX(CASE WHEN event_type<>'thread.created' THEN recorded_at END) \
+    AS content_at, MAX(recorded_at) AS any_at";
+/// The time a thread lists at: its newest content, a thread event or a run's
+/// last event, or its creation while it holds no content. A replica's
+/// creation records when its copy arrived, not when anyone wrote in it.
+const LISTED_AT: &str = "COALESCE(MAX(COALESCE(tt.content_at, rt.updated_at), \
+    COALESCE(rt.updated_at, tt.content_at)), tt.any_at)";
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -150,18 +165,18 @@ impl RunJournal {
                 .connection
                 .as_ref()
                 .expect("journal connection is always present outside compaction");
-            let mut statement = connection.prepare_cached(
+            let mut statement = connection.prepare_cached(&format!(
                 "WITH thread_time AS (\
-                    SELECT MAX(recorded_at) AS updated_at FROM thread_events \
+                    SELECT {THREAD_TIMES} FROM thread_events \
                     WHERE thread_id=?1), run_time AS (\
                     SELECT MAX((SELECT e.recorded_at FROM events e \
                         WHERE e.run_id=rt.run_id ORDER BY e.run_seq DESC LIMIT 1)) AS updated_at \
                     FROM run_threads rt WHERE rt.thread_id=?1) \
-                 SELECT MAX(tt.updated_at, COALESCE(rt.updated_at, tt.updated_at)) \
+                 SELECT {LISTED_AT} \
                  FROM thread_time tt CROSS JOIN run_time rt \
-                 WHERE tt.updated_at IS NOT NULL AND NOT EXISTS(SELECT 1 FROM thread_events deleted \
+                 WHERE tt.any_at IS NOT NULL AND NOT EXISTS(SELECT 1 FROM thread_events deleted \
                     WHERE deleted.thread_id=?1 AND deleted.event_type='thread.deleted')",
-            )?;
+            ))?;
             for thread_id in thread_ids {
                 if keys
                     .iter()
@@ -256,35 +271,39 @@ impl RunJournal {
             .as_ref()
             .expect("journal connection is always present outside compaction");
 
-        let summary_rows = "WITH thread_times AS (\
-            SELECT te.thread_id, MAX(te.recorded_at) AS updated_at FROM thread_events te \
-            GROUP BY te.thread_id), run_times AS (\
+        let summary_rows = format!(
+            "WITH thread_times AS (\
+            SELECT thread_id, {THREAD_TIMES} FROM thread_events \
+            GROUP BY thread_id), run_times AS (\
             SELECT rt.thread_id, MAX((SELECT e.recorded_at FROM events e \
                 WHERE e.run_id=rt.run_id ORDER BY e.run_seq DESC LIMIT 1)) AS updated_at \
             FROM run_threads rt GROUP BY rt.thread_id), summaries AS (\
-            SELECT tt.thread_id, MAX(tt.updated_at, COALESCE(rt.updated_at, tt.updated_at)) AS updated_at \
+            SELECT tt.thread_id, {LISTED_AT} AS updated_at \
             FROM thread_times tt LEFT JOIN run_times rt ON rt.thread_id=tt.thread_id \
             WHERE NOT EXISTS(SELECT 1 FROM thread_events deleted \
                 WHERE deleted.thread_id=tt.thread_id AND deleted.event_type='thread.deleted') \
             AND (?1 IS NULL OR EXISTS(SELECT 1 FROM run_threads scoped \
                 JOIN run_workspaces rw ON rw.run_id=scoped.run_id \
-                WHERE scoped.thread_id=tt.thread_id AND rw.workspace=?1)))";
+                WHERE scoped.thread_id=tt.thread_id AND rw.workspace=?1)))"
+        );
 
         if let Some(boundary) = boundary {
             let exists: bool = connection.query_row(
-                "WITH thread_time AS (\
-                    SELECT MAX(recorded_at) AS updated_at FROM thread_events \
+                &format!(
+                    "WITH thread_time AS (\
+                    SELECT {THREAD_TIMES} FROM thread_events \
                     WHERE thread_id=?2), run_time AS (\
                     SELECT MAX((SELECT e.recorded_at FROM events e \
                         WHERE e.run_id=rt.run_id ORDER BY e.run_seq DESC LIMIT 1)) AS updated_at \
                     FROM run_threads rt WHERE rt.thread_id=?2) \
                  SELECT EXISTS(SELECT 1 FROM thread_time tt CROSS JOIN run_time rt \
-                    WHERE MAX(tt.updated_at, COALESCE(rt.updated_at, tt.updated_at))=?3 \
+                    WHERE {LISTED_AT}=?3 \
                     AND NOT EXISTS(SELECT 1 FROM thread_events deleted \
                         WHERE deleted.thread_id=?2 AND deleted.event_type='thread.deleted') \
                     AND (?1 IS NULL OR EXISTS(SELECT 1 FROM run_threads scoped \
                         JOIN run_workspaces rw ON rw.run_id=scoped.run_id \
-                        WHERE scoped.thread_id=?2 AND rw.workspace=?1)))",
+                        WHERE scoped.thread_id=?2 AND rw.workspace=?1)))"
+                ),
                 rusqlite::params![workspace, boundary.thread_id, boundary.updated_at],
                 |row| row.get(0),
             )?;
@@ -407,6 +426,7 @@ impl RunJournal {
         Ok(ThreadSummaryPage {
             summaries,
             next_cursor,
+            deleted_thread_ids: Vec::new(),
         })
     }
 }
