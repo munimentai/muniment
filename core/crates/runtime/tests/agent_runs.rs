@@ -365,18 +365,24 @@ fn a_routine_run_that_replies_no_response_posts_nothing() {
     setup.tick();
     let next = agents::state(setup.profile()).unwrap().routines[&agent.id]["check"].next_fire_at;
     assert!(next.is_some_and(|next| next > agent_runs::now()));
-    agents::with_state(setup.profile(), |state| {
-        state
-            .routines
-            .get_mut(&agent.id)
-            .unwrap()
-            .get_mut("check")
-            .unwrap()
-            .next_fire_at = Some(agent_runs::now() - 30);
-        Ok(())
-    })
-    .unwrap();
+    let fire_at = |at: i64| {
+        agents::with_state(setup.profile(), |state| {
+            state
+                .routines
+                .get_mut(&agent.id)
+                .unwrap()
+                .get_mut("check")
+                .unwrap()
+                .next_fire_at = Some(at);
+            Ok(())
+        })
+        .unwrap();
+    };
+    fire_at(agent_runs::now() - 30);
     setup.tick();
+    // The routine fires once. A later tick that crosses the next five-minute
+    // mark would fire it again into the same thread.
+    fire_at(agent_runs::now() + 3600);
     let routine_run = setup.store().latest(&agent.id).unwrap().unwrap();
     assert_eq!(routine_run.trigger.kind, TriggerKind::Cron);
     assert_eq!(routine_run.trigger.routine_id.as_deref(), Some("check"));
