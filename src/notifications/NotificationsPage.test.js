@@ -105,6 +105,9 @@ describe('Notifications page', () => {
     render(NotificationsPage, { tauri: { invoke: vi.fn(async () => quiet) }, runtimeList: null })
     expect(await screen.findByText('Nothing needs you')).toBeInTheDocument()
     expect(screen.getByRole('list', { name: 'Next scheduled runs' })).toHaveTextContent('Weekday briefing')
+    // A name too long for the row ends in an ellipsis, and its tooltip holds all of it.
+    expect(screen.getByText('Weekday briefing')).toHaveAttribute('title', 'Weekday briefing')
+    expect(screen.getByText('Weekday briefing')).toHaveClass('name')
   })
 
   it('names each run\'s trigger with its icon and its machine with its stoplight', async () => {

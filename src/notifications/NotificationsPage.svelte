@@ -93,7 +93,7 @@
           {#if page.upcoming.length}
             <ul class="upcoming" aria-label="Next scheduled runs">
               {#each page.upcoming as next (`${next.agent_id}:${next.routine_id}`)}
-                <li><LucideIcon name="clock" size={14} /><span>{next.agent_name}</span><span class="muted">{next.routine_name}</span>{#if showMachine && next.machine}<MachineChip machine={next.machine} {runtimeList} />{/if}<time datetime={new Date(next.at_ms).toISOString()}>{scheduleTime(next.at_ms)}</time></li>
+                <li><LucideIcon name="clock" size={14} /><span class="name" title={next.agent_name}>{next.agent_name}</span><span class="name muted" title={next.routine_name}>{next.routine_name}</span>{#if showMachine && next.machine}<MachineChip machine={next.machine} {runtimeList} />{/if}<time datetime={new Date(next.at_ms).toISOString()}>{scheduleTime(next.at_ms)}</time></li>
               {/each}
             </ul>
           {/if}
@@ -146,7 +146,10 @@
   .quiet-line :global(.lucide) { color: var(--success); }
   .upcoming, .running, .rows { display: grid; margin: 0; padding: 0; list-style: none; }
   .upcoming li { display: flex; align-items: center; gap: 8px; min-height: 28px; color: var(--ink); font-size: var(--text-13); }
-  .upcoming time { margin-left: auto; color: var(--muted); font-size: var(--text-12); }
+  .upcoming time { flex-shrink: 0; margin-left: auto; color: var(--muted); font-size: var(--text-12); }
+  .upcoming li > :global(svg) { flex-shrink: 0; }
+  /* A long agent or routine name ends in an ellipsis, and its tooltip holds the full name. */
+  .upcoming .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .muted { color: var(--muted); }
   .running { display: flex; flex-wrap: wrap; gap: 8px; }
   .running button { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 4px 10px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-13) var(--font-human); cursor: pointer; }
