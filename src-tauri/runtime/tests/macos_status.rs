@@ -100,7 +100,8 @@ fn creates_an_owner_only_log_with_fixed_redacted_records() {
         fs::metadata(&log).unwrap().permissions().mode() & 0o777,
         0o600
     );
-    let contents = fs::read_to_string(log).unwrap();
+    let contents =
+        muniment_core::runtime_diagnostics::without_record_times(&fs::read_to_string(log).unwrap());
     assert_eq!(
         contents,
         "event=activation_failed message=runtime activation failed\n"
@@ -130,7 +131,7 @@ fn truncates_the_log_deterministically_at_the_size_limit() {
     .unwrap();
 
     assert_eq!(
-        fs::read_to_string(log).unwrap(),
+        muniment_core::runtime_diagnostics::without_record_times(&fs::read_to_string(log).unwrap()),
         "event=restart_loop_stopped message=runtime restart limit reached\n"
     );
     fs::remove_dir_all(root).unwrap();
@@ -328,7 +329,9 @@ fn mirrors_each_fixed_event_through_the_unified_log_adapter() {
             .contains(&root.to_string_lossy().to_string()));
     }
 
-    let contents = fs::read_to_string(logs.join("runtime.log")).unwrap();
+    let contents = muniment_core::runtime_diagnostics::without_record_times(
+        &fs::read_to_string(logs.join("runtime.log")).unwrap(),
+    );
     let expected_file: String = diagnostic_events()
         .into_iter()
         .map(|event| format!("{}\n", expected_unified_message(event)))

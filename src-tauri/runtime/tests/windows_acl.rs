@@ -50,7 +50,9 @@ fn creates_the_managed_tree_and_writes_fixed_records() {
     }
 
     assert_eq!(
-        fs::read_to_string(root.join("ai.muniment.desktop/logs/runtime.log")).unwrap(),
+        muniment_core::runtime_diagnostics::without_record_times(
+            &fs::read_to_string(root.join("ai.muniment.desktop/logs/runtime.log")).unwrap()
+        ),
         concat!(
             "event=activation_failed message=runtime activation failed\n",
             "event=arguments_invalid message=runtime arguments invalid\n",
@@ -89,7 +91,9 @@ fn writes_beneath_an_application_directory_with_an_inherited_acl() {
     write_windows_diagnostic(&root, event.with_cause(cause)).unwrap();
     write_windows_diagnostic(&root, event.with_cause(cause)).unwrap();
     assert_eq!(
-        fs::read_to_string(application.join("logs/runtime.log")).unwrap(),
+        muniment_core::runtime_diagnostics::without_record_times(
+            &fs::read_to_string(application.join("logs/runtime.log")).unwrap()
+        ),
         format!(
             "event=runtime_task_start_failed message=runtime task start failed cause={cause}\n"
         )
@@ -229,8 +233,12 @@ fn resets_only_when_the_next_record_crosses_the_limit() {
     let log = root.join("ai.muniment.desktop/logs/runtime.log");
     let record = b"event=restart_loop_stopped message=runtime restart limit reached\n";
     let file = fs::OpenOptions::new().write(true).open(&log).unwrap();
-    file.set_len(WINDOWS_RUNTIME_LOG_MAX_BYTES - record.len() as u64)
-        .unwrap();
+    file.set_len(
+        WINDOWS_RUNTIME_LOG_MAX_BYTES
+            - record.len() as u64
+            - muniment_core::runtime_diagnostics::RECORD_TIME_BYTES as u64,
+    )
+    .unwrap();
 
     write_windows_diagnostic(&root, WindowsDiagnosticEvent::RestartLoopStopped).unwrap();
     assert_eq!(
@@ -238,6 +246,12 @@ fn resets_only_when_the_next_record_crosses_the_limit() {
         WINDOWS_RUNTIME_LOG_MAX_BYTES
     );
     write_windows_diagnostic(&root, WindowsDiagnosticEvent::RestartLoopStopped).unwrap();
-    assert_eq!(fs::read(&log).unwrap(), record);
+    assert_eq!(
+        muniment_core::runtime_diagnostics::without_record_times(
+            &fs::read_to_string(&log).unwrap()
+        )
+        .as_bytes(),
+        record
+    );
     fs::remove_dir_all(root).unwrap();
 }

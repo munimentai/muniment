@@ -177,7 +177,9 @@ fn windows_diagnostics_do_not_prevent_per_user_install_directory_removal() {
     assert!(!log_directory.starts_with(&install_directory));
     write_windows_diagnostic(&root, WindowsDiagnosticEvent::ActivationFailed).unwrap();
     assert_eq!(
-        fs::read_to_string(log_directory.join("runtime.log")).unwrap(),
+        muniment_core::runtime_diagnostics::without_record_times(
+            &fs::read_to_string(log_directory.join("runtime.log")).unwrap()
+        ),
         "event=activation_failed message=runtime activation failed\n"
     );
 

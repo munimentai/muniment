@@ -1231,7 +1231,7 @@ mod tests {
             assert!(!service.registered.get());
         }
         assert_eq!(
-            fs::read_to_string(logs.join("runtime.log")).unwrap(),
+            runtime_log(&logs),
             "event=runtime_service_job_inactive unregistered=true\n".repeat(2)
         );
         // A launch whose job stays up keeps the registration.
@@ -1379,6 +1379,13 @@ mod tests {
         }
     }
 
+    /// The runtime log's records without the time each starts with.
+    fn runtime_log(logs: &Path) -> String {
+        muniment_core::runtime_diagnostics::without_record_times(
+            &fs::read_to_string(logs.join("runtime.log")).unwrap(),
+        )
+    }
+
     fn directory() -> PathBuf {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         std::env::temp_dir().join(format!(
@@ -1412,7 +1419,7 @@ mod tests {
             "event=runtime_service_child_started pid=7 executable=\"/a b/muniment-runtime\"\n",
         )
         .unwrap();
-        let log = fs::read_to_string(directory.join("runtime.log")).unwrap();
+        let log = runtime_log(&directory);
         assert!(log.starts_with("event=runtime_service_child_started pid=7 executable="));
         assert!(log.ends_with("\n"));
         fs::remove_dir_all(directory).unwrap();
@@ -1574,7 +1581,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            fs::read_to_string(logs.join("runtime.log")).unwrap(),
+            runtime_log(&logs),
             "event=runtime_service_start_detail outcome=requestFailed recovery=failed request_error=\"launchctl kickstart gui/501/ai.muniment.runtime exit=Some(113) stderr=Could not find service\"\n\
              event=runtime_service_start_detail outcome=requested recovery=reregistered request_error=\"\"\n"
         );
@@ -1749,7 +1756,7 @@ mod tests {
         write_start_diagnostic(&logs, RuntimeStartOutcome::Requested).unwrap();
         write_start_diagnostic(&logs, RuntimeStartOutcome::RequestFailed).unwrap();
         assert_eq!(
-            fs::read(logs.join("runtime.log")).unwrap(),
+            runtime_log(&logs).as_bytes(),
             [
                 RUNTIME_SERVICE_REQUIRES_APPROVAL_RECORD,
                 RUNTIME_SERVICE_NOT_FOUND_RECORD,
@@ -1774,7 +1781,7 @@ mod tests {
         .unwrap();
         write_activation_diagnostic(&logs, RuntimeServiceActivation::NotFound).unwrap();
         assert_eq!(
-            fs::read(logs.join("runtime.log")).unwrap(),
+            runtime_log(&logs).as_bytes(),
             RUNTIME_SERVICE_NOT_FOUND_RECORD
         );
         fs::remove_dir_all(root).unwrap();
@@ -1788,7 +1795,7 @@ mod tests {
         let logs = root.join("logs");
         let description = "The plist \"ai.muniment.runtime\" is invalid.\nCheck BundleProgram.\r\t";
         write_registration_diagnostic(&logs, "SMAppServiceErrorDomain", -108, description).unwrap();
-        let record = fs::read_to_string(logs.join("runtime.log")).unwrap();
+        let record = runtime_log(&logs);
         assert_eq!(record.lines().count(), 1);
         assert!(record.starts_with(
             "event=runtime_service_registration_failed domain=\"SMAppServiceErrorDomain\" code=-108 truncated=false description="
@@ -1813,13 +1820,13 @@ mod tests {
         )
         .unwrap();
         write_registration_diagnostic(&logs, "", 0, "").unwrap();
-        assert_eq!(fs::read_to_string(logs.join("runtime.log")).unwrap(),
+        assert_eq!(runtime_log(&logs),
             "event=runtime_service_registration_failed domain=\"\" code=0 truncated=false description=\"\"\n");
 
         fs::write(logs.join("runtime.log"), []).unwrap();
         write_registration_diagnostic(&logs, &"\0".repeat(5000), isize::MAX, &"é\n".repeat(5000))
             .unwrap();
-        let record = fs::read_to_string(logs.join("runtime.log")).unwrap();
+        let record = runtime_log(&logs);
         assert!(record.len() < MACOS_RUNTIME_LOG_MAX_BYTES as usize);
         assert_eq!(record.lines().count(), 1);
         assert!(record.contains("truncated=true"));
@@ -1839,6 +1846,9 @@ mod tests {
         let logs = root.join("logs");
         let log = logs.join("runtime.log");
         let record = b"event=runtime_service_registration_failed domain=\"SMAppServiceErrorDomain\" code=-108 truncated=false description=\"The plist is invalid.\"\n";
+        // Each record takes its time and a space in the log as well.
+        let time = muniment_core::runtime_diagnostics::RECORD_TIME_BYTES;
+        let stamped = record.len() + time;
 
         for status in [ServiceStatus::NotFound, ServiceStatus::NotRegistered] {
             for (error, expected) in [
@@ -1850,11 +1860,11 @@ mod tests {
             ] {
                 for remaining in [
                     0,
-                    record.len() - 1,
-                    record.len(),
-                    record.len() + 1,
-                    record.len() + RUNTIME_SERVICE_REGISTRATION_FAILED_RECORD.len() - 1,
-                    record.len() + RUNTIME_SERVICE_REGISTRATION_FAILED_RECORD.len(),
+                    stamped - 1,
+                    stamped,
+                    stamped + 1,
+                    stamped + RUNTIME_SERVICE_REGISTRATION_FAILED_RECORD.len() + time - 1,
+                    stamped + RUNTIME_SERVICE_REGISTRATION_FAILED_RECORD.len() + time,
                     MACOS_RUNTIME_LOG_MAX_BYTES as usize,
                 ] {
                     write_activation_diagnostic(&logs, RuntimeServiceActivation::Failed).unwrap();
@@ -1874,12 +1884,17 @@ mod tests {
                     assert_eq!(adapter.registration_calls.get(), 1);
                     assert_eq!(adapter.status_calls.get(), 2);
                     assert!(adapter.registration_diagnostic_written());
-                    let expected_log = if remaining < record.len() {
-                        record.to_vec()
+                    let contents = fs::read_to_string(&log).unwrap();
+                    let kept = if remaining < stamped {
+                        contents.as_str()
                     } else {
-                        [prefix.as_slice(), record].concat()
+                        assert!(contents.as_bytes().starts_with(&prefix));
+                        &contents[prefix.len()..]
                     };
-                    assert_eq!(fs::read(&log).unwrap(), expected_log);
+                    assert_eq!(
+                        muniment_core::runtime_diagnostics::without_record_times(kept).as_bytes(),
+                        record
+                    );
                 }
             }
         }
@@ -1903,7 +1918,7 @@ mod tests {
         );
         assert!(!adapter.registration_diagnostic_written());
         assert_eq!(
-            fs::read(logs.join("runtime.log")).unwrap(),
+            runtime_log(&logs).as_bytes(),
             RUNTIME_SERVICE_REGISTRATION_FAILED_RECORD
         );
         fs::remove_dir_all(root).unwrap();
@@ -2044,7 +2059,7 @@ mod tests {
         assert!(service.registered.get());
         assert_eq!(start.request_calls.get(), 1);
         assert_eq!(
-            fs::read_to_string(logs.join("runtime.log")).unwrap(),
+            runtime_log(&logs),
             "event=runtime_service_signature_changed\n"
         );
         // The same signature keeps the registration as it is.
