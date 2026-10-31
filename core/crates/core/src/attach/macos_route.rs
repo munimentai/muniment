@@ -26,6 +26,12 @@ pub trait MacosAttachRouteReader {
     /// the desktop binary after it connects never matches.
     fn peer_code_matches(&self, expected_desktop_executable: &Path) -> bool;
 
+    /// Whether the peer closed before its process could be read, as a
+    /// readiness probe does when it connects and closes without a frame.
+    fn peer_closed(&self) -> bool {
+        false
+    }
+
     /// Returns payload-free results from the code check for this connection.
     fn code_check_diagnostic(&self) -> serde_json::Value {
         serde_json::Value::Null
@@ -48,7 +54,10 @@ pub fn name_macos_attach_connection_route(
     expected_desktop_executable: &Path,
 ) -> MacosAttachConnectionRoute {
     let Ok((peer_pid, peer_image_path)) = reader.peer_process() else {
-        reader.log_companion_fallback(0, false, None, expected_desktop_executable);
+        // A peer that already closed sends nothing to route, so it logs nothing.
+        if !reader.peer_closed() {
+            reader.log_companion_fallback(0, false, None, expected_desktop_executable);
+        }
         return MacosAttachConnectionRoute::Companion { peer_pid: 0 };
     };
     let resolved_paths =
@@ -259,6 +268,37 @@ mod tests {
             MacosAttachConnectionRoute::DesktopClient { peer_pid: 42 }
         );
         assert_eq!(*reader.checked.borrow(), Some(bundle.executable.clone()));
+    }
+
+    #[test]
+    fn a_peer_that_closed_routes_to_companion_without_a_fallback_record() {
+        struct Closed(std::cell::Cell<bool>, bool);
+        impl MacosAttachRouteReader for Closed {
+            fn peer_process(&self) -> Result<(u32, PathBuf), MacosPeerReadError> {
+                Err(MacosPeerReadError)
+            }
+            fn peer_closed(&self) -> bool {
+                self.1
+            }
+            fn peer_code_matches(&self, _: &Path) -> bool {
+                false
+            }
+            fn log_companion_fallback(&self, _: u32, _: bool, _: Option<&Path>, _: &Path) {
+                self.0.set(true);
+            }
+        }
+        for closed in [true, false] {
+            let reader = Closed(std::cell::Cell::new(false), closed);
+            assert_eq!(
+                name_macos_attach_connection_route(
+                    &reader,
+                    Path::new("/Applications/Muniment.app")
+                ),
+                MacosAttachConnectionRoute::Companion { peer_pid: 0 }
+            );
+            // Only a read that failed on an open connection is recorded.
+            assert_eq!(reader.0.get(), !closed);
+        }
     }
 
     #[test]

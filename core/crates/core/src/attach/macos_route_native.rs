@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ffi::OsString;
 use std::os::fd::AsRawFd;
 use std::os::raw::c_void;
@@ -13,6 +13,7 @@ use super::{MacosAttachRouteReader, MacosPeerReadError};
 pub struct NativeMacosAttachRouteReader<'stream> {
     stream: &'stream UnixStream,
     code_check: RefCell<CodeCheck>,
+    peer_closed: Cell<bool>,
 }
 
 /// Each status stays absent until its Security call runs.
@@ -40,6 +41,7 @@ impl<'stream> NativeMacosAttachRouteReader<'stream> {
         Self {
             stream,
             code_check: RefCell::new(CodeCheck::default()),
+            peer_closed: Cell::new(false),
         }
     }
 }
@@ -59,6 +61,7 @@ fn peer_read_failure(
 impl MacosAttachRouteReader for NativeMacosAttachRouteReader<'_> {
     fn peer_process(&self) -> Result<(u32, PathBuf), MacosPeerReadError> {
         *self.code_check.borrow_mut() = CodeCheck::default();
+        self.peer_closed.set(false);
         let mut process_id: libc::pid_t = 0;
         let mut process_id_length = std::mem::size_of_val(&process_id) as libc::socklen_t;
         if unsafe {
@@ -72,8 +75,13 @@ impl MacosAttachRouteReader for NativeMacosAttachRouteReader<'_> {
         } != 0
         {
             // Readiness probes connect and close without a frame.
-            // XNU returns ENOTCONN if the peer closes before this read.
+            // XNU returns ENOTCONN if the peer closes before this read, and
+            // that close is quiet.
             let errno = std::io::Error::last_os_error().raw_os_error();
+            if errno == Some(libc::ENOTCONN) {
+                self.peer_closed.set(true);
+                return Err(MacosPeerReadError);
+            }
             return Err(peer_read_failure(
                 "LOCAL_PEERPID",
                 process_id,
@@ -141,6 +149,10 @@ impl MacosAttachRouteReader for NativeMacosAttachRouteReader<'_> {
         check.matched = Some(matched);
         check.elapsed_ms = Some(started.elapsed().as_millis());
         matched
+    }
+
+    fn peer_closed(&self) -> bool {
+        self.peer_closed.get()
     }
 
     fn code_check_diagnostic(&self) -> serde_json::Value {
@@ -702,6 +714,8 @@ int main(int argc, char **argv) {
         assert_eq!(server.read(&mut [0]).unwrap(), 0);
         let reader = NativeMacosAttachRouteReader::new(&server);
         assert_eq!(reader.peer_process(), Err(MacosPeerReadError));
+        // The probe's close is quiet: the route logs no fallback for it.
+        assert!(reader.peer_closed());
         assert_eq!(
             name_macos_attach_connection_route(&reader, &std::env::current_exe().unwrap()),
             MacosAttachConnectionRoute::Companion { peer_pid: 0 }

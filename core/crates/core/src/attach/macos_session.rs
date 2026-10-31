@@ -19,6 +19,8 @@ use super::{
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MacosAttachSessionError {
+    /// The peer closed before it sent a byte, as a readiness probe does.
+    ClosedBeforeHello,
     Read,
     ApprovalPresenterUnavailable,
     DesktopClientAdmission(DesktopClientAdmissionError),
@@ -347,16 +349,24 @@ where
             MacosAttachSessionError::Read
         })?;
     let mut prefix = [0_u8; 4];
-    read_exact_before(&mut diagnostic.stream(&mut stream), &mut prefix, deadline).map_err(
-        |error| {
-            diagnostic.record(
-                "hello-prefix",
-                Some(&format!("{error:?}")),
-                io_closed_by(&error),
-            );
-            MacosAttachSessionError::Read
-        },
-    )?;
+    // A readiness probe connects and closes without a byte. Its close is
+    // quiet, since nothing failed.
+    let (first, rest) = prefix.split_at_mut(1);
+    match read_exact_before(&mut diagnostic.stream(&mut stream), first, deadline) {
+        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
+            return Err(MacosAttachSessionError::ClosedBeforeHello);
+        }
+        result => result
+            .and_then(|()| read_exact_before(&mut diagnostic.stream(&mut stream), rest, deadline)),
+    }
+    .map_err(|error| {
+        diagnostic.record(
+            "hello-prefix",
+            Some(&format!("{error:?}")),
+            io_closed_by(&error),
+        );
+        MacosAttachSessionError::Read
+    })?;
     let frame = read_first_frame(&mut diagnostic.stream(&mut stream), prefix, deadline)
         .inspect_err(|error| {
             diagnostic.failure("hello-frame", error);

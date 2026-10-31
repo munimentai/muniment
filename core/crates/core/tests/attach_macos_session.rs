@@ -293,6 +293,40 @@ mod unix_tests {
         }
     }
 
+    #[test]
+    fn a_probe_that_closes_before_a_byte_ends_quietly() {
+        for bytes in [vec![], vec![0]] {
+            let (mut client, server) = UnixStream::pair().unwrap();
+            client.write_all(&bytes).unwrap();
+            drop(client);
+            let outcome = serve_macos_attach_session_with_reader_and_state(
+                server,
+                &route_reader(expected_desktop_executable()),
+                501,
+                expected_desktop_executable(),
+                "1.2.3",
+                Duration::from_secs(5),
+                &mut TestService::default(),
+                None,
+                ApprovalCoordinator::default(),
+                approval_waiter_with_claims(
+                    |_: &muniment_core::attach::PairingChallenge, _: &str, _: &str, _: Duration| {
+                        None::<ApprovalDecision>
+                    },
+                ),
+                &LiveConnectionRegistry::default(),
+                |_| {},
+            );
+            // A peer that sent part of a prefix still fails as a read.
+            let expected = if bytes.is_empty() {
+                MacosAttachSessionError::ClosedBeforeHello
+            } else {
+                MacosAttachSessionError::Read
+            };
+            assert_eq!(outcome, Err(expected));
+        }
+    }
+
     fn run_companion_session(route_reader: StubRouteReader) -> (String, CompanionProvenance) {
         let (mut client, server) = UnixStream::pair().unwrap();
         client
