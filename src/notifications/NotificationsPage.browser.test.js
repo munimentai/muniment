@@ -33,6 +33,9 @@ it('keeps the Show filters in place when a filter empties the page and its scrol
   document.body.append(target)
   component = mount(NotificationsPage, { target, props: { tauri, runtimeList: { runtimes: [{ id: 'local', local: true }] } } })
   await wait(200)
+  // The faces load with font-display: swap, so text measured before they
+  // load is in the fallback font and shifts when they arrive.
+  await document.fonts.ready
   const radio = (name) => [...document.querySelectorAll('[role="radio"]')].find((node) => node.textContent === name)
   const edges = () => ['Needs you', 'All', 'Failed'].map((name) => radio(name).getBoundingClientRect()).map((box) => [box.left, box.width])
   const scroller = document.querySelector('.panel-page')
@@ -40,6 +43,7 @@ it('keeps the Show filters in place when a filter empties the page and its scrol
   const before = edges()
   await userEvent.click(radio('Needs you'))
   await wait(200)
+  await document.fonts.ready
   expect(scroller.scrollHeight).toBeLessThanOrEqual(scroller.clientHeight)
   expect(edges()).toEqual(before)
 })
