@@ -186,6 +186,24 @@ pub fn accept_compaction(
     .map(|(_, launch)| launch)
 }
 
+/// The memory runtime of one run. It carries the after-run extraction model,
+/// which answers through the cheapest connected router account and then the
+/// user's Pi sign-in, so a chat with Save facts from chats on learns facts.
+fn run_memory_runtime(
+    profile_directory: &Path,
+    config_directory: &Path,
+) -> Arc<ApplicationMemoryRuntime> {
+    Arc::new(
+        ApplicationMemoryRuntime::new(
+            config_directory.to_path_buf(),
+            profile_directory.join("memory"),
+        )
+        .with_extraction_model(muniment_core::memory_extract::extraction_model(
+            profile_directory.to_path_buf(),
+        )),
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn accept_run(
     host: &RuntimeHost,
@@ -208,10 +226,7 @@ fn accept_run(
     events: RuntimeChatEventTarget,
     pi_artifact: Option<PiArtifactDescriptor>,
 ) -> Result<(PromptAcceptance, PromptLaunch), String> {
-    let memory_runtime = Arc::new(ApplicationMemoryRuntime::new(
-        config_directory.to_path_buf(),
-        profile_directory.join("memory"),
-    ));
+    let memory_runtime = run_memory_runtime(profile_directory, config_directory);
     let cancelled = Arc::new(AtomicBool::new(false));
     let transport = Arc::new(Mutex::new(None));
     let adapter = Arc::new(Mutex::new(None));
@@ -675,10 +690,7 @@ pub fn resume_run_with_notice(
         resume.notice = notice;
         (resume, thread_id)
     };
-    let memory_runtime = Arc::new(ApplicationMemoryRuntime::new(
-        config_directory.as_ref().to_path_buf(),
-        profile_directory.join("memory"),
-    ));
+    let memory_runtime = run_memory_runtime(profile_directory, config_directory.as_ref());
     let cancelled = Arc::new(AtomicBool::new(false));
     let transport = Arc::new(Mutex::new(None));
     let adapter = Arc::new(Mutex::new(None));
@@ -734,4 +746,19 @@ pub fn resume_run_with_notice(
     result
         .recv()
         .map_err(|_| "This reply could not be resumed. Try again.".to_string())?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_run_carries_the_extraction_model_without_a_model_setting() {
+        let root = std::env::temp_dir().join(format!(
+            "muniment-run-memory-{}",
+            uuid::Uuid::now_v7().simple()
+        ));
+        let memory = run_memory_runtime(&root, &root.join("config"));
+        assert!(memory.review_model().is_some());
+    }
 }
