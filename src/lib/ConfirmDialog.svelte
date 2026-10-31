@@ -59,6 +59,15 @@
     }
   })
 
+  // The dialog sits on the page body, above every panel. Inside a page it
+  // shares that page's stacking and scroll, so the app's sidebar and title
+  // bar draw over it and take a real pointer's click, which no keyboard or
+  // accessibility press meets.
+  function portal(node) {
+    document.body.appendChild(node)
+    return { destroy() { node.remove() } }
+  }
+
   async function decide(approve) {
     if (pending) return
     pending = true
@@ -66,7 +75,7 @@
   }
 </script>
 
-<div class="dialog-backdrop" use:dialogDismiss={{onclose: () => decide(false), disabled: pending}}>
+<div class="dialog-backdrop" use:portal use:dialogDismiss={{onclose: () => decide(false), disabled: pending}}>
   <div data-panel="confirm" data-panel-variant="overlay" bind:this={dialogPanel} class="dialog-panel" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
     <header><h2 id="confirm-dialog-title">{title}</h2><PopupClose label="Close confirmation" disabled={pending} onclick={() => decide(false)} /></header>
     <div class="dialog-copy">{@render children()}</div>

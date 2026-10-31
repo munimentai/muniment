@@ -19,7 +19,9 @@ const inventory = { providers: [{ id: 'openai', name: 'OpenAI', source: 'key', f
 const router = { families: [{ id: 'openai', name: 'OpenAI' }], subscriptions: [], accounts: [key], classifier_connections: [{ id: 'jev', name: 'Jev · TypeSafe API', catalog_id: 'openai', active: true, connection: { kind: 'key' } }] }
 
 // Settings › Models as the app shows it, with its Escape handler beneath the dialog.
-async function models() {
+// `frame` sets it beside a sidebar that, as the app's sidebar divider does,
+// stacks over the Settings panel.
+async function models({ frame = false } = {}) {
   const calls = []
   const tauri = { invoke: async (command, args) => {
     calls.push([command, args])
@@ -30,13 +32,21 @@ async function models() {
   let closed = 0
   const target = document.createElement('div')
   document.body.append(target)
+  let sidebarClicks = 0
+  if (frame) {
+    target.style.cssText = 'position: fixed; inset: 0; display: grid; grid-template-columns: 200px 1fr; grid-template-rows: 36px 1fr;'
+    const sidebar = document.createElement('nav')
+    sidebar.style.cssText = 'grid-row: 1 / -1; grid-column: 1; position: relative; z-index: 2;'
+    sidebar.addEventListener('click', () => { sidebarClicks += 1 })
+    target.append(sidebar)
+  }
   component = mount(Settings, { target, props: { tauri, listen: async () => () => {}, inventory, section: 'models', onclose: () => { closed += 1 } } })
   const end = performance.now() + 4000
   while (!document.querySelector('[aria-label="Disconnect Jev"]') || !document.querySelector('[aria-label="Disconnect Jev · TypeSafe API"]')) {
     if (performance.now() > end) throw new Error('Settings › Models did not render both Disconnect buttons')
     await wait(30)
   }
-  return { calls, closed: () => closed }
+  return { calls, closed: () => closed, sidebarClicks: () => sidebarClicks }
 }
 const confirm = () => document.querySelector('[data-panel="confirm"]')
 const button = (name) => [...confirm().querySelectorAll('button')].find((node) => node.textContent === name)
@@ -59,6 +69,33 @@ it('closes the decision-model Disconnect dialog on Cancel and on Escape, whereve
   await wait(50)
   expect(confirm()).toBeNull()
   expect(page.closed()).toBe(0)
+  expect(page.calls.some(([command]) => command === 'model_router_disconnect_classifier')).toBe(false)
+})
+
+// A real pointer reaches the dialog's own controls and backdrop wherever the
+// page sits: the decision model's row lies at the foot of a scrolled page, and
+// the app's sidebar stacks over the Settings panel. AXPress and Escape never hit-test.
+it('takes a real pointer click on Cancel and on the backdrop over the sidebar for the decision-model dialog', async () => {
+  const page = await models({ frame: true })
+  const unplug = document.querySelector('[aria-label="Disconnect Jev · TypeSafe API"]')
+  unplug.scrollIntoView()
+  await userEvent.click(unplug)
+  await wait(50)
+  // The dialog leaves the scrolled Settings panel for the page body.
+  expect(document.querySelector('[data-panel="settings"]').contains(confirm())).toBe(false)
+  const cancel = button('Cancel').getBoundingClientRect()
+  expect(document.elementFromPoint(cancel.x + cancel.width / 2, cancel.y + cancel.height / 2)).toBe(button('Cancel'))
+  await userEvent.click(button('Cancel'))
+  await wait(50)
+  expect(confirm()).toBeNull()
+
+  await userEvent.click(unplug)
+  await wait(50)
+  // `force` presses the mouse at the point whatever lies on top, as a person does.
+  await userEvent.click(document.querySelector('.dialog-backdrop'), { position: { x: 100, y: 60 }, force: true })
+  await wait(50)
+  expect(confirm()).toBeNull()
+  expect(page.sidebarClicks()).toBe(0)
   expect(page.calls.some(([command]) => command === 'model_router_disconnect_classifier')).toBe(false)
 })
 
