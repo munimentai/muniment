@@ -16,6 +16,7 @@
   import StatusChip from './lib/ui/StatusChip.svelte'
   import StatusRing from './sidebar/StatusRing.svelte'
   import { floatingMenu } from './lib/floating-menu.js'
+  import { landFocus } from './lib/focus-landing.js'
   import { panelScroll } from './lib/panel-scroll.js'
   import UserQuestion from './lib/UserQuestion.svelte'
   import { THREAD_ORGANIZATION_KEY, readThreadOrganization, listedThreads } from './lib/thread-organization.js'
@@ -519,6 +520,14 @@
   $effect(() => {
     const view = threadView
     untrack(() => { ({ panel: browserPanel, parked: parkedPanel } = workspaceOnNavigate({ panel: browserPanel, parked: parkedPanel }, view)) })
+  })
+  // A page change or a hidden panel can leave focus on the hidden composer or
+  // terminal. Two frames later, once the opener placed its own focus and the
+  // page drew, focus on a node the user cannot see moves to the page's heading.
+  $effect(() => {
+    void [settingsOpen, settingsSection, agentsOpen, artifactsOpen, projectsOpen, fullPage, browserPanel]
+    let frame = requestAnimationFrame(() => { frame = requestAnimationFrame(() => landFocus(workspace, { skip: '#sidebar, .titlebar, [data-panel="workspace"]', fallback: composer })) })
+    return () => cancelAnimationFrame(frame)
   })
   let workspacePanelWidth = $state(500)
   let workspacePanelMaximum = $state(1200)

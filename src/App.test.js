@@ -15,6 +15,7 @@ vi.mock('./feature-flags.js', () => ({featureFlags: {cloud: true, companyRecord:
 import { historyMessages } from './lib/chat-state.js'
 import { SCAN_RETRY_DELAYS } from './lib/first-run-providers.js'
 import { cronLabel } from './agents/cron.js'
+import { shown } from './lib/focus-landing.js'
 
 const extensionInstances = vi.hoisted(() => [])
 vi.mock('./extend/ComposerExtensions.svelte', async (importOriginal) => {
@@ -1614,6 +1615,25 @@ describe('workspace composer entry', () => {
     await fireEvent.keyDown(document, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument())
     await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Settings' })))
+  })
+
+  it('moves focus off the hidden composer when Settings opens over a thread', async () => {
+    localModeStatus = true
+    localStorage.setItem('muniment.sidebar-collapsed', 'collapsed')
+    // The app's own rule hides the thread under Settings. jsdom loads no component styles.
+    const hide = document.head.appendChild(document.createElement('style'))
+    hide.textContent = '.workspace.settings-open > :not(.titlebar, .sidebar, .sidebar-divider, .settings-layout, .workspace-panel) { visibility: hidden; }'
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    composer.focus()
+    expect(composer).toHaveFocus()
+    await fireEvent.keyDown(document, navigator.platform.startsWith('Mac') ? { key: ',', metaKey: true } : { key: ',', ctrlKey: true })
+    await vi.dynamicImportSettled()
+    await screen.findByRole('dialog', { name: 'Settings' }, { timeout: 5000 })
+    // Focus leaves the composer the page now hides, so no caret mark stays over Settings.
+    await waitFor(() => expect(composer).not.toHaveFocus())
+    expect(document.activeElement === document.body || shown(document.activeElement)).toBe(true)
+    hide.remove()
   })
 
   it('opens Settings from the settings shortcut with a collapsed sidebar and toggles it', async () => {
