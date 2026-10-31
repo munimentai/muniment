@@ -9776,6 +9776,25 @@ it('keeps the foot row on the Settings side, where Settings is the current page'
   }
 })
 
+it('returns to the thread view from Settings opened over Notifications, by Back to threads or Escape', async () => {
+  const fallback = invoke.getMockImplementation()
+  const page = { needs_you: [], running: [], days: [], upcoming: [], counts: { needs_you: 0, running: 0, failed: 0, unread: 0 }, machines: [], agents: [] }
+  invoke.mockImplementation((command, args) => command === 'notifications_list' ? Promise.resolve(page) : fallback(command, args))
+  render(App)
+  await findReadyWorkspaceComposer()
+  const foot = () => screen.getByRole('toolbar', { name: 'Settings, usage and notifications' })
+  for (const leave of [() => fireEvent.click(screen.getByRole('button', { name: 'Back to threads' })), () => fireEvent.keyDown(document, { key: 'Escape' })]) {
+    await fireEvent.click(within(foot()).getByRole('button', { name: 'Notifications' }))
+    await waitFor(() => expect(document.querySelector('.catalog-title')).toHaveTextContent('Notifications'))
+    await openSettings()
+    await leave()
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument())
+    expect(document.querySelector('.workspace')).not.toHaveClass('agents-open')
+    expect(document.querySelector('.catalog-title')?.textContent ?? '').not.toContain('Notifications')
+    expect(within(foot()).getByRole('button', { name: 'Notifications' })).toHaveAttribute('aria-pressed', 'false')
+  }
+})
+
 describe('runtimes', () => {
   const thisComputer = { id: 'local', name: 'This computer', kind: 'local', version: '0.2.0', status: 'online', local: true, scopes: [], admin: true, updateOffered: false, sshHost: null }
   const buildBox = { id: '018f0000-0000-7000-8000-000000000043', name: 'Build box', kind: 'container', version: '0.1.0', status: 'online', local: false, scopes: ['run.write', 'thread.read'], admin: false, updateOffered: false, sshHost: null }
