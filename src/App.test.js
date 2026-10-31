@@ -4021,7 +4021,7 @@ describe('sidebar collapse', () => {
     expect(within(projects).queryByRole('button', { name: 'Projects with triggers' })).toBeNull()
   })
 
-  it('opens an agent profile alone from the action card menu', async () => {
+  it('opens an agent profile beside the agent\'s own thread from the action card menu', async () => {
     const original = invoke.getMockImplementation()
     invoke.mockImplementation(async (command, args) => isAgentList(command, args)
       ? agentListAnswer([{ id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null, routines: [] }], { 'agent-1': 'agent-thread' })
@@ -4035,7 +4035,40 @@ describe('sidebar collapse', () => {
     await fireEvent.click(within(menu).getByRole('menuitem', { name: 'Open profile' }))
     await screen.findByRole('complementary', { name: 'Agent profile' })
     expect(screen.queryByRole('region', { name: 'Agents', exact: true })).toBeNull()
-    expect(invoke).not.toHaveBeenCalledWith('chat_select_thread', { threadId: 'agent-thread' })
+    expect(invoke).toHaveBeenCalledWith('chat_select_thread', { threadId: 'agent-thread' })
+    expect(invoke.mock.calls.filter(([cmd]) => cmd === 'chat_new_thread')).toHaveLength(0)
+  })
+
+  it('opens the profile from "Add or edit in the profile" beside the agent\'s thread, not the open one', async () => {
+    threadSummaryResult = [{ threadId: 'ordinary-thread', title: 'Single Word Acknowledgment', updatedAt: '2026-01-02T00:00:00Z' }, { threadId: 'agent-thread', title: 'Scout chat', updatedAt: '2026-01-01T00:00:00Z' }]
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args)
+      ? agentListAnswer([{ id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null, routines: [] }], { 'agent-1': 'agent-thread' })
+      : command === 'chat_current_thread' ? Promise.resolve('ordinary-thread')
+      : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
+    render(App)
+    await waitFor(() => expect(document.querySelector('.thread-row.active-thread .thread-row-title')).toHaveTextContent('Single Word Acknowledgment'))
+    await openSidebarPage('Agents')
+    const card = await within(await screen.findByRole('region', { name: 'Agents', exact: true })).findByRole('article', { name: 'Scout' })
+    await fireEvent.click(within(card).getByRole('tab', { name: 'Routines' }))
+    await fireEvent.click(within(card).getByRole('button', { name: 'Add or edit in the profile' }))
+    await screen.findByRole('complementary', { name: 'Agent profile' })
+    expect(invoke).toHaveBeenCalledWith('chat_select_thread', { threadId: 'agent-thread' })
+    await waitFor(() => expect(document.querySelector('.thread-row.active-thread .thread-row-title')).toHaveTextContent('Scout chat'))
+  })
+
+  it('opens the profile of an agent with no thread alone, with no new thread', async () => {
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args)
+      ? agentListAnswer([{ id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null, routines: [] }], {})
+      : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
+    render(App)
+    await openSidebarPage('Agents')
+    const card = await within(await screen.findByRole('region', { name: 'Agents', exact: true })).findByRole('article', { name: 'Scout' })
+    await fireEvent.click(within(card).getByRole('tab', { name: 'Routines' }))
+    await fireEvent.click(within(card).getByRole('button', { name: 'Add or edit in the profile' }))
+    await screen.findByRole('complementary', { name: 'Agent profile' })
+    expect(invoke.mock.calls.filter(([cmd]) => cmd === 'chat_new_thread')).toHaveLength(0)
   })
 
   it('opens the existing agent chat with one shared composer and restores a regular chat', async () => {

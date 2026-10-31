@@ -639,9 +639,7 @@
     try {
       // An agent's conversation lives on its machine, and the thread opens there.
       const machine = agentMachine(runtimeList, agent)
-      const mapping = agentThreadMap
-      const threadId = agentListing.primaryThreads?.[agent.id] ?? (agent.replica && threadSummaries.some(thread => thread.threadId === agent.primaryThread) ? agent.primaryThread : null) ?? (mapping[currentThreadId] === agent.id ? currentThreadId
-        : threadSummaries.find(thread => mapping[thread.threadId] === agent.id && !threadOrganization[thread.threadId]?.archived)?.threadId)
+      const threadId = agentHomeThread(agent)
       profileOnlyAgent = null
       if (threadId) {
         if (threadId !== currentThreadId && !await chatController.openThread(threadId, true)) return
@@ -658,11 +656,27 @@
       if (!browserPanel) revealAgentProfile()
     } finally { agentOpening = false }
   }
-  // An agent's profile alone, beside whatever thread is open. A card's
-  // Delete opens it at the profile's delete confirmation.
+  // The thread an agent's conversation lives in: its primary thread, else
+  // its newest thread that is not archived. Null before its first run.
+  function agentHomeThread(agent) {
+    const mapping = agentThreadMap
+    return agentListing.primaryThreads?.[agent.id] ?? (agent.replica && threadSummaries.some(thread => thread.threadId === agent.primaryThread) ? agent.primaryThread : null) ?? (mapping[currentThreadId] === agent.id ? currentThreadId
+      : threadSummaries.find(thread => mapping[thread.threadId] === agent.id && !threadOrganization[thread.threadId]?.archived)?.threadId) ?? null
+  }
+  // An agent's profile beside the agent's own thread, or alone while the
+  // agent has none, never beside another thread. A card's Delete opens it
+  // alone at the profile's delete confirmation.
   let profileDelete = $state({ agentId: null, count: 0 })
-  function openAgentProfile(agent, { deleting = false } = {}) {
-    profileOnlyAgent = agent.id
+  async function openAgentProfile(agent, { deleting = false } = {}) {
+    // A delete confirms over the open thread, since the agent's thread goes with it.
+    const threadId = deleting ? null : agentHomeThread(agent)
+    if (threadId && threadId !== currentThreadId && !switchLocked && !agentOpening) {
+      agentOpening = true
+      try { if (!await chatController.openThread(threadId, true)) return } finally { agentOpening = false }
+    }
+    const home = !!threadId && threadId === currentThreadId
+    profileOnlyAgent = home ? null : agent.id
+    if (home) { selectedAgent = agent.id; selectedProject = agent.projectId || null }
     projectsOpen = false; agentsOpen = false; fullPage = null; artifactsOpen = false
     if (deleting) profileDelete = { agentId: agent.id, count: profileDelete.count + 1 }
     if (!browserPanel || deleting) revealAgentProfile()
@@ -4409,13 +4423,13 @@
   {#if groupCreateOpen}<GroupCreate {tauri} agents={roster} {swarm} onclose={() => { groupCreateOpen = false }} oncreated={async (group) => { await refreshSwarm(); await chatController.refreshThreads(); await openGroup(group).catch(error => { submitError = String(error) }) }} />{/if}
   {#if agentsOpen}{#key agentsRequest}
     <AgentManager {tauri} {runtimeList} agents={roster} ongroup={roster.length > 1 ? () => { groupCreateOpen = true } : null} onimported={async (agent) => { await refreshAgents(); const imported = roster.find(entry => entry.id === agent.id); if (imported) await openAgent(imported).catch(error => { submitError = String(error) }) }} isArchived={catalogArchived} onaction={catalogAction} {threadSummaries} pending={creations.filter(item=>item.kind==='agent'&&!agentListing.agents.some(agent=>agent.id===item.resultId))} oncreate={(chosen)=>openAgentChat(chosen?.description ? { description: chosen.description } : {})} onselect={(agent) => openAgent(agent).catch(error => { submitError = String(error) })} onopen={openCreation} onchange={(next) => { agentListing = next }}
-      {inventory} latestRuns={agentListing.latestRuns} onprofile={openAgentProfile} onmanagemodels={openModelSettings} onvisibility={setModelShown} onopenrun={(run) => openRunThread(run).catch(error => { submitError = String(error) })} onrun={(run) => { startedRuns.add(run.id); activityRuns = applyRunUpdate(activityRuns, { runtimeId: run.runtimeId, run }) }} />
+      {inventory} latestRuns={agentListing.latestRuns} onprofile={(agent, options) => openAgentProfile(agent, options).catch(error => { submitError = String(error) })} onmanagemodels={openModelSettings} onvisibility={setModelShown} onopenrun={(run) => openRunThread(run).catch(error => { submitError = String(error) })} onrun={(run) => { startedRuns.add(run.id); activityRuns = applyRunUpdate(activityRuns, { runtimeId: run.runtimeId, run }) }} />
   {/key}{/if}
   {#if projectsOpen && settingsProject && sidebarProjectById[settingsProject]}
     <ProjectSettings {tauri} project={sidebarProjectById[settingsProject]} agents={roster.filter(agent => sidebarProjectById[settingsProject].agent_ids.includes(agent.id))} {inventory} modes={modeListing?.listing ?? null} {runtimeList} latestRuns={agentListing.latestRuns} busy={switchLocked || projectBusy}
       onback={() => { projectsOpen = false; settingsProject = null }} onnewthread={newProjectThread} onaddtrigger={addProjectTrigger}
-      onchat={(agent) => openAgent(agent).catch(error => { submitError = String(error) })} onprofile={openAgentProfile} onchange={refreshAgentsAndRuns} onmanagemodels={openModelSettings}
-      onaction={(agent, action, name) => action === 'profile' || action === 'delete' ? openAgentProfile(agent, { deleting: action === 'delete' }) : action === 'export' ? exportAgent(tauri, agent, 'muniment') : catalogAction('agent', agent, action, name)}
+      onchat={(agent) => openAgent(agent).catch(error => { submitError = String(error) })} onprofile={(agent, options) => openAgentProfile(agent, options).catch(error => { submitError = String(error) })} onchange={refreshAgentsAndRuns} onmanagemodels={openModelSettings}
+      onaction={(agent, action, name) => action === 'profile' || action === 'delete' ? openAgentProfile(agent, { deleting: action === 'delete' }).catch(error => { submitError = String(error) }) : action === 'export' ? exportAgent(tauri, agent, 'muniment') : catalogAction('agent', agent, action, name)}
       onopenrun={(run) => openRunThread(run).catch(error => { submitError = String(error) })} onrun={(run) => { startedRuns.add(run.id); activityRuns = applyRunUpdate(activityRuns, { runtimeId: run.runtimeId, run }) }} />
   {:else if projectsOpen}<ProjectCatalog bind:selected={catalogProject} projects={projectRows} remote={remoteProjectRows} threads={regularThreads.filter(thread => !threadOrganization[thread.threadId]?.archived)} assignments={projectCatalog.threads} busy={switchLocked || projectBusy} error={projectError} loading={moreThreads || loadingOlderThreads} oncreate={createCatalogProject} onrename={async (id, name) => { await tauri.invoke('project_rename', {projectId:id,name}); await refreshProjects() }} onopen={openProjectFolder} onthread={id => threadRowClick({}, id)} onnewthread={newProjectThread} />{/if}
   {#if artifactsOpen}<ArtifactCatalog items={artifactChats} isArchived={catalogArchived} onaction={catalogAction} onopen={openCreation} oncreate={(chosen)=>startCreation('artifact', chosen)}/>{/if}
