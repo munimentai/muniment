@@ -229,6 +229,24 @@ it('keeps a new thread row on one line with its time on this computer alone', as
   expect(rect(title).right).toBeLessThanOrEqual(rect(time).left)
 })
 
+it('shows the start of a long new thread title in the title pill and ends it in an ellipsis', async () => {
+  await mountWindow(false)
+  const text = `Plan a starship tour for a ${LONG}`
+  await sendFirstMessage(text)
+  const pill = document.querySelector('.titlebar .thread-title')
+  await expect.poll(() => pill.textContent.trim().startsWith('Plan a starship tour')).toBe(true)
+  const style = getComputedStyle(pill)
+  expect(style.textOverflow).toBe('ellipsis')
+  expect(pill.scrollWidth).toBeGreaterThan(pill.clientWidth)
+  // The first character sits at the pill's start, inside its box.
+  const range = document.createRange()
+  range.setStart(pill.firstChild, 0)
+  range.setEnd(pill.firstChild, 1)
+  const first = range.getBoundingClientRect()
+  expect(first.left).toBeGreaterThanOrEqual(rect(pill).left)
+  expect(first.left - rect(pill).left).toBeLessThanOrEqual(parseFloat(style.paddingLeft) + parseFloat(style.borderLeftWidth) + 0.5)
+})
+
 it('ends the Agents and Artifacts labels in an ellipsis when the row is narrow', async () => {
   await mountWindow(false)
   for (const name of ['Agents', 'Artifacts']) {

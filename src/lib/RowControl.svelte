@@ -14,8 +14,9 @@
   .thread-title:hover:not(:disabled), .thread-title:focus-visible { border-color: var(--muted); background: transparent; }
   .row-control:disabled { color: var(--muted); cursor: default; }
   .new-thread, .artifacts-toggle, .record-toggle { white-space: nowrap; }
-  /* The title takes the row's remaining width and fades to an ellipsis at its end. */
-  .thread-title { max-width: 100%; overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+  /* The title takes the row's remaining width and shows its start, ending in an ellipsis. A block
+     box, not the centered flex row, so a long title never centers on its middle. */
+  .thread-title { display: block; max-width: 100%; overflow: hidden; font-weight: 600; line-height: 22px; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
   .thread-title:disabled { color: var(--ink); opacity: 1; }
   /* Artifacts then Record sit after the update slot on macOS, Record flush right in the row. */
   :global(.workspace.macos) .artifacts-toggle { order: 2; }
