@@ -191,8 +191,9 @@ impl ApplicationMemoryRuntime {
             .tool_definition_for_turn(session)
             .ok_or(MemoryIndexError::InvalidToolArguments)?;
         let recall = self.recall(session);
-        let mut source = String::new();
-        let mut body = String::new();
+        // Its imports must lead the module, so it precedes every declaration.
+        let mut source = String::from(include_str!("extensions/search-fallback.js"));
+        let mut body = String::from("  registerSearchFallback(pi);\n");
         if recall.use_memories {
             let encoded = serde_json::to_string(
                 std::str::from_utf8(&definition)
@@ -1448,6 +1449,71 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn the_extension_falls_back_for_search_and_normalizes_question_arguments() {
+        let (root, runtime) = recall_runtime(None);
+        runtime
+            .open_session(
+                "session",
+                "01900000-0000-7000-8000-000000000001",
+                capability(),
+            )
+            .unwrap();
+        let tree = root.join("tree");
+        fs::create_dir_all(tree.join("notes dir")).unwrap();
+        fs::write(tree.join("notes dir/plan.md"), "ship the needle\n").unwrap();
+        let script = r#"
+const { pathToFileURL } = await import('node:url');
+const tools = {};
+const handlers = {};
+(await import(pathToFileURL(process.argv[1]).href)).default({ registerTool: tool => { tools[tool.name] = tool; }, on: (name, handler) => { handlers[name] = handler; } });
+const search = (toolName, text, input) => handlers.tool_result({ toolName, input, isError: true, content: [{ type: 'text', text }] }, { cwd: process.argv[2] });
+const question = tools.ask_user_question;
+const canonical = { questions: [{ id: 'a', question: 'Q' }] };
+let malformed;
+try { question.prepareArguments({ prompt: 'Q' }); } catch (error) { malformed = error.message; }
+console.log(JSON.stringify({
+  find: await search('find', 'fd is not available and could not be downloaded', { pattern: '*.md' }),
+  grep: await search('grep', 'ripgrep (rg) is not available and could not be downloaded', { pattern: 'needle' }),
+  native: await search('grep', 'Path not found: x', { pattern: 'needle' }) ?? null,
+  normalized: question.prepareArguments({ question: 'Which format?', choices: ['PDF'] }),
+  unchanged: question.prepareArguments(canonical) === canonical,
+  malformed,
+}));
+"#;
+        let output = std::process::Command::new("node")
+            .args(["--input-type=module", "-e", script])
+            .arg(runtime.agent_extension_path("01900000-0000-7000-8000-000000000001"))
+            .arg(&tree)
+            .output()
+            .expect("Node.js must be available to run the agent extension");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(result["find"]["isError"], false);
+        assert_eq!(result["find"]["content"][0]["text"], "notes dir/plan.md");
+        assert_eq!(result["grep"]["isError"], false);
+        assert_eq!(
+            result["grep"]["content"][0]["text"],
+            "notes dir/plan.md:1: ship the needle"
+        );
+        assert!(result["native"].is_null());
+        assert_eq!(
+            result["normalized"],
+            serde_json::json!({"questions": [{"id": "question-1", "question": "Which format?", "options": [{"label": "PDF"}]}]})
+        );
+        assert_eq!(result["unchanged"], true);
+        assert!(result["malformed"]
+            .as_str()
+            .unwrap()
+            .contains("Example: {\"questions\""));
+        runtime.close_session("session");
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
