@@ -9640,6 +9640,22 @@ describe('a run on another thread', () => {
     expect(invoke.mock.calls.filter(([command]) => command === 'chat_thread_open').at(-1)).toEqual(['chat_thread_open', { threadId: 'thread-1', limit: 100 }])
   })
 
+  it('opens Files on a running thread without its title, so its folder keeps its name until the run ends', async () => {
+    await renderRunning()
+    const fallback = invoke.getMockImplementation()
+    invoke.mockImplementation((command, payload) => command === 'workspace_folders' ? Promise.resolve([{ label: 'Thread workspace', path: '/work' }])
+      : command === 'workspace_list' ? Promise.resolve({ path: payload.path, entries: [] })
+        : fallback(command, payload))
+    const folderCalls = () => invoke.mock.calls.filter(([command]) => command === 'workspace_folders').map(([, args]) => args)
+    await fireEvent.click(screen.getByRole('button', { name: 'Workspace tools' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Files', exact: true }))
+    await waitFor(() => expect(folderCalls().some((args) => args.threadId === 'thread-1')).toBe(true))
+    expect(folderCalls().filter((args) => args.threadId === 'thread-1').every((args) => args.threadTitle === undefined)).toBe(true)
+    // A settled thread's Files names its folder after the thread.
+    await leaveForOtherThread()
+    await waitFor(() => expect(folderCalls()).toContainEqual(expect.objectContaining({ threadId: 'thread-2', threadTitle: 'Other thread' })))
+  })
+
   it('rejoins the live run from its row without duplicating the transcript', async () => {
     const pages = await renderRunning()
     await leaveForOtherThread()

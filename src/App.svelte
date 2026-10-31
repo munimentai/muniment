@@ -1040,7 +1040,11 @@
   let folderAgent = $state(null)
   $effect(() => { currentThreadId; selectedAgent; agentsOpen; projectsOpen; artifactsOpen; folderAgent = null })
   function openAgentFolder(agent) { folderAgent = agent.id; showBrowser('files') }
-  const fileContext = $derived(folderAgent ? {agentId:folderAgent} : agentsOpen ? {catalog:'agents'} : artifactsOpen ? {catalog:'artifacts'} : projectsOpen ? (settingsProject && sidebarProjectById[settingsProject]?.kind === 'project' ? {projectId:settingsProject} : catalogProject ? {projectId:catalogProject} : {catalog:'projects'}) : selectedAgent ? {agentId:selectedAgent} : currentCreation?.kind === 'artifact' && currentCreation.resultId ? {artifactId:currentCreation.resultId} : {threadId:currentThreadId, projectId:projectCatalog.threads[currentThreadId] || null, threadTitle:currentThreadTitle})
+  // A thread's folder takes its title when its run ends. While a run works
+  // in the folder, Files and Terminal send no title, so they never rename it
+  // under the run.
+  const threadInFlight = $derived(!!currentThreadId && (currentThreadId === runningThreadId || sidebarRuns.working.has(currentThreadId)))
+  const fileContext = $derived(folderAgent ? {agentId:folderAgent} : agentsOpen ? {catalog:'agents'} : artifactsOpen ? {catalog:'artifacts'} : projectsOpen ? (settingsProject && sidebarProjectById[settingsProject]?.kind === 'project' ? {projectId:settingsProject} : catalogProject ? {projectId:catalogProject} : {catalog:'projects'}) : selectedAgent ? {agentId:selectedAgent} : currentCreation?.kind === 'artifact' && currentCreation.resultId ? {artifactId:currentCreation.resultId} : {threadId:currentThreadId, projectId:projectCatalog.threads[currentThreadId] || null, threadTitle:threadInFlight ? undefined : currentThreadTitle})
   let expandedProjects = $state(new Set())
   let projectForm = $state(null)
   let projectName = $state('')
