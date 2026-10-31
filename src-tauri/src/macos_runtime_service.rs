@@ -1030,9 +1030,40 @@ mod tests {
         let listener = UnixListener::bind(&endpoint).unwrap();
         assert!(runtime_endpoint_accepts_connections(&endpoint));
         drop(listener);
-        assert!(endpoint.exists());
-        assert!(!runtime_endpoint_accepts_connections(&endpoint));
+        // A stale endpoint is a bound socket file with no listener behind it.
+        // The test binds one that never listens: on macOS the standard library
+        // marks a new socket close-on-exec only after it exists, so a child
+        // another test spawns in that gap keeps a dropped listener accepting.
+        let stale = directory.join("stale.sock");
+        bind_without_listening(&stale);
+        assert!(stale.exists());
+        assert!(!runtime_endpoint_accepts_connections(&stale));
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// Binds a stream socket to `path` and closes it without a listen.
+    fn bind_without_listening(path: &Path) {
+        use std::os::unix::ffi::OsStrExt;
+        let bytes = path.as_os_str().as_bytes();
+        // SAFETY: the address is a zeroed `sockaddr_un` whose path fits with
+        // its terminating zero, and the descriptor is closed exactly once.
+        unsafe {
+            let mut address: libc::sockaddr_un = std::mem::zeroed();
+            assert!(bytes.len() < address.sun_path.len());
+            address.sun_family = libc::AF_UNIX as libc::sa_family_t;
+            for (slot, byte) in address.sun_path.iter_mut().zip(bytes) {
+                *slot = *byte as libc::c_char;
+            }
+            let descriptor = libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0);
+            assert!(descriptor >= 0);
+            let bound = libc::bind(
+                descriptor,
+                (&address as *const libc::sockaddr_un).cast::<libc::sockaddr>(),
+                std::mem::size_of::<libc::sockaddr_un>() as libc::socklen_t,
+            );
+            libc::close(descriptor);
+            assert_eq!(bound, 0);
+        }
     }
 
     struct FakeAdapter {
