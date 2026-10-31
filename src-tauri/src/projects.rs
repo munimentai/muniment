@@ -132,6 +132,7 @@ pub(crate) fn prepare_thread(
     let thread = client
         .create_thread()
         .map_err(crate::auth::desktop_client_error)?;
+    attach.remember_created_thread(&thread);
     if let Err(error) = ready_new_thread_folder(&profile, &thread, project_id) {
         let _ = client.delete_thread(&thread);
         return Err(error);

@@ -458,19 +458,59 @@ pub async fn chat_select_thread(
         attach_state.remember_thread_runtimes([(thread_id.clone(), runtime)]);
     }
     crate::runtimes::follow_thread(&app_handle, &thread_id);
-    let session: ThreadSelectSession<_> = attach_state.desktop_client_session().into();
-    if matches!(&session, ThreadSelectSession::Disconnected) {
-        return Err(auth::background_service_error());
+    // The select reaches the thread's own runtime, whichever one is active.
+    let (runtime, session) = select_thread_session(&attach_state, &thread_id);
+    let result = match session {
+        ThreadSelectSession::NoSupervisor | ThreadSelectSession::Disconnected => {
+            Err(auth::background_service_error())
+        }
+        session => chat_subject(&app_handle, &auth_state).and_then(|subject| {
+            select_thread_command(
+                session,
+                &state.session_thread,
+                subject.as_deref(),
+                &thread_id,
+            )
+        }),
+    };
+    if let Err(error) = &result {
+        muniment_core::runtime_eprintln!(
+            "{}",
+            thread_select_failure_record(&thread_id, &runtime, error)
+        );
     }
-    if matches!(&session, ThreadSelectSession::NoSupervisor) {
-        return Err(auth::background_service_error());
-    }
-    let subject = chat_subject(&app_handle, &auth_state)?;
-    select_thread_command(
-        session,
-        &state.session_thread,
-        subject.as_deref(),
-        &thread_id,
+    result
+}
+
+/// The runtime a select of `thread_id` reaches and its session: the runtime a
+/// list, a select or the thread's creation named, else the active one.
+#[cfg(any(unix, target_os = "windows"))]
+fn select_thread_session(
+    attach: &AttachCompanionState,
+    thread_id: &str,
+) -> (
+    String,
+    ThreadSelectSession<muniment_core::attach::DesktopClientHolder>,
+) {
+    let runtime = attach.thread_runtime_or_active(thread_id);
+    let session = attach
+        .thread_session_within(thread_id, std::time::Duration::ZERO)
+        .into();
+    (runtime, session)
+}
+
+/// One log line for a failed select. It names the thread and the runtime the
+/// select went to, and the shell's message, which carries no credential.
+#[cfg(any(unix, target_os = "windows"))]
+fn thread_select_failure_record(thread_id: &str, runtime_id: &str, error: &str) -> String {
+    let bounded = |value: &str, limit: usize| -> String {
+        serde_json::Value::from(value.chars().take(limit).collect::<String>()).to_string()
+    };
+    format!(
+        "muniment-desktop: thread select failed thread_id={} runtime_id={} error={}",
+        bounded(thread_id, 128),
+        bounded(runtime_id, 128),
+        bounded(error, 512),
     )
 }
 
@@ -1592,6 +1632,54 @@ mod tests {
             DesktopClientSession::Disconnected
         ));
         assert_eq!(attach.remote_runtime_id(), None);
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    #[test]
+    fn a_select_reaches_the_runtime_a_new_thread_was_created_on() {
+        let attach = AttachCompanionState::default();
+        // This computer is active when the new thread starts, so its runtime
+        // holds the thread. A thread with no run lists nowhere yet.
+        attach.remember_created_thread("red-trek");
+        // The user then opens a thread on the paired hub, which becomes active.
+        attach.set_active(Some("hub".into()));
+
+        // A select of the new thread with no runtime id reaches this
+        // computer's runtime, not the active hub.
+        let (runtime, session) = select_thread_session(&attach, "red-trek");
+        assert_eq!(runtime, "local");
+        assert!(matches!(session, ThreadSelectSession::NoSupervisor));
+
+        // A thread no list, select or creation named reaches the active hub.
+        let (runtime, session) = select_thread_session(&attach, "unknown");
+        assert_eq!(runtime, "hub");
+        assert!(matches!(session, ThreadSelectSession::Disconnected));
+
+        // A thread created while the hub is active lives on the hub.
+        attach.remember_created_thread("hub-new");
+        attach.set_active(None);
+        let (runtime, session) = select_thread_session(&attach, "hub-new");
+        assert_eq!(runtime, "hub");
+        assert!(matches!(session, ThreadSelectSession::Disconnected));
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    #[test]
+    fn a_failed_select_logs_its_thread_and_runtime() {
+        assert_eq!(
+            thread_select_failure_record(
+                "019a0000-0000-7000-8000-00000000000a",
+                "local",
+                "The request could not be committed.",
+            ),
+            "muniment-desktop: thread select failed \
+             thread_id=\"019a0000-0000-7000-8000-00000000000a\" runtime_id=\"local\" \
+             error=\"The request could not be committed.\""
+        );
+        let long = "x".repeat(4096);
+        let record = thread_select_failure_record(&long, "hub\nforged=1", &long);
+        assert!(!record.contains('\n'));
+        assert!(record.len() < 800);
     }
 
     #[cfg(any(unix, target_os = "windows"))]

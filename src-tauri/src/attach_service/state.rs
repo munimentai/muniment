@@ -693,6 +693,24 @@ impl AttachCompanionState {
         }
     }
 
+    /// The runtime an action on a thread reaches: the one a list or a select
+    /// named for it, else the active one.
+    pub(crate) fn thread_runtime_or_active(&self, thread_id: &str) -> String {
+        self.thread_runtime(thread_id)
+            .or_else(|| self.remote_runtime_id())
+            .unwrap_or_else(|| crate::runtimes::LOCAL_RUNTIME_ID.to_owned())
+    }
+
+    /// Records the runtime a new thread was created on, the active one. A
+    /// thread with no run lists nowhere, so this record alone keeps a later
+    /// select on that runtime after another machine becomes active.
+    pub(crate) fn remember_created_thread(&self, thread_id: &str) {
+        let runtime = self
+            .remote_runtime_id()
+            .unwrap_or_else(|| crate::runtimes::LOCAL_RUNTIME_ID.to_owned());
+        lock(&self.thread_runtimes).insert(thread_id.to_owned(), runtime);
+    }
+
     /// The threads this computer's runtime last named as deleted.
     pub(crate) fn deleted_threads(&self) -> std::collections::HashSet<String> {
         lock(&self.deleted_threads).clone()
