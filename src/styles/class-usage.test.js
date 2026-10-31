@@ -48,7 +48,6 @@ const definedClasses = (source) => new Set(
 const globalClasses = new Set([
   ...definedClasses(read('src/styles/base.css')),
   ...definedClasses(read('src/styles/tokens.css')),
-  ...definedClasses(read('src/lib/OverflowText.svelte')),
 ])
 
 const missingClasses = (source, exceptions = {}) => {

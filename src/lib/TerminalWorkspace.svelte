@@ -1,5 +1,4 @@
 <script>
-  import OverflowText from './OverflowText.svelte'
   import { onMount, tick } from 'svelte'
   import { Terminal } from '@xterm/xterm'
   import { FitAddon } from '@xterm/addon-fit'
@@ -17,6 +16,16 @@
   let active = true
   let timer
   let inputQueue = Promise.resolve()
+  // A folder path too long for the line drops its start behind a leading
+  // ellipsis, as the Files panel does, and only then names the full path on hover.
+  let pathCut = $state(false)
+  function cutStart(node) {
+    const measure = () => { pathCut = node.scrollWidth > node.clientWidth }
+    const resize = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure)
+    resize?.observe(node)
+    measure()
+    return { update: measure, destroy: () => resize?.disconnect() }
+  }
   async function resize() {
     if (hidden || !terminal || !id) return
     fit.fit()
@@ -80,7 +89,7 @@
   })
 </script>
 <section class="terminal-workspace" class:hidden aria-label="Terminal">
-  <header><OverflowText text={cwd || 'Terminal'} />{#if exited || error}<button type="button" disabled={starting} onclick={start}>Restart terminal</button>{/if}</header>
+  <header><span class="path" data-tooltip={cwd || undefined} data-cut={pathCut}><span class="path-text" use:cutStart={cwd}><bdi dir="ltr">{cwd || 'Terminal'}</bdi></span></span>{#if exited || error}<button type="button" disabled={starting} onclick={start}>Restart terminal</button>{/if}</header>
   {#if error}<p role="alert">{error}</p>{/if}
   {#if exited}<p role="status">The shell has exited.</p>{/if}
   <div class="terminal-host" bind:this={host}></div>
@@ -89,6 +98,11 @@
   .terminal-workspace { flex:1; display:flex; flex-direction:column; min-width:0; min-height:0; background:var(--paper); overflow:hidden; }
   .hidden { display:none; } header { display:flex; align-items:center; gap:12px; padding:8px 12px; border-bottom:1px solid var(--border); background:var(--surface); }
   header { color:var(--muted); font:var(--text-12) var(--font-mono); }
+  .path { position:relative; flex:1; min-width:0; }
+  /* The path reads left to right inside a right-to-left line, so its start drops behind the ellipsis. */
+  .path-text { display:block; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; direction:rtl; text-align:left; }
+  .path[data-cut="true"]::after { content:attr(data-tooltip); position:absolute; left:0; top:calc(100% + 4px); z-index:4; width:max-content; max-width:100%; box-sizing:border-box; padding:6px 9px; border:1px solid var(--border); border-radius:var(--radius-control); background:var(--surface); box-shadow:var(--shadow-overlay); color:var(--ink); font:var(--text-12) var(--font-mono); overflow-wrap:anywhere; pointer-events:none; opacity:0; transition:opacity 80ms ease; }
+  .path[data-cut="true"]:hover::after { opacity:1; transition-delay:350ms; }
   button { padding:5px 8px; border:1px solid var(--border); border-radius:var(--radius-control); background:transparent; color:var(--ink); font:var(--text-12) var(--font-human); cursor:pointer; }
   p { margin:8px 12px; color:var(--muted); font:var(--text-12) var(--font-mono); }
   .terminal-host { flex:1; min-height:0; padding:8px; overflow:hidden; }

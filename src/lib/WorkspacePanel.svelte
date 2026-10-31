@@ -118,6 +118,11 @@
 </aside>
 {#if closing}<ConfirmDialog title="Discard unsaved changes?" cancelLabel="Cancel" confirmLabel="Discard" onDecision={yes => { if (yes) close(closing, true); closing = null }}><p>Your edits to {tabs.find(t => t.id === closing)?.name} have not been saved.</p></ConfirmDialog>{/if}
 <style>
+  /* The tab strip fades the side its tabs clip past and hides its scrollbar. */
+  .fade-viewport { scrollbar-width:none; --fade-left:0px; --fade-right:0px; mask-image:linear-gradient(to right, transparent, #000 var(--fade-left), #000 calc(100% - var(--fade-right)), transparent); }
+  .fade-viewport::-webkit-scrollbar { display:none; }
+  .fade-viewport[data-fade-left="true"] { --fade-left:28px; }
+  .fade-viewport[data-fade-right="true"] { --fade-right:28px; }
   .file-view { display:flex; flex:1; min-height:0; min-width:0; } .file-view.hidden { display:none; }
   .workspace-panel { grid-area:rail; display:flex; flex-direction:column;   overflow:hidden;    }
   .workspace-panel.hidden { display:none; }
