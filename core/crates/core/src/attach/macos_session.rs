@@ -218,6 +218,10 @@ impl AdmissionDiagnostic {
     }
 
     fn record_envelope(&self, envelope: serde_json::Value) {
+        // A unit test reads the envelopes in memory. The shared per-process
+        // log locks and syncs each record, and parallel tests would wait on
+        // that lock inside the admission bound under test.
+        #[cfg(not(test))]
         crate::runtime_eprintln!("muniment-runtime: {envelope}");
         #[cfg(test)]
         self.records.borrow_mut().push(envelope);
