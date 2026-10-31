@@ -23,7 +23,7 @@
   import RoutineRow from './RoutineRow.svelte'
   import RunHistory, { runIcon } from './RunHistory.svelte'
   import { agentMode, modeIcon, modePermissions } from './permission-modes.js'
-  import { isProposal, nextRunLabel } from './routine-labels.js'
+  import { CUT_SHORT_NOTE, isCutShort, isProposal, nextRunLabel } from './routine-labels.js'
 
   // `modes` is core's `permission.modes` from the agent's machine: undefined
   // while it loads, null when the machine lists none. `onopenrun` opens a
@@ -55,6 +55,7 @@
   const currentMode = $derived(agentMode(agent, modes))
   const routines = $derived((agent.routines ?? []).filter((routine) => !isProposal(routine)))
   const proposed = $derived((agent.routines ?? []).filter(isProposal).length)
+  const cutShort = $derived((agent.routines ?? []).filter(isCutShort))
 
   export function editName() { return nameField?.open() }
 
@@ -205,6 +206,9 @@
           <div class="fact"><dt>Last run</dt><dd class="record signaled">{#if latestRun}{@const state = runStatusLabel(latestRun.status)}<span class="words">{whenLabel(latestRun.updated_at)}</span><span class="signal" data-light={runLight(latestRun)} role="img" aria-label={state} data-tooltip={state}><LucideIcon name={runIcon(latestRun)} variant="action" size={14} /></span>{:else}<span class="words">Never</span>{/if}</dd></div>
         </dl>
         {#if latestRun?.status === 'failed' && latestRun.error}<p class="run-reason">{latestRun.error}</p>{/if}
+        {#each cutShort as routine (routine.id)}
+          <p class="note cut-short" role="note"><LucideIcon name="triangle-alert" variant="action" size={12} /><span><strong>{routine.name}</strong> {CUT_SHORT_NOTE} <button type="button" class="note-action" aria-label={`Edit ${routine.name} in the profile`} disabled={readOnly} onclick={() => onprofile(agent)}>Edit</button></span></p>
+        {/each}
         <div class="actions">
           <Button icon="play" variant="primary" disabled={readOnly || busy || runActive(latestRun?.status)} onclick={runNow}>Run now</Button>
           <Button icon="messages-square" onclick={() => onchat(agent)}>Open chat</Button>
@@ -294,6 +298,9 @@
   .note { display: flex; align-items: flex-start; gap: 6px; margin: 2px 2px 6px; padding: 6px 8px; border-radius: var(--radius-control); background: var(--faint); color: var(--ink); font-size: var(--text-12); line-height: 1.4; }
   .note > :global(svg) { flex: none; margin-top: 2px; color: var(--warning); }
   .read-only:not(.away) .note > :global(svg) { color: var(--muted); }
+  .note.cut-short { margin: 6px 8px 0; overflow-wrap: anywhere; }
+  .note-action { padding: 0; border: 0; background: none; color: var(--ink); font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+  .note-action:disabled { color: var(--muted); cursor: default; }
   .error { margin: 2px 8px 6px; color: var(--danger); font-size: var(--text-12); line-height: 1.4; overflow-wrap: anywhere; }
   /* The picker's foot action, under a separator inset to the list's padding. */
   .foot { position: relative; display: flex; align-items: center; gap: 8px; width: 100%; min-height: 30px; margin-top: 6px; padding: 7px 8px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--ink); font: var(--text-13) var(--font-human); text-align: left; cursor: pointer; }

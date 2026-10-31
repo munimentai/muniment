@@ -244,6 +244,26 @@ it('lists routines as the profile does and turns one on and off through routine.
   expect(onprofile).toHaveBeenCalledWith(agent)
 })
 
+it('asks for an edit of a routine whose instruction was cut short, on the overview and its row', async () => {
+  const machineCore = core()
+  const onprofile = vi.fn()
+  const cut = { id: 'cut', name: 'Search for recent Tauri news and deliver a…', enabled: true, cut_short: true, prompt: 'Search for recent Tauri news and deliver a three-bullet-poin.', trigger: { kind: 'cron', expr: '0 8 * * 1-5', tz: 'UTC' } }
+  const marked = { ...agent, routines: [...agent.routines, cut] }
+  show({ agent: marked, tauri: machineCore.tauri, onprofile })
+  const note = screen.getByRole('note')
+  expect(note).toHaveTextContent("This routine's instruction was cut short. Edit it to restore the full request.")
+  expect(note).toHaveTextContent(cut.name)
+  await fireEvent.click(within(note).getByRole('button', { name: `Edit ${cut.name} in the profile` }))
+  expect(onprofile).toHaveBeenCalledWith(marked)
+  await fireEvent.click(screen.getByRole('tab', { name: 'Routines' }))
+  const row = screen.getByRole('group', { name: cut.name })
+  expect(within(row).getByRole('note')).toHaveTextContent('Edit it to restore the full request.')
+  await fireEvent.click(within(row).getByRole('button', { name: `Edit the instruction of ${cut.name}` }))
+  expect(onprofile).toHaveBeenCalledTimes(2)
+  // A routine without the mark shows no note.
+  expect(within(screen.getByRole('group', { name: 'Daily brief' })).queryByRole('note')).toBeNull()
+})
+
 it('lists runs in its History as the profile does and opens a run\'s conversation', async () => {
   const machineCore = core()
   const run = { id: 'r1', agent_id: 'scout', thread_id: 't1', status: 'failed', error: 'The thread was not found.', trigger: { kind: 'cron', routine_id: 'daily' }, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
