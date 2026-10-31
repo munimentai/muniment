@@ -44,3 +44,14 @@ it('names a rail mark beside the right edge of a card at the window edge', async
   expect(box.left).toBeGreaterThanOrEqual(target.querySelector('.agent-card').getBoundingClientRect().right)
   for (const label of target.querySelectorAll('dt')) expect(overlaps(box, label.getBoundingClientRect())).toBe(false)
 })
+
+// The picked mark's edge spans the mark and meets the rail's divider, where a
+// short bar beside the icon read as a text caret.
+it('draws the picked mark edge the full mark height against the rail divider', () => {
+  const rail = card(20).querySelector('.panel-rail')
+  const mark = rail.querySelector('[aria-selected="true"]')
+  const edge = getComputedStyle(mark, '::after')
+  expect(edge.height).toBe(`${mark.clientHeight}px`)
+  const edgeRight = mark.getBoundingClientRect().right - parseFloat(getComputedStyle(mark).borderRightWidth) - parseFloat(edge.right)
+  expect(edgeRight).toBe(rail.getBoundingClientRect().right - parseFloat(getComputedStyle(rail).borderRightWidth))
+})

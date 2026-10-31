@@ -175,7 +175,8 @@
   .provider-rail { flex: none; display: flex; flex-direction: column; gap: 4px; padding: 6px; border-right: 1px solid var(--border); overflow-y: auto; outline: 0; }
   .rail-mark { position: relative; display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border-color: transparent; background: transparent; }
   .rail-mark[aria-current="true"] { background: var(--selected); }
-  .rail-mark[aria-current="true"]::after { content: ''; position: absolute; top: 8px; bottom: 8px; right: -7px; width: 2px; border-radius: var(--radius-chip); background: var(--selected-edge); }
+  /* The edge spans the picked mark and meets the rail's divider, so it reads as the tab's edge and never as a text caret. */
+  .rail-mark[aria-current="true"]::after { content: ''; position: absolute; top: 0; bottom: 0; right: -7px; width: 2px; background: var(--selected-edge); }
   .rail-tip { position: absolute; z-index: 1; left: 52px; transform: translateY(-50%); padding: 3px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); box-shadow: var(--shadow-overlay); color: var(--ink); font: var(--text-12) var(--font-human); white-space: nowrap; pointer-events: none; }
   .picker-list { flex: 1; min-width: 0; min-height: 0; padding: 6px; overflow-y: auto; }
   .picker-group h4 { display: flex; align-items: center; gap: 8px; margin: 6px 8px 2px; color: var(--muted); font: var(--weight-semibold) var(--text-12) var(--font-human); }

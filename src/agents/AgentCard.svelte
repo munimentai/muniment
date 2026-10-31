@@ -258,7 +258,8 @@
   .rail-mark { position: relative; display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--muted); cursor: pointer; }
   .rail-mark:hover { background: var(--faint); color: var(--ink); }
   .rail-mark[aria-selected="true"] { background: var(--selected); color: var(--on-selected); }
-  .rail-mark[aria-selected="true"]::after { content: ''; position: absolute; top: 8px; bottom: 8px; right: -7px; width: 2px; border-radius: var(--radius-chip); background: var(--selected-edge); }
+  /* The edge spans the picked mark and meets the rail's divider, so it reads as the tab's edge and never as a text caret. */
+  .rail-mark[aria-selected="true"]::after { content: ''; position: absolute; top: 0; bottom: 0; right: -7px; width: 2px; background: var(--selected-edge); }
   .rail-tip { position: fixed; z-index: 30; transform: translateY(-50%); padding: 3px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); box-shadow: var(--shadow-overlay); color: var(--ink); font: var(--text-12) var(--font-human); white-space: nowrap; pointer-events: none; }
   .panel-list { flex: 1; min-width: 0; min-height: 0; padding: 6px; overflow-y: auto; }
   /* The model picker fills the panel and scrolls its own list. */
