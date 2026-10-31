@@ -335,8 +335,13 @@ pub fn get(profile: &Path, id: &str) -> Result<Agent, String> {
     Ok(agent)
 }
 /// Reads a v1 `schedule` as the cron routine it becomes, and fills the
-/// `schedule` a v1 client reads from that routine.
+/// `schedule` a v1 client reads from that routine. A routine an older
+/// extraction cut at its name limit gets its full prompt back when the
+/// instructions still hold it.
 fn migrate(agent: &mut Agent) -> Result<(), String> {
+    for routine in &mut agent.routines {
+        crate::agent_extract::mend_cut_routine(routine, &agent.instructions);
+    }
     let existing = agent
         .routines
         .iter()
@@ -1895,6 +1900,34 @@ mod tests {
             ),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn a_routine_an_older_extraction_cut_loads_on_whole_words() {
+        let (root_dir, profile) = profile();
+        let id = uuid::Uuid::new_v4().to_string();
+        let cut = "Search for recent Tauri news and deliver a three-bullet-poin";
+        write_header(
+            &profile,
+            &id,
+            serde_json::json!({
+                "id": id, "name": "Tauri Morning", "label": "", "instructions": "",
+                "avatar": null, "template": null, "projectId": null, "schedule": null,
+                "routines": [{
+                    "id": "extract-cc22420970616a65", "name": cut, "enabled": true,
+                    "trigger": {"kind": "cron", "expr": "0 8 * * 1-5", "tz": "America/New_York"},
+                    "prompt": format!("{cut}."), "created_from": "instructions",
+                    "last_fired_at": null, "last_result": null
+                }]
+            }),
+            "Search the web for the latest news about Tauri.",
+        );
+        let agent = list(&profile).unwrap().agents.remove(0);
+        let routine = &agent.routines[0];
+        assert_eq!(routine.id, "extract-cc22420970616a65");
+        assert_eq!(routine.name, "Search for recent Tauri news and deliver a…");
+        assert_eq!(routine.prompt, "Search for recent Tauri news and deliver.");
+        fs::remove_dir_all(root_dir).unwrap();
     }
 
     #[test]

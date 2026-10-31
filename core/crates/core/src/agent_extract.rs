@@ -185,12 +185,7 @@ pub fn read_model_answer(
             }
             None => Trigger::Cron(every),
         };
-        let name: String = routine
-            .name
-            .trim()
-            .chars()
-            .take(MAX_NAME_CHARACTERS)
-            .collect();
+        let name = routine_name(&routine.name);
         let mut proposal = proposal(&name, trigger, routine.prompt.trim().to_owned());
         proposal.name = name;
         agent_routines::validate_routine(&proposal)?;
@@ -317,16 +312,82 @@ fn proposal(action: &str, trigger: Trigger, prompt: String) -> Routine {
     }
 }
 
-fn routine_name(action: &str) -> String {
-    let mut name: String = action.trim().chars().take(MAX_NAME_CHARACTERS).collect();
-    if let Some(first) = name.chars().next() {
-        name.replace_range(..first.len_utf8(), &first.to_uppercase().to_string());
+fn capitalized(text: &str) -> String {
+    let mut text = text.trim().to_owned();
+    if let Some(first) = text.chars().next() {
+        text.replace_range(..first.len_utf8(), &first.to_uppercase().to_string());
     }
-    name
+    text
 }
 
+/// A routine's display name: the text with a capital first letter, cut at
+/// a word boundary with an ellipsis when it runs past the name limit. The
+/// prompt keeps the full text.
+pub fn routine_name(text: &str) -> String {
+    let text = capitalized(text);
+    if text.chars().count() <= MAX_NAME_CHARACTERS {
+        return text;
+    }
+    let head: String = text.chars().take(MAX_NAME_CHARACTERS - 1).collect();
+    let at_boundary = text[head.len()..].starts_with(char::is_whitespace);
+    let cut = if at_boundary {
+        head.as_str()
+    } else {
+        head.rsplit_once(char::is_whitespace)
+            .map_or(head.as_str(), |(words, _)| words)
+    };
+    let cut = cut.trim_end_matches(|c: char| c.is_whitespace() || ",;:-–—".contains(c));
+    format!("{cut}…")
+}
+
+/// Mends a routine whose name and prompt an older extraction cut at the
+/// name limit, often inside a word. A sentence of the agent's instructions
+/// that starts with the cut text gives the full prompt back. Otherwise the
+/// name ends with an ellipsis and the prompt ends on the last whole word.
+pub fn mend_cut_routine(routine: &mut Routine, instructions: &str) {
+    let name = routine.name.clone();
+    let cut = routine.created_from == CreatedFrom::Instructions
+        && name.chars().count() == MAX_NAME_CHARACTERS
+        && !name.ends_with('…')
+        && routine
+            .prompt
+            .strip_prefix(name.as_str())
+            .is_some_and(|rest| rest.starts_with('.'));
+    if !cut {
+        return;
+    }
+    for sentence in sentences(instructions) {
+        let Some(found) = schedule(&sentence) else {
+            continue;
+        };
+        let (action, condition, consequence) = split_condition(&remove(&sentence, &found.phrases));
+        if capitalized(&action).starts_with(name.as_str()) {
+            routine.name = routine_name(&action);
+            routine.prompt = routine_prompt(&action, condition.as_deref(), consequence.as_deref());
+            return;
+        }
+    }
+    let rest = routine.prompt[name.len()..].to_owned();
+    let mut words: Vec<&str> = name.split_whitespace().collect();
+    if words.len() > 1 {
+        words.pop();
+    }
+    routine.name = format!("{}…", words.join(" "));
+    while words.len() > 1
+        && DANGLING_WORDS.contains(&words[words.len() - 1].to_lowercase().as_str())
+    {
+        words.pop();
+    }
+    routine.prompt = format!("{}{rest}", words.join(" "));
+}
+
+/// Words a cut prompt does not end on.
+const DANGLING_WORDS: [&str; 11] = [
+    "a", "an", "the", "and", "or", "of", "to", "for", "with", "in", "on",
+];
+
 fn routine_prompt(action: &str, condition: Option<&str>, consequence: Option<&str>) -> String {
-    let mut prompt = format!("{}.", routine_name(action));
+    let mut prompt = format!("{}.", capitalized(action));
     match (condition, consequence) {
         (Some(condition), Some(consequence)) => prompt.push_str(&format!(
             " If {condition}, {consequence}. If that is not the case, reply with exactly {}.",
@@ -982,6 +1043,105 @@ mod tests {
             &[],
         );
         assert!(failed[0].prompt.contains("If it failed, open an issue."));
+    }
+
+    #[test]
+    fn a_long_sentence_keeps_its_full_prompt_and_a_short_name() {
+        let text = "Every weekday at 8am, search for recent Tauri news and deliver a three-bullet-point briefing with links.";
+        let proposals = propose(text, TZ, &[]);
+        assert_eq!(proposals.len(), 1, "{proposals:?}");
+        let routine = &proposals[0];
+        assert_eq!(
+            routine.prompt,
+            "Search for recent Tauri news and deliver a three-bullet-point briefing with links."
+        );
+        assert_eq!(routine.name, "Search for recent Tauri news and deliver a…");
+        assert!(routine.name.chars().count() <= MAX_NAME_CHARACTERS);
+        // A name at a word end keeps that word.
+        assert_eq!(
+            routine_name(&format!("{} more words", "a".repeat(59))),
+            format!("{}…", "A".to_owned() + &"a".repeat(58))
+        );
+        let at_end = format!("{} {}", "b".repeat(58), "tail of the sentence");
+        assert_eq!(routine_name(&at_end), format!("B{}…", "b".repeat(57)));
+        assert_eq!(routine_name("short name"), "Short name");
+    }
+
+    #[test]
+    fn a_model_name_past_the_limit_ends_with_an_ellipsis() {
+        let name = "Search the web for news about Tauri and give me three bullet points";
+        let answer = format!(
+            r#"{{"routines":[{{"name":"{name}","cron":"0 9 * * 1-5","prompt":"Search the web for news about Tauri and give me three bullet points.","mcp":null}}]}}"#
+        );
+        let proposals = read_model_answer(&answer, TZ, &[]).unwrap();
+        assert_eq!(
+            proposals[0].name,
+            "Search the web for news about Tauri and give me three…"
+        );
+        assert!(proposals[0].prompt.ends_with("three bullet points."));
+    }
+
+    fn cut_routine(name: &str, prompt: &str) -> Routine {
+        Routine {
+            name: name.into(),
+            prompt: prompt.into(),
+            ..propose("Every weekday at 8am, check mail.", TZ, &[])[0].clone()
+        }
+    }
+
+    #[test]
+    fn a_routine_an_older_extraction_cut_gets_its_full_prompt_back() {
+        let cut = "Search for recent Tauri news and deliver a three-bullet-poin";
+        assert_eq!(cut.chars().count(), MAX_NAME_CHARACTERS);
+        let mut routine = cut_routine(cut, &format!("{cut}."));
+        mend_cut_routine(
+            &mut routine,
+            "Every weekday at 8am, search for recent Tauri news and deliver a three-bullet-point briefing.",
+        );
+        assert_eq!(
+            routine.prompt,
+            "Search for recent Tauri news and deliver a three-bullet-point briefing."
+        );
+        assert_eq!(routine.name, "Search for recent Tauri news and deliver a…");
+        // Mending twice changes nothing.
+        let mended = routine.clone();
+        mend_cut_routine(&mut routine, "");
+        assert_eq!(routine, mended);
+    }
+
+    #[test]
+    fn a_cut_routine_without_its_sentence_ends_on_whole_words() {
+        let cut = "Search for recent Tauri news and deliver a three-bullet-poin";
+        let mut routine = cut_routine(cut, &format!("{cut}."));
+        mend_cut_routine(
+            &mut routine,
+            "Search the web for the latest news about Tauri.",
+        );
+        assert_eq!(routine.name, "Search for recent Tauri news and deliver a…");
+        assert_eq!(routine.prompt, "Search for recent Tauri news and deliver.");
+        let cut = "Search the web for news about Tauri and give me three bullet";
+        let mut routine = cut_routine(
+            cut,
+            &format!("{cut}. Do this only if it is new. Otherwise reply with exactly NO_RESPONSE."),
+        );
+        mend_cut_routine(&mut routine, "");
+        assert_eq!(
+            routine.name,
+            "Search the web for news about Tauri and give me three…"
+        );
+        assert_eq!(
+            routine.prompt,
+            "Search the web for news about Tauri and give me three. Do this only if it is new. Otherwise reply with exactly NO_RESPONSE."
+        );
+        // A user's own routine and a short name stay as they are.
+        let mut own = cut_routine(cut, &format!("{cut}."));
+        own.created_from = CreatedFrom::User;
+        let before = own.clone();
+        mend_cut_routine(&mut own, "");
+        assert_eq!(own, before);
+        let mut short = cut_routine("Check mail", "Check mail.");
+        mend_cut_routine(&mut short, "");
+        assert_eq!(short.prompt, "Check mail.");
     }
 
     #[test]
