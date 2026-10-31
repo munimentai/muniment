@@ -87,7 +87,7 @@ cpSync(runtimeSource, runtimeBundled);
 cpSync(cliSource, cliBundled);
 cpSync(readerSource, readerBundled);
 mustRun("build browser helper", "cargo", ["build", "--manifest-path", "src-tauri/Cargo.toml", "--bin", "muniment-cef-helper", "--release", "--locked"]);
-mustRun("build app", "npm", ["run", "tauri", "build", "--", "--bundles", "app", "--features", "local-runtime", "--no-sign"]);
+mustRun("build app", "npm", ["run", "tauri", "build", "--", "--bundles", "app", "--no-sign"]);
 mustRun("package direct CEF", process.execPath, ["scripts/package-cef-macos.mjs", app]);
 // A local build is arm64 only. The vendored speech libraries are universal.
 for (const file of nativeFiles(app)) {
