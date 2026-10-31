@@ -42,7 +42,8 @@ pub fn effective_user_home() -> io::Result<PathBuf> {
     Ok(PathBuf::from(std::ffi::OsString::from_vec(home.to_vec())))
 }
 
-/// Appends a record to an owner-only file and truncates it before it exceeds `max_bytes`.
+/// Appends a record, after its UTC time, to an owner-only file and truncates
+/// the file before it exceeds `max_bytes`.
 pub fn append_owner_only_record(
     directory: &Path,
     file_name: &std::ffi::CStr,
@@ -100,10 +101,11 @@ pub fn append_owner_only_record(
     if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
         return Err(io::Error::last_os_error());
     }
+    let record = crate::runtime_diagnostics::stamped(record);
     if file.metadata()?.len().saturating_add(record.len() as u64) > max_bytes {
         file.set_len(0)?;
     }
-    file.write_all(record)?;
+    file.write_all(&record)?;
     file.sync_data()
 }
 

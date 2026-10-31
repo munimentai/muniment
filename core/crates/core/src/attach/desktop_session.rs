@@ -111,8 +111,29 @@ where
         workspace,
         provenance,
         service,
-        |line| crate::runtime_eprintln!("{line}"),
+        |line| {
+            if let Some(line) = peer_close_record(line, &PEER_CLOSES) {
+                crate::runtime_eprintln!("{line}");
+            }
+        },
     )
+}
+
+/// The record of a desktop session the desktop closed as it should.
+const PEER_CLOSED: &str = "muniment-runtime: desktop session closed reason=peer disconnected";
+/// The log names the first such close and then every hundredth, with the
+/// count since the runtime started, so a desktop that opens a session per
+/// request does not fill the bounded log. Every other close is logged.
+const PEER_CLOSES_PER_RECORD: u64 = 100;
+static PEER_CLOSES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn peer_close_record(line: String, closes: &std::sync::atomic::AtomicU64) -> Option<String> {
+    if line != PEER_CLOSED {
+        return Some(line);
+    }
+    let count = closes.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    (count == 1 || count.is_multiple_of(PEER_CLOSES_PER_RECORD))
+        .then(|| format!("{line} sessions={count}"))
 }
 
 enum SessionClose {
@@ -664,6 +685,26 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
     use std::os::unix::net::UnixStream;
+
+    #[test]
+    fn peer_disconnects_log_the_first_and_every_hundredth_with_a_count() {
+        let closes = std::sync::atomic::AtomicU64::new(0);
+        let records: Vec<String> = (0..250)
+            .filter_map(|_| peer_close_record(PEER_CLOSED.into(), &closes))
+            .collect();
+        assert_eq!(
+            records,
+            [
+                format!("{PEER_CLOSED} sessions=1"),
+                format!("{PEER_CLOSED} sessions=100"),
+                format!("{PEER_CLOSED} sessions=200"),
+            ]
+        );
+        // Every other close and every other record is logged as it is.
+        let timeout = "muniment-runtime: desktop session closed reason=Timeout".to_owned();
+        assert_eq!(peer_close_record(timeout.clone(), &closes), Some(timeout));
+        assert_eq!(closes.load(std::sync::atomic::Ordering::Relaxed), 250);
+    }
 
     #[test]
     fn interrupted_request_read_keeps_the_original_deadline() {
@@ -1385,7 +1426,9 @@ mod tests {
         }
         drop(client);
         assert_eq!(worker.join().unwrap(), Ok(()));
-        let lines = std::fs::read_to_string(directory.join("runtime-service.log")).unwrap();
+        let lines = crate::runtime_diagnostics::without_record_times(
+            &std::fs::read_to_string(directory.join("runtime-service.log")).unwrap(),
+        );
         std::fs::remove_dir_all(directory).unwrap();
         assert_eq!(lines, concat!(
             "muniment-runtime: desktop request rejected operation=\"thread.list\" code=\"unauthorized\" reason=\"The capability is not authorized.\"\n",
