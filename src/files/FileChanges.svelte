@@ -8,15 +8,17 @@
   // Line counts when every file has them, else file counts: changed files in green, deleted files in red.
   const removedFiles = $derived(files.filter((f) => f.deleted).length)
   const noun = (n, one, many) => `${n} ${n === 1 ? one : many}`
+  const keptFiles = $derived(files.length - removedFiles)
+  // A file count shows only its nonzero sides, so one edited file never reads `−0 files`.
   const label = $derived(`${noun(files.length, 'file', 'files')} changed, ${incomplete
-    ? `${noun(files.length - removedFiles, 'file', 'files')} added or edited, ${noun(removedFiles, 'file', 'files')} deleted`
+    ? [keptFiles && `${noun(keptFiles, 'file', 'files')} added or edited`, removedFiles && `${noun(removedFiles, 'file', 'files')} deleted`].filter(Boolean).join(', ')
     : `${noun(additions, 'line', 'lines')} added, ${noun(deletions, 'line', 'lines')} removed`}`)
 </script>
 
 {#if files.length}
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div class="changes" onpointerenter={(event) => { if (event.pointerType !== 'touch') open = true }} onpointerleave={() => { if (!document.activeElement?.closest('.changes')) open = false }} onfocusout={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) open = false }} onkeydown={(event) => { if (event.key === 'Escape') { open = false; trigger?.focus(); event.stopPropagation() } }} role="group" aria-label="Changed files">
-    <button bind:this={trigger} class="chip" type="button" aria-label={label} aria-expanded={open} onclick={() => { if (onreview) { open = false; onreview() } else open = true }}>{#if incomplete}<span class="added">+{noun(files.length - removedFiles, 'file', 'files')}</span><span class="removed">−{noun(removedFiles, 'file', 'files')}</span>{:else}<span>{noun(files.length, 'file', 'files')}</span><span class="added">+{additions}</span><span class="removed">−{deletions}</span>{/if}</button>
+    <button bind:this={trigger} class="chip" type="button" aria-label={label} aria-expanded={open} onclick={() => { if (onreview) { open = false; onreview() } else open = true }}>{#if incomplete}{#if keptFiles}<span class="added">+{noun(keptFiles, 'file', 'files')}</span>{/if}{#if removedFiles}<span class="removed">−{noun(removedFiles, 'file', 'files')}</span>{/if}{:else}<span>{noun(files.length, 'file', 'files')}</span><span class="added">+{additions}</span><span class="removed">−{deletions}</span>{/if}</button>
     {#if open}
       <div class="file-menu">
         {#if onreview}<button type="button" class="review" onclick={() => { open = false; onreview() }}>Review changes</button>{/if}
