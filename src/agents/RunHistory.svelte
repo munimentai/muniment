@@ -9,6 +9,7 @@
 <script>
   // One agent's run history, newest first: each run is one row with a status
   // icon in its stoplight color, its title and when it started in local time.
+  // A failed row also shows the reason the run failed.
   // A row opens the run's conversation. A failed run whose input core kept
   // for replay has a Retry action, which runs it again against the agent as
   // it is now. Failures core kept that the run list no longer holds join the
@@ -68,7 +69,7 @@
       <li class="run" data-light={runLight(run)}>
         <button type="button" class="open" aria-label={`${title}, ${when}`} disabled={!onopen} onclick={() => onopen(run)}>
           <span class="light"><LucideIcon name={runIcon(run)} variant="action" size={14} /></span>
-          <span class="text"><span class="title">{title}</span><time datetime={startedAt(run)}>{when}</time></span>
+          <span class="text"><span class="title">{title}</span><time datetime={startedAt(run)}>{when}</time>{#if run.status === 'failed' && run.error}<span class="reason">{run.error}</span>{/if}</span>
         </button>
         {#if replay}<button type="button" class="retry" aria-label={`Retry ${title}`} disabled={disabled || !!busy} onclick={() => retry(replay)}><LucideIcon name={busy === replay.replay_id ? 'loader-circle' : 'refresh-cw'} variant="action" size={14} /></button>{/if}
       </li>
@@ -97,6 +98,7 @@
   .text { display: grid; gap: 1px; min-width: 0; }
   .title { overflow: hidden; font-size: var(--text-13); text-overflow: ellipsis; white-space: nowrap; }
   time { color: var(--muted); font: var(--text-12) var(--font-human); }
+  .reason { color: var(--muted); font: var(--text-12) var(--font-human); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
   .retry { position: absolute; top: 50%; right: 4px; display: grid; place-items: center; width: 24px; height: 24px; padding: 0; transform: translateY(-50%); border: 0; border-radius: var(--radius-control); background: transparent; color: var(--muted); cursor: pointer; }
   .retry:hover:not(:disabled) { background: var(--faint); color: var(--ink); }
   .retry:disabled { opacity: .5; cursor: default; }

@@ -129,12 +129,14 @@ it('shows each state in words with its stoplight signal at the row end', () => {
   expect(runSignal.querySelector('svg')).toHaveAttribute('data-icon', 'circle-check')
   expect(lastRow.lastElementChild).toBe(runSignal)
 
-  view.rerender({ agent: { ...agent, online: false }, latestRun: { id: 'r2', status: 'failed', updated_at: new Date().toISOString() } })
+  view.rerender({ agent: { ...agent, online: false }, latestRun: { id: 'r2', status: 'failed', error: 'The thread was not found.', updated_at: new Date().toISOString() } })
   return Promise.resolve().then(() => {
     expect(within(fact('Machine')).getByRole('img', { name: 'Offline' })).toHaveAttribute('data-light', 'red')
     const failed = within(fact('Last run')).getByRole('img', { name: 'Failed' })
     expect(failed).toHaveAttribute('data-light', 'red')
     expect(failed.querySelector('svg')).toHaveAttribute('data-icon', 'circle-x')
+    // The card names why the last run failed.
+    expect(screen.getByText('The thread was not found.')).toBeInTheDocument()
   })
 })
 
@@ -244,7 +246,7 @@ it('lists routines as the profile does and turns one on and off through routine.
 
 it('lists runs in its History as the profile does and opens a run\'s conversation', async () => {
   const machineCore = core()
-  const run = { id: 'r1', agent_id: 'scout', thread_id: 't1', status: 'failed', trigger: { kind: 'cron', routine_id: 'daily' }, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+  const run = { id: 'r1', agent_id: 'scout', thread_id: 't1', status: 'failed', error: 'The thread was not found.', trigger: { kind: 'cron', routine_id: 'daily' }, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
   const invoke = machineCore.tauri.invoke
   machineCore.tauri.invoke = vi.fn(async (command, args) => command === 'agent_request' && args.operation === 'agent.runs' ? { runs: [run], next_cursor: null } : invoke(command, args))
   const onopenrun = vi.fn()
@@ -253,6 +255,7 @@ it('lists runs in its History as the profile does and opens a run\'s conversatio
   const history = await screen.findByRole('region', { name: 'History' })
   const row = await within(history).findByRole('button', { name: /^Daily brief, Today at / })
   expect(row.closest('li')).toHaveAttribute('data-light', 'red')
+  expect(row).toHaveTextContent('The thread was not found.')
   expect(machineCore.tauri.invoke).toHaveBeenCalledWith('agent_request', { runtime: 'box', operation: 'agent.runs', body: { agent_id: 'scout', limit: 20 } })
   await fireEvent.click(row)
   expect(onopenrun).toHaveBeenCalledWith(expect.objectContaining({ id: 'r1', thread_id: 't1', runtimeId: 'box' }))

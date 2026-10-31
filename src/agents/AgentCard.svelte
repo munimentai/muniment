@@ -204,6 +204,7 @@
           <div class="fact"><dt>Next run</dt><dd class="record">{nextRunLabel(agent)}</dd></div>
           <div class="fact"><dt>Last run</dt><dd class="record signaled">{#if latestRun}{@const state = runStatusLabel(latestRun.status)}<span class="words">{whenLabel(latestRun.updated_at)}</span><span class="signal" data-light={runLight(latestRun)} role="img" aria-label={state} data-tooltip={state}><LucideIcon name={runIcon(latestRun)} variant="action" size={14} /></span>{:else}<span class="words">Never</span>{/if}</dd></div>
         </dl>
+        {#if latestRun?.status === 'failed' && latestRun.error}<p class="run-reason">{latestRun.error}</p>{/if}
         <div class="actions">
           <Button icon="play" variant="primary" disabled={readOnly || busy || runActive(latestRun?.status)} onclick={runNow}>Run now</Button>
           <Button icon="messages-square" onclick={() => onchat(agent)}>Open chat</Button>
@@ -275,6 +276,7 @@
   .record { min-width: 0; overflow: hidden; color: var(--muted); font: var(--text-12) var(--font-human); text-overflow: ellipsis; white-space: nowrap; }
   /* A state row: its words at the left, its signal in one column at the row's end, in the history's stoplight colors. */
   .signaled { display: flex; align-items: center; gap: 8px; }
+  .run-reason { margin: 0; padding: 0 0 4px 88px; color: var(--muted); font-size: var(--text-12); overflow-wrap: anywhere; }
   .words { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .signal { position: relative; flex: none; display: inline-flex; color: var(--warning); }
   .signal::after { content: attr(data-tooltip); position: absolute; z-index: 2; right: -4px; bottom: calc(100% + 6px); padding: 3px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-12) var(--font-human); white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity 80ms ease; }

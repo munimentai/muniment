@@ -492,7 +492,9 @@ it('lists runs in one history with stoplight colors, retries a failed run core k
   expect(screen.queryByRole('region', { name: 'Failed runs' })).not.toBeInTheDocument()
   expect(within(history).getAllByRole('listitem').map((item) => item.dataset.light)).toEqual(['green', 'red'])
   expect(within(history).getByRole('button', { name: /^Morning digest, / })).toHaveTextContent(/^Morning digestToday at \d{1,2}:\d{2}/)
-  expect(failed).toHaveTextContent(/Jan 1 at \d{1,2}:\d{2}.* · Failed$/)
+  expect(failed.querySelector('time')).toHaveTextContent(/Jan 1 at \d{1,2}:\d{2}.* · Failed$/)
+  // A failed row names why the run failed.
+  expect(failed).toHaveTextContent(/· FailedThe model could not complete this reply\.$/)
   expect(history).not.toHaveTextContent(/UTC|GMT/)
   await fireEvent.click(failed)
   expect(onopen).toHaveBeenCalledWith('t-fail')
