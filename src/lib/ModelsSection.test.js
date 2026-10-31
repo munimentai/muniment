@@ -78,7 +78,11 @@ it('shows each Anthropic account Claude Code signed in to as its own card, and a
   // The accounts are the cards. No Claude Code connection row stands over them.
   expect(within(group).queryByTestId('provider-connection')).not.toBeInTheDocument()
   await fireEvent.click(within(group).getByRole('button', { name: 'Disconnect home@example.test' }))
-  expect(tauri.invoke).toHaveBeenCalledWith('model_router_remove_account', { id: 'a2' })
+  // Disconnect asks once and removes nothing until the user confirms.
+  const dialog = await screen.findByRole('dialog', { name: 'Disconnect home@example.test?' })
+  expect(tauri.invoke).not.toHaveBeenCalledWith('model_router_remove_account', expect.anything())
+  await fireEvent.click(within(dialog).getByRole('button', { name: 'Disconnect' }))
+  await waitFor(() => expect(tauri.invoke).toHaveBeenCalledWith('model_router_remove_account', { id: 'a2' }))
   await fireEvent.click(within(group).getByRole('button', { name: 'Add another Claude Pro or Max account' }))
   expect(tauri.invoke).toHaveBeenCalledWith('model_router_subscription_start', { provider: 'anthropic', runtime: 'local' })
 })
@@ -104,8 +108,28 @@ it('lists the Anthropic accounts on its connect page, each with Disconnect, and 
   await fireEvent.click(screen.getByRole('button', { name: 'Add another account' }))
   expect(tauri.invoke).toHaveBeenCalledWith('local_mode_account_login_start', { provider: 'anthropic', runtime: 'box' })
   await fireEvent.click(screen.getByRole('button', { name: 'Disconnect work@example.test' }))
-  expect(tauri.invoke).toHaveBeenCalledWith('model_router_remove_account', { id: 'a1' })
+  await fireEvent.click(within(await screen.findByRole('dialog', { name: 'Disconnect work@example.test?' })).getByRole('button', { name: 'Disconnect' }))
+  await waitFor(() => expect(tauri.invoke).toHaveBeenCalledWith('model_router_remove_account', { id: 'a1' }))
   await waitFor(() => expect(screen.queryByText('work@example.test')).toBeNull())
+})
+
+it('disconnects a provider connection only after the dialog confirms it, and Cancel keeps it', async () => {
+  const keyed = { providers: [{ id: 'openai', name: 'OpenAI', source: 'key', base_url: null, models: [{ id: 'gpt-5.5' }] }], hidden: [], shown: [], default_provider: null, default_model: null }
+  const tauri = { invoke: vi.fn(async (command) => {
+    if (command === 'local_mode_provider_inventory') return keyed
+    if (command === 'model_router_settings') return { families: [], subscriptions: [], accounts: [] }
+    return null
+  }) }
+  render(ModelsSection, { props: { tauri, listen: async () => () => {}, inventory: keyed } })
+  await fireEvent.click(await screen.findByRole('button', { name: 'Disconnect OpenAI' }))
+  const dialog = await screen.findByRole('dialog', { name: 'Disconnect OpenAI?' })
+  expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveFocus()
+  await fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  expect(tauri.invoke).not.toHaveBeenCalledWith('local_mode_disconnect_provider', expect.anything())
+  await fireEvent.click(screen.getByRole('button', { name: 'Disconnect OpenAI' }))
+  await fireEvent.click(within(await screen.findByRole('dialog', { name: 'Disconnect OpenAI?' })).getByRole('button', { name: 'Disconnect' }))
+  await waitFor(() => expect(tauri.invoke).toHaveBeenCalledWith('local_mode_disconnect_provider', { provider: 'openai' }))
 })
 
 it('draws the stored rows core answers at once while the full read waits, then takes the full read', async () => {

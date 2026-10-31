@@ -12,7 +12,8 @@
   import LucideIcon from './LucideIcon.svelte'
   import Toggle from './Toggle.svelte'
   import HoldSignIn from './HoldSignIn.svelte'
-  import { routerHold } from './fleet-accounts.js'
+  import ConfirmDialog from './ConfirmDialog.svelte'
+  import { hereLine, routerHold } from './fleet-accounts.js'
 
   let { tauri, listen = (...args) => window.__TAURI__?.event?.listen(...args), settings, family, onsettings, fleet = null, onheld, runtime = 'local' } = $props()
 
@@ -59,6 +60,14 @@
   const keys = $derived(accounts.filter((account) => account.source === 'key'))
   const signIns = $derived((settings?.subscriptions ?? []).filter((entry) => entry.family === family))
   const familyRow = $derived((settings?.families ?? []).find((entry) => entry.id === family) ?? null)
+
+  // Disconnect asks once in the app's dialog, which names the account.
+  let removing = $state(null)
+  async function disconnect(approve) {
+    const account = removing
+    removing = null
+    if (approve && account) await run('model_router_remove_account', { id: account.id }, `${account.label} is disconnected.`)
+  }
 
   async function run(command, payload, done = '') {
     pending = true
@@ -218,9 +227,10 @@
               <span class="record tier">{[account.email !== account.label ? account.email : null, ...account.models].filter(Boolean).join(' · ')}</span>
             {/if}
             {@render routingNote(account)}
-            {#if routerHold(fleet, account.id)}<HoldSignIn {tauri} {runtime} account={routerHold(fleet, account.id)} onmoved={onheld} />{/if}
+            {#if routerHold(fleet, account.id)}<HoldSignIn {tauri} {runtime} account={routerHold(fleet, account.id)} onmoved={onheld} />
+            {:else if hereLine(fleet, account)}<span class="here record">{hereLine(fleet, account)}</span>{/if}
           </span>
-          <button type="button" class="quiet icon-action disconnect" aria-label={`Disconnect ${account.label}`} disabled={pending} onclick={() => run('model_router_remove_account', { id: account.id }, `${account.label} is disconnected.`)}><LucideIcon name="unplug" size={16} variant="action" /></button>
+          <button type="button" class="quiet icon-action disconnect" aria-label={`Disconnect ${account.label}`} disabled={pending} onclick={() => { removing = account }}><LucideIcon name="unplug" size={16} variant="action" /></button>
         </li>
       {/each}
     </ul>
@@ -233,7 +243,7 @@
           <LucideIcon name="key-round" size={16} />
           {#if editingId === account.id}
             <form class="name-edit" onsubmit={(event) => { event.preventDefault(); void saveName(account) }}>
-              <input bind:this={nameInput} bind:value={nameDraft} aria-label="Account name" maxlength="120" disabled={pending} onkeydown={(event) => { if (event.key === 'Escape') { event.preventDefault(); editingId = null } }} />
+              <input bind:this={nameInput} bind:value={nameDraft} aria-label="Account name" maxlength="120" autocapitalize="off" autocomplete="off" spellcheck="false" disabled={pending} onkeydown={(event) => { if (event.key === 'Escape') { event.preventDefault(); editingId = null } }} />
               <button type="submit" data-variant="primary" disabled={pending || !nameDraft.trim()}>Save</button>
               <button type="button" disabled={pending} onclick={() => editingId = null}>Cancel</button>
             </form>
@@ -247,7 +257,7 @@
               <span class="overflow">Use when subscriptions run out<Toggle checked={!!account.overflow} disabled={pending} aria-label={`Use ${account.label} when subscriptions run out`} onchange={(value) => run('model_router_update_account', { id: account.id, overflow: value }, value ? `${account.label} serves when subscriptions run out.` : `${account.label} no longer serves when subscriptions run out.`)} /></span>
             {/if}
             <button type="button" class="quiet icon-action" aria-label={`Edit ${account.label}`} disabled={pending} onclick={() => editName(account)}><LucideIcon name="square-pen" size={16} variant="action" /></button>
-            <button type="button" class="quiet icon-action disconnect" aria-label={`Disconnect ${account.label}`} disabled={pending} onclick={() => run('model_router_remove_account', { id: account.id }, `${account.label} is disconnected.`)}><LucideIcon name="unplug" size={16} variant="action" /></button>
+            <button type="button" class="quiet icon-action disconnect" aria-label={`Disconnect ${account.label}`} disabled={pending} onclick={() => { removing = account }}><LucideIcon name="unplug" size={16} variant="action" /></button>
           {/if}
         </li>
       {/each}
@@ -284,7 +294,7 @@
     <form class="add" aria-label={`Add a ${familyRow?.name ?? family} key`} onsubmit={(event) => { event.preventDefault(); addAccount() }}>
       <p class="support">API usage has separate billing from a chat subscription.</p>
       <label for={`router-label-${family}`}>Name</label>
-      <input id={`router-label-${family}`} type="text" placeholder="work" bind:value={label} disabled={pending}>
+      <input id={`router-label-${family}`} type="text" placeholder="work" autocapitalize="off" autocomplete="off" spellcheck="false" bind:value={label} disabled={pending}>
       <label for={`router-key-${family}`}>API key</label>
       <input id={`router-key-${family}`} type="password" autocomplete="off" bind:value={key} disabled={pending}>
       <label for={`router-base-${family}`}>Server URL (optional)</label>
@@ -305,6 +315,12 @@
     </div>
   {/if}
 </div>
+
+{#if removing}
+  <ConfirmDialog title={`Disconnect ${removing.label}?`} cancelLabel="Cancel" confirmLabel="Disconnect" onDecision={disconnect}>
+    <p>{removing.source === 'key' ? 'Muniment deletes this key. Add it again to use it.' : 'Muniment removes this sign-in. Sign in again to use it.'}</p>
+  </ConfirmDialog>
+{/if}
 
 <style>
   button { font: inherit; font-size: var(--text-13); color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 5px 12px; cursor: pointer; }
@@ -332,6 +348,8 @@
   .key-card .support { font-size: var(--text-12); }
   .icon-action { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; min-height: 28px; padding: 4px; }
   .tier { overflow-wrap: anywhere; }
+  /* The same one-row height as a holder line, so cards keep their lines level. */
+  .here { display: flex; align-items: center; min-height: 32px; }
   .sign-ins { display: flex; flex-wrap: wrap; gap: 6px; }
   .sign-in { display: inline-flex; align-items: center; gap: 8px; min-height: 28px; padding: 4px 10px; font-size: var(--text-12); }
   .login { display: grid; gap: 8px; justify-items: start; }

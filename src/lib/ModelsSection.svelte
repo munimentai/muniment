@@ -16,6 +16,7 @@
   import LucideIcon from './LucideIcon.svelte'
   import ModelAccounts from './ModelAccounts.svelte'
   import HoldSignIn from './HoldSignIn.svelte'
+  import ConfirmDialog from './ConfirmDialog.svelte'
   import { otherSignIns, piHold, readFleetAccounts } from './fleet-accounts.js'
   import ModelRouterSection from './ModelRouterSection.svelte'
   import ClassifierConnection from './ClassifierConnection.svelte'
@@ -74,6 +75,15 @@
   // The subscriptions the provider's family already holds on this machine. Its
   // connect page lists each with Disconnect, and its sign-in adds another.
   const signedIn = $derived((router?.accounts ?? []).filter((account) => account.source !== 'key' && account.family === providerFamily(providerId)))
+  // Every Disconnect asks once in the app's dialog: its title, one line on
+  // what goes, and the action that runs on yes.
+  let confirming = $state(null)
+  function askDisconnect(name, line, action) { confirming = { name, line, action } }
+  async function decideDisconnect(approve) {
+    const asked = confirming
+    confirming = null
+    if (approve && asked) await asked.action()
+  }
   async function removeAccount(account) {
     try {
       onRouterSettings(await tauri.invoke('model_router_remove_account', { id: account.id }))
@@ -161,6 +171,14 @@
     } catch (_) {
       loadError = 'Muniment cannot read provider settings. Restart the app to retry.'
     } finally { discovering = false }
+  }
+
+  async function disconnectClassifier(connection) {
+    try {
+      const assisted = router.assist?.enabled
+      router = await tauri.invoke('model_router_disconnect_classifier', { id: connection.id })
+      if (assisted && !router.assist?.enabled) status = 'Assistance is off because its decision model was disconnected. Choose another under Roles.'
+    } catch (error) { status = String(error?.message ?? error) }
   }
 
   async function disconnect(entry) {
@@ -455,14 +473,15 @@
                 <LucideIcon name={endpoint ? 'server' : entry.source === 'account' ? 'credit-card' : entry.source === 'claude-code' ? 'square-terminal' : 'key-round'} size={16} />
                 <span class="line-label" class:mono={endpoint}>{endpoint ? (entry.base_url ?? '').replace(/^https?:\/\//, '').replace(/\/v1\/?$/, '') : entry.source === 'account' ? 'Subscription' : entry.source === 'claude-code' ? 'Claude Code' : 'API key'}</span>
                 <span class="tag model-count" data-tone={entry.count ? undefined : 'caution'}>{modelCountLabel(entry.count)}</span>
-                {#if entry.source === 'account' && piHold(fleet, entry.id)}<HoldSignIn {tauri} {runtime} account={piHold(fleet, entry.id)} onmoved={onHeld} />{/if}
+                {#if entry.source === 'account' && piHold(fleet, entry.id)}<HoldSignIn {tauri} {runtime} account={piHold(fleet, entry.id)} onmoved={onHeld} />
+                {:else if entry.source === 'account' && fleet?.length}<span class="tag here">Signed in here</span>{/if}
                 {#if entry.source === 'claude-code'}
                   <!-- A Claude Code connection from before signs in again as an account, whose row replaces it. -->
                   <button type="button" class="quiet sign-in-again" onclick={signInAgain}>Sign in again</button>
                 {:else if endpoint || catalogProvider(catalogId(entry.id))}
                   <button type="button" class="quiet icon-action" aria-label={`Edit ${entry.name}`} onclick={() => endpoint ? editProvider(entry) : chooseProvider(catalogId(entry.id))}><LucideIcon name="square-pen" size={16} variant="action" /></button>
                 {/if}
-                <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${entry.name}`} onclick={() => disconnect(entry)}><LucideIcon name="unplug" size={16} variant="action" /></button>
+                <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${entry.name}`} onclick={() => askDisconnect(entry.name, 'Muniment removes this connection. Connect it again to use it.', () => disconnect(entry))}><LucideIcon name="unplug" size={16} variant="action" /></button>
               </div>
             {/if}
             {#if entry.family && router && firstOfFamily}<ModelAccounts {tauri} {listen} {runtime} settings={router} family={entry.family} onsettings={onRouterSettings} {fleet} onheld={onHeld} />{/if}
@@ -493,7 +512,7 @@
           <Row title={connection.name} meta={connection.active ? 'Selected for routing' : router.assist?.connection === connection.id ? 'Selected for assistance' : 'Connected'}>
             {#snippet icon()}<ProviderLogo color provider={connection.catalog_id} size={16} />{/snippet}
             {#if connection.connection?.kind !== 'pooled'}<button type="button" class="quiet icon-action" aria-label={`Edit ${connection.name}`} aria-expanded={editingClassifier === connection.id} onclick={() => { editingClassifier = editingClassifier === connection.id ? '' : connection.id }}><LucideIcon name="square-pen" size={16} variant="action" /></button>{/if}
-            <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${connection.name}`} onclick={async () => { try { const assisted = router.assist?.enabled; router = await tauri.invoke('model_router_disconnect_classifier', { id: connection.id }); if (assisted && !router.assist?.enabled) status = 'Assistance is off because its decision model was disconnected. Choose another under Roles.' } catch (error) { status = String(error?.message ?? error) } }}><LucideIcon name="unplug" size={16} variant="action" /></button>
+            <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${connection.name}`} onclick={() => askDisconnect(connection.name, 'Routing and assistance stop using this decision model.', () => disconnectClassifier(connection))}><LucideIcon name="unplug" size={16} variant="action" /></button>
           </Row>
           {#if editingClassifier === connection.id}<div class="classifier-edit"><ClassifierEdit {connection} {tauri} onsaved={next => { accounts.set(next); editingClassifier = ''; status = 'Decision model saved.' }} oncancel={() => { editingClassifier = '' }} /></div>{/if}
         {/each}
@@ -575,7 +594,7 @@
           {#each signedIn as account (account.id)}
             <Row title={account.label} meta={account.plan || 'Subscription'}>
               {#snippet icon()}<LucideIcon name="credit-card" size={16} />{/snippet}
-              <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${account.label}`} onclick={() => removeAccount(account)}><LucideIcon name="unplug" size={16} variant="action" /></button>
+              <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${account.label}`} onclick={() => askDisconnect(account.label, 'Muniment removes this sign-in. Sign in again to use it.', () => removeAccount(account))}><LucideIcon name="unplug" size={16} variant="action" /></button>
             </Row>
           {/each}
         </Group>
@@ -622,6 +641,12 @@
   {/if}
 </div>
 
+{#if confirming}
+  <ConfirmDialog title={`Disconnect ${confirming.name}?`} cancelLabel="Cancel" confirmLabel="Disconnect" onDecision={decideDisconnect}>
+    <p>{confirming.line}</p>
+  </ConfirmDialog>
+{/if}
+
 <style>
   button { font: inherit; font-size: var(--text-13); color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 5px 12px; cursor: pointer; }
   button:hover:not(:disabled) { background: var(--faint); }
@@ -658,6 +683,7 @@
   .search input { flex: 1; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; font-size: var(--text-13); }
   .tag, .record { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .model-count { flex: none; white-space: nowrap; }
+  .here { flex: none; white-space: nowrap; }
   .model-count[data-tone="caution"] { color: var(--warning); }
   .record { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .model-list, .provider-list { display: grid; margin: 0; padding: 0; list-style: none; }

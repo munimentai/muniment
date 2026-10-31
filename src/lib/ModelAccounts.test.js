@@ -54,6 +54,38 @@ describe('Hold sign-in here', () => {
   })
 })
 
+describe('Disconnect', () => {
+  it('asks in the app dialog before it removes a key, and keeps the key on Cancel', async () => {
+    const key = { ...subscription('k1', 'invalid-test'), source: 'key' }
+    const invoke = vi.fn(async () => ({ ...settings, accounts: [] }))
+    render(ModelAccounts, { tauri: { invoke }, settings: { ...settings, accounts: [key] }, family: 'openai', fleet: null, onsettings: vi.fn() })
+    await fireEvent.click(screen.getByRole('button', { name: 'Disconnect invalid-test' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Disconnect invalid-test?' })
+    expect(dialog).toHaveTextContent('Muniment deletes this key.')
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    expect(invoke).not.toHaveBeenCalled()
+    await fireEvent.click(screen.getByRole('button', { name: 'Disconnect invalid-test' }))
+    await fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Disconnect' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('model_router_remove_account', { id: 'k1' }))
+  })
+
+  it('keeps a key name as typed, with no automatic capital', async () => {
+    render(ModelAccounts, { tauri: { invoke: vi.fn() }, settings, family: 'openai', fleet: null })
+    await fireEvent.click(screen.getByRole('button', { name: 'Add a key' }))
+    const name = screen.getByLabelText('Name')
+    expect(name).toHaveAttribute('autocapitalize', 'off')
+    expect(name).toHaveAttribute('spellcheck', 'false')
+  })
+})
+
+describe('the sign-in location', () => {
+  it('names a Claude Code account this machine holds as signed in here, like a shared one', () => {
+    const claude = { ...subscription('c1', 'me@example.test'), family: 'anthropic', pi_provider: 'claude-bridge' }
+    render(ModelAccounts, { tauri: { invoke: vi.fn() }, settings: { ...settings, accounts: [claude], families: [{ id: 'anthropic', name: 'Anthropic' }] }, family: 'anthropic', fleet })
+    expect(within(card('me@example.test')).getByText('Signed in here')).toBeInTheDocument()
+  })
+})
+
 describe('a refused sign-in', () => {
   it('says the sign-in expired in place of a rate limit until a turn succeeds', () => {
     const expired = { ...subscription('work', 'Work'), credential_refused: true, cooldown_until_ms: Date.now() + 60_000 }
