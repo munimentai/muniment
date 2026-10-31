@@ -61,3 +61,37 @@ it('blurs a hidden node when the page offers no place to land', () => {
   expect(landFocus(root, { skip: '.workspace' })).toBeNull()
   expect(document.activeElement).toBe(document.body)
 })
+
+// WebKit gives a clicked sidebar button no focus and drops focus to the body,
+// while the system's input-source mark stays at the composer's caret.
+function catalog(heading) {
+  const root = page()
+  root.querySelector('.thread').insertAdjacentHTML('afterend', `<section aria-label="Agents" class="catalog" hidden>${heading ? '<h2>Agents</h2>' : ''}<p>Scout</p></section>`)
+  const composer = root.querySelector('[aria-label="Message"]')
+  composer.focus()
+  composer.blur()
+  root.querySelector('.thread').style.display = 'none'
+  root.querySelector('.catalog').hidden = false
+  expect(document.activeElement).toBe(document.body)
+  return root
+}
+
+it('moves focus from the body to the heading of a page that replaced the thread', () => {
+  const root = catalog(true)
+  expect(landFocus(root, { skip: SKIP, page: true })).toBe(root.querySelector('.catalog h2'))
+  expect(shown(document.activeElement)).toBe(true)
+})
+
+it('moves focus from the body to the region of a page with no heading', () => {
+  const root = catalog(false)
+  const region = root.querySelector('.catalog')
+  expect(landFocus(root, { skip: SKIP, page: true })).toBe(region)
+  expect(region.getAttribute('tabindex')).toBe('-1')
+})
+
+it('leaves focus on the body over a thread', () => {
+  const root = page()
+  expect(document.activeElement).toBe(document.body)
+  expect(landFocus(root, { skip: SKIP })).toBeNull()
+  expect(document.activeElement).toBe(document.body)
+})

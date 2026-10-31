@@ -522,11 +522,12 @@
     untrack(() => { ({ panel: browserPanel, parked: parkedPanel } = workspaceOnNavigate({ panel: browserPanel, parked: parkedPanel }, view)) })
   })
   // A page change or a hidden panel can leave focus on the hidden composer or
-  // terminal. Two frames later, once the opener placed its own focus and the
-  // page drew, focus on a node the user cannot see moves to the page's heading.
+  // terminal, or on the body under the old caret. Two frames later, once the
+  // opener placed its own focus and the page drew, focus on a node the user
+  // cannot see, or on the body over a page, moves to the page's heading or region.
   $effect(() => {
     void [settingsOpen, settingsSection, agentsOpen, artifactsOpen, projectsOpen, fullPage, browserPanel]
-    let frame = requestAnimationFrame(() => { frame = requestAnimationFrame(() => landFocus(workspace, { skip: '#sidebar, .titlebar, [data-panel="workspace"]', fallback: composer })) })
+    let frame = requestAnimationFrame(() => { frame = requestAnimationFrame(() => landFocus(workspace, { skip: '#sidebar, .titlebar, [data-panel="workspace"]', fallback: composer, page: !threadView })) })
     return () => cancelAnimationFrame(frame)
   })
   let workspacePanelWidth = $state(500)

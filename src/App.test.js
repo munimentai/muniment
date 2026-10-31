@@ -1636,6 +1636,57 @@ describe('workspace composer entry', () => {
     hide.remove()
   })
 
+  // WebKit gives a clicked button no focus and drops focus to the body, while
+  // the system's input-source mark stays at the composer's caret. Each page
+  // that replaces the thread takes focus on a part the user sees.
+  it.each([
+    ['Agents', { name: 'Agents', exact: true }, { name: 'Agents', exact: true }],
+    ['Artifacts', { name: 'Artifacts', exact: true }, { name: 'Artifacts', exact: true }],
+    ['Usage', { name: 'Usage', exact: true }, { name: 'Usage', exact: true }],
+    ['Notifications', { name: /^Notifications/ }, { name: 'Notifications', exact: true }],
+  ])('lands focus on the %s page after launch when the click leaves it on the body', async (_, button, region) => {
+    localModeStatus = true
+    const fallback = invoke.getMockImplementation()
+    const notifications = { needs_you: [], running: [], days: [], upcoming: [], counts: { needs_you: 0, running: 0, failed: 0, unread: 0 }, machines: [], agents: [] }
+    invoke.mockImplementation((command, args) => command === 'notifications_list' ? Promise.resolve(notifications) : fallback(command, args))
+    const hide = document.head.appendChild(document.createElement('style'))
+    hide.textContent = '.workspace.agents-open .thread-panel { display: none; }'
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    // Launch opens the thread with the composer focused.
+    await waitFor(() => expect(composer).toHaveFocus())
+    const sidebar = document.getElementById('sidebar')
+    const entry = within(sidebar).getAllByRole('button', button).find((node) => node.closest('.side-action, .sidebar-actions'))
+    await fireEvent.click(entry)
+    // jsdom leaves focus where it was on a click, so the test drops it to the body as WebKit does.
+    const sink = document.body.appendChild(document.createElement('button'))
+    sink.focus()
+    sink.remove()
+    expect(document.activeElement).toBe(document.body)
+    const page = await screen.findByRole('region', region, { timeout: 5000 })
+    await waitFor(() => expect(page).toContainElement(document.activeElement))
+    expect(shown(document.activeElement)).toBe(true)
+    expect(document.activeElement).not.toBe(composer)
+    hide.remove()
+  })
+
+  it('lands focus on the Agents page after launch when the hidden composer keeps it', async () => {
+    localModeStatus = true
+    const hide = document.head.appendChild(document.createElement('style'))
+    hide.textContent = '.workspace.agents-open .thread-panel { display: none; }'
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await waitFor(() => expect(composer).toHaveFocus())
+    await fireEvent.click(within(document.getElementById('sidebar')).getByRole('button', { name: 'Agents', exact: true }))
+    const page = await screen.findByRole('region', { name: 'Agents', exact: true }, { timeout: 5000 })
+    const title = within(page).getByRole('heading', { name: 'Agents' })
+    await waitFor(() => expect(document.activeElement).toBe(title))
+    expect(shown(title)).toBe(true)
+    // The heading takes focus from code only, never from Tab.
+    expect(title).toHaveAttribute('tabindex', '-1')
+    hide.remove()
+  })
+
   it('opens Settings from the settings shortcut with a collapsed sidebar and toggles it', async () => {
     localModeStatus = true
     localStorage.setItem('muniment.sidebar-collapsed', 'collapsed')
