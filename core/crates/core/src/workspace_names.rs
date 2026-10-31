@@ -130,6 +130,52 @@ pub fn resolve(
     Ok(target)
 }
 
+/// Removes each empty `Untitled-*` folder under `root` that the name index
+/// names for no thread. Such a folder holds nothing and belongs to no thread.
+/// A folder that holds anything, a file and a link stay. Returns the count.
+pub fn remove_unused_untitled(profile: &Path, root: &Path) -> Result<usize, String> {
+    if !root.is_dir() || root.is_symlink() {
+        return Ok(0);
+    }
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(profile.join("workspace-names.lock"))
+        .map_err(|e| e.to_string())?;
+    lock.lock_exclusive().map_err(|e| e.to_string())?;
+    let names: BTreeMap<String, String> = match fs::read(profile.join("workspace-names.json")) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| e.to_string())?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
+        Err(e) => return Err(e.to_string()),
+    };
+    let prefix = format!("{}:", root.display());
+    let named = names
+        .iter()
+        .filter(|(key, _)| key.starts_with(&prefix))
+        .map(|(_, leaf)| leaf.to_lowercase())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut removed = 0;
+    for entry in fs::read_dir(root).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let leaf = entry.file_name().to_string_lossy().into_owned();
+        if !leaf.starts_with("Untitled-")
+            || named.contains(&leaf.to_lowercase())
+            || !entry.file_type().is_ok_and(|kind| kind.is_dir())
+        {
+            continue;
+        }
+        let path = entry.path();
+        let empty = fs::read_dir(&path).is_ok_and(|mut entries| entries.next().is_none());
+        // `remove_dir` refuses a folder that is not empty.
+        if empty && fs::remove_dir(&path).is_ok() {
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -175,6 +221,36 @@ mod tests {
         assert_eq!(
             resolve(&dir, &root, "first-12345678", None, None).unwrap(),
             renamed
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn only_empty_untitled_folders_no_thread_names_are_removed() {
+        let dir = std::env::temp_dir().join(format!("workspace-names-{}", uuid::Uuid::new_v4()));
+        let root = dir.join("sessions");
+        let named = resolve(&dir, &root, "thread-aaaa1111", None, None).unwrap();
+        assert!(named.ends_with("Untitled-aaaa1111"));
+        for leaf in ["Untitled-orphan01", "Untitled-files001", "Plan-orphan02"] {
+            fs::create_dir_all(root.join(leaf)).unwrap();
+        }
+        fs::write(root.join("Untitled-files001/notes.txt"), "kept").unwrap();
+        fs::create_dir_all(root.join("Untitled-nested01/.muniment")).unwrap();
+        fs::write(root.join("Untitled-file0001"), "a file, not a folder").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(dir.join("elsewhere"), root.join("Untitled-link0001")).unwrap();
+        assert_eq!(remove_unused_untitled(&dir, &root).unwrap(), 1);
+        assert!(!root.join("Untitled-orphan01").exists());
+        assert!(named.is_dir());
+        assert!(root.join("Untitled-files001/notes.txt").exists());
+        assert!(root.join("Untitled-nested01/.muniment").is_dir());
+        assert!(root.join("Plan-orphan02").is_dir());
+        assert!(root.join("Untitled-file0001").is_file());
+        #[cfg(unix)]
+        assert!(root.join("Untitled-link0001").is_symlink());
+        // A missing root has nothing to remove.
+        assert_eq!(
+            remove_unused_untitled(&dir, &dir.join("missing")).unwrap(),
+            0
         );
         fs::remove_dir_all(dir).unwrap();
     }

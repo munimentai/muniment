@@ -443,6 +443,12 @@ pub fn migrate_session_names(profile: &Path) -> Result<(), String> {
     if !root.is_dir() || root.is_symlink() {
         return Ok(());
     }
+    let removed = crate::workspace_names::remove_unused_untitled(profile, &root)?;
+    if removed > 0 {
+        crate::runtime_eprintln!(
+            "muniment-runtime: session_names removed_empty_untitled={removed}"
+        );
+    }
     let ids = fs::read_dir(&root)
         .map_err(|e| e.to_string())?
         .filter_map(Result::ok)
@@ -554,6 +560,17 @@ mod tests {
             fs::read_to_string(first.join("result.txt")).unwrap(),
             "kept"
         );
+    }
+    #[test]
+    fn the_startup_pass_removes_empty_untitled_folders_no_thread_names() {
+        let fixture = Fixture::new();
+        let profile = fixture.profile();
+        let kept = workspace(&profile, "thread-one").unwrap();
+        let sessions = kept.parent().unwrap().to_path_buf();
+        fs::create_dir_all(sessions.join("Untitled-orphan01")).unwrap();
+        migrate_session_names(&profile).unwrap();
+        assert!(kept.is_dir());
+        assert!(!sessions.join("Untitled-orphan01").exists());
     }
     #[test]
     fn metadata_migration_preserves_conflicting_directories() {
