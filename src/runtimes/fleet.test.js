@@ -82,6 +82,15 @@ describe('owners', () => {
   it('offers every member the app does not reach as a place for a new thread', () => {
     expect(offloadTargets(swarm, null).map((target) => `${target.coreId}:${target.kind}`)).toEqual([`${POD}:container`, `${STUDIO}:desktop`])
   })
+
+  it('lists a paired machine that is offline once, as its paired row', () => {
+    // A paired runtime's id is its core id. Offline, it answers no
+    // `swarm.members`, so only the pairing names it.
+    const offline = { self: { local: LAPTOP }, members: [{ runtime_id: LAPTOP, runtime_name: 'Laptop', online: true }, { runtime_id: POD, runtime_name: 'Docker container', form_factor: null, online: false }] }
+    const list = { runtimes: [{ id: 'local', local: true, status: 'online' }, { id: POD, name: 'Docker container', kind: 'container', status: 'offline' }] }
+    expect(offloadTargets(offline, list)).toEqual([])
+    expect(offloadTargets(offline, { runtimes: [list.runtimes[0]] }).map((target) => target.coreId)).toEqual([POD])
+  })
 })
 
 describe('offline and bootstrap', () => {

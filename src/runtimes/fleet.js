@@ -232,9 +232,10 @@ function auditTime(value) {
 
 // The fleet members a new thread can start on, beyond the machines this app
 // reaches directly: each with its core id, name, shape and whether it
-// answers. Containers count like any member.
+// answers. Containers count like any member. A paired machine lists once,
+// as its paired row, even while it is offline: its pairing id is its core id.
 export function offloadTargets(swarm, runtimeList) {
-  const reached = new Set(Object.values(swarm?.self ?? {}))
+  const reached = new Set([...Object.values(swarm?.self ?? {}), ...(runtimeList?.runtimes ?? []).map((runtime) => runtime.id)])
   return (swarm?.members ?? [])
     .filter((member) => !reached.has(member.runtime_id) && !member.fleet?.removed)
     .map((member) => ({ ...memberMachine(swarm, member.runtime_id, runtimeList), coreId: member.runtime_id }))
