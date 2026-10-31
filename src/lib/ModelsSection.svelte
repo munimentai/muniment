@@ -594,7 +594,7 @@
           {#each signedIn as account (account.id)}
             <Row title={account.label} meta={account.plan || 'Subscription'}>
               {#snippet icon()}<LucideIcon name="credit-card" size={16} />{/snippet}
-              <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${account.label}`} onclick={() => askDisconnect(account.label, 'Muniment removes this sign-in. Sign in again to use it.', () => removeAccount(account))}><LucideIcon name="unplug" size={16} variant="action" /></button>
+              <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${account.label}`} onclick={() => askDisconnect(`the ${provider.name} account ${account.label}`, 'Muniment removes this sign-in. Sign in again to use it.', () => removeAccount(account))}><LucideIcon name="unplug" size={16} variant="action" /></button>
             </Row>
           {/each}
         </Group>

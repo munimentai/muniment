@@ -14,6 +14,7 @@
   import HoldSignIn from './HoldSignIn.svelte'
   import ConfirmDialog from './ConfirmDialog.svelte'
   import { hereLine, routerHold } from './fleet-accounts.js'
+  import { familyName } from './provider-catalog.js'
 
   let { tauri, listen = (...args) => window.__TAURI__?.event?.listen(...args), settings, family, onsettings, fleet = null, onheld, runtime = 'local' } = $props()
 
@@ -317,7 +318,7 @@
 </div>
 
 {#if removing}
-  <ConfirmDialog title={`Disconnect ${removing.label}?`} cancelLabel="Cancel" confirmLabel="Disconnect" destructive onDecision={disconnect}>
+  <ConfirmDialog title={`Disconnect the ${familyRow?.name ?? familyName(family)} ${removing.source === 'key' ? 'key' : 'account'} ${removing.label}?`} cancelLabel="Cancel" confirmLabel="Disconnect" destructive onDecision={disconnect}>
     <p>{removing.source === 'key' ? 'Muniment deletes this key. Add it again to use it.' : 'Muniment removes this sign-in. Sign in again to use it.'}</p>
   </ConfirmDialog>
 {/if}

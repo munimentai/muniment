@@ -78,8 +78,9 @@ it('shows each Anthropic account Claude Code signed in to as its own card, and a
   // The accounts are the cards. No Claude Code connection row stands over them.
   expect(within(group).queryByTestId('provider-connection')).not.toBeInTheDocument()
   await fireEvent.click(within(group).getByRole('button', { name: 'Disconnect home@example.test' }))
-  // Disconnect asks once and removes nothing until the user confirms.
-  const dialog = await screen.findByRole('dialog', { name: 'Disconnect home@example.test?' })
+  // Disconnect asks once, names the provider, since one email can sign in to
+  // several, and removes nothing until the user confirms.
+  const dialog = await screen.findByRole('dialog', { name: 'Disconnect the Anthropic account home@example.test?' })
   expect(tauri.invoke).not.toHaveBeenCalledWith('model_router_remove_account', expect.anything())
   await fireEvent.click(within(dialog).getByRole('button', { name: 'Disconnect' }))
   await waitFor(() => expect(tauri.invoke).toHaveBeenCalledWith('model_router_remove_account', { id: 'a2' }))
@@ -108,7 +109,7 @@ it('lists the Anthropic accounts on its connect page, each with Disconnect, and 
   await fireEvent.click(screen.getByRole('button', { name: 'Add another account' }))
   expect(tauri.invoke).toHaveBeenCalledWith('local_mode_account_login_start', { provider: 'anthropic', runtime: 'box' })
   await fireEvent.click(screen.getByRole('button', { name: 'Disconnect work@example.test' }))
-  await fireEvent.click(within(await screen.findByRole('dialog', { name: 'Disconnect work@example.test?' })).getByRole('button', { name: 'Disconnect' }))
+  await fireEvent.click(within(await screen.findByRole('dialog', { name: 'Disconnect the Anthropic account work@example.test?' })).getByRole('button', { name: 'Disconnect' }))
   await waitFor(() => expect(tauri.invoke).toHaveBeenCalledWith('model_router_remove_account', { id: 'a1' }))
   await waitFor(() => expect(screen.queryByText('work@example.test')).toBeNull())
 })

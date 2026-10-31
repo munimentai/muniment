@@ -60,13 +60,20 @@ describe('Disconnect', () => {
     const invoke = vi.fn(async () => ({ ...settings, accounts: [] }))
     render(ModelAccounts, { tauri: { invoke }, settings: { ...settings, accounts: [key] }, family: 'openai', fleet: null, onsettings: vi.fn() })
     await fireEvent.click(screen.getByRole('button', { name: 'Disconnect invalid-test' }))
-    const dialog = await screen.findByRole('dialog', { name: 'Disconnect invalid-test?' })
+    const dialog = await screen.findByRole('dialog', { name: 'Disconnect the OpenAI key invalid-test?' })
     expect(dialog).toHaveTextContent('Muniment deletes this key.')
     await fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
     expect(invoke).not.toHaveBeenCalled()
     await fireEvent.click(screen.getByRole('button', { name: 'Disconnect invalid-test' }))
     await fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Disconnect' }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('model_router_remove_account', { id: 'k1' }))
+  })
+
+  it('names the provider of a sign-in whose email another provider shares', async () => {
+    const shared = { ...subscription('s1', 'support@example.test'), source: 'subscription' }
+    render(ModelAccounts, { tauri: { invoke: vi.fn() }, settings: { ...settings, accounts: [shared] }, family: 'openai', fleet: null })
+    await fireEvent.click(screen.getByRole('button', { name: 'Disconnect support@example.test' }))
+    expect(await screen.findByRole('dialog', { name: 'Disconnect the OpenAI account support@example.test?' })).toBeInTheDocument()
   })
 
   it('keeps a key name as typed, with no automatic capital', async () => {
