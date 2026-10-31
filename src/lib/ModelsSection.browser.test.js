@@ -31,7 +31,11 @@ async function models() {
   const target = document.createElement('div')
   document.body.append(target)
   component = mount(Settings, { target, props: { tauri, listen: async () => () => {}, inventory, section: 'models', onclose: () => { closed += 1 } } })
-  await wait(500)
+  const end = performance.now() + 4000
+  while (!document.querySelector('[aria-label="Disconnect Jev"]') || !document.querySelector('[aria-label="Disconnect Jev · TypeSafe API"]')) {
+    if (performance.now() > end) throw new Error('Settings › Models did not render both Disconnect buttons')
+    await wait(30)
+  }
   return { calls, closed: () => closed }
 }
 const confirm = () => document.querySelector('[data-panel="confirm"]')
