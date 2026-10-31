@@ -35,6 +35,8 @@ const USAGE_TIMEOUT: Duration = Duration::from_secs(45);
 /// How long a forwarded redirect waits for Claude Code to finish and for
 /// `claude auth status` to name the account.
 const CONFIRM_TIMEOUT: Duration = Duration::from_secs(90);
+/// How long the login's output may trail its exit before the reason is read.
+const OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 const START_ERROR: &str = "The sign-in could not start. Try again.";
 const MISSING: &str =
     "Claude Code is not on this machine yet. Start a chat once so Muniment installs it, then sign in.";
@@ -650,6 +652,8 @@ pub(super) fn start(service: &Arc<ModelService>) -> Result<Value, String> {
         }
     };
     let lines = Arc::new(Mutex::new(Vec::<String>::new()));
+    let (drained, readers_done) = std::sync::mpsc::channel::<()>();
+    let mut readers = 0;
     for pipe in [
         child
             .stdout
@@ -664,13 +668,17 @@ pub(super) fn start(service: &Arc<ModelService>) -> Result<Value, String> {
     .flatten()
     {
         let lines = Arc::clone(&lines);
+        let drained = drained.clone();
+        readers += 1;
         std::thread::spawn(move || {
             for line in BufReader::new(pipe).lines() {
                 let Ok(line) = line else { break };
                 lines.lock().unwrap_or_else(|e| e.into_inner()).push(line);
             }
+            let _ = drained.send(());
         });
     }
+    drop(drained);
     // Claude Code hands its browser the URL whose redirect comes back to its
     // own listener, and prints another whose page shows a code to paste.
     let mut deadline = Instant::now() + URL_TIMEOUT;
@@ -760,6 +768,17 @@ pub(super) fn start(service: &Arc<ModelService>) -> Result<Value, String> {
                 }
             };
             stdin.lock().unwrap_or_else(|e| e.into_inner()).take();
+            // The readers can trail a failed exit, so the reason Claude Code
+            // printed last waits for them, but never past a bound.
+            if exit.is_some_and(|exit| !exit.success()) {
+                let drain_deadline = Instant::now() + OUTPUT_DRAIN_TIMEOUT;
+                for _ in 0..readers {
+                    let left = drain_deadline.saturating_duration_since(Instant::now());
+                    if readers_done.recv_timeout(left).is_err() {
+                        break;
+                    }
+                }
+            }
             let cancelled = stop.load(Ordering::SeqCst);
             let result = match exit {
                 Some(exit) if exit.success() => finish(&app.agent, &executable, &id),
