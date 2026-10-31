@@ -170,6 +170,8 @@ export function pickerGroups(inventory, query = '', { all = false } = {}) {
         source: 'router',
         classifier: inventory.router_classifier || 'Automatic',
         manage: !routing,
+        // A connected decision model with routing off: the tab says routing is off.
+        decisionModel: !!(inventory.router_classifier || inventory.router_decision_model),
         models: inventory.router_classifier ? [{ id: 'auto', context: '', label: `${modelLabel(inventory.router_classifier)} picks`, provider: router.id, choice: 'auto', accounts: 0, off: false }] : [],
       })
     }

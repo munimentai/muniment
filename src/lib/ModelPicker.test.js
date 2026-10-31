@@ -109,6 +109,15 @@ it('links the Model router heading to Decision models while routing is off', asy
   expect(onrouting).toHaveBeenCalledTimes(1)
 })
 
+it('says routing is off and points to Roles while a decision model is connected', async () => {
+  const onrouting = vi.fn()
+  render(ModelPicker, props({ providers: [{ id: 'muniment-router', name: 'Router', source: 'router', models: [] }], router_classifier: null, router_decision_model: true, router_models: [{ id: 'openai/gpt', family: 'openai', model: 'gpt', accounts: 2 }] }, { onrouting }))
+  expect(screen.getByText('Routing is off. Turn on Route each message in Settings › Models › Roles.')).toBeInTheDocument()
+  expect(screen.queryByText('Connect a decision model to route each message.')).toBeNull()
+  await fireEvent.click(screen.getByRole('button', { name: 'Manage model routing' }))
+  expect(onrouting).toHaveBeenCalledTimes(1)
+})
+
 it('lists only the picked provider\'s models without a search', async () => {
   const inventory = { providers: [
     { id: 'custom-omlx', name: 'oMLX', source: 'custom', models: [{ id: 'Qwen3.8-27B-4bit' }] },
