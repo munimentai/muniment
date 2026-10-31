@@ -134,6 +134,9 @@
 
 <style>
   .notifications-page { grid-area: thread; display: flex; flex-direction: column; overflow: hidden; }
+  /* The scrollbar's transparent track keeps its width on a short page, so a
+     filter that empties the page moves nothing. */
+  .notifications-page :global(.panel-page) { overflow-y: scroll; }
   .head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; }
   .crumbs, .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
   h2 { margin: 0; color: var(--ink); font: 600 var(--text-17) var(--font-heading, var(--font-human)); }
