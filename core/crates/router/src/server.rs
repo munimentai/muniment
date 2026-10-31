@@ -1443,6 +1443,8 @@ pub(crate) fn complete(
     );
     let (_, exclusions) = route_availability(&config, &state.ledger(), (state.now_ms)());
     let mut refusals: Vec<String> = Vec::new();
+    // Accounts whose refused access token this turn already traded once.
+    let mut renewed = std::collections::HashSet::new();
     let mut routes = super::options(&config);
     // Prefer the configured fallback, then another provider, then remaining models.
     routes.sort_by_key(|route| {
@@ -1807,6 +1809,33 @@ pub(crate) fn complete(
                     let detail = response
                         .into_string()
                         .unwrap_or_else(|_| format!("The provider answered {status}."));
+                    // An upstream can refuse an access token before the expiry the
+                    // account records. The refresh token is traded once, and the
+                    // turn tries the account again on the fresh credential.
+                    if usage::credential_refused(status, &detail)
+                        && !account.id.starts_with(super::config::SHARED_ACCOUNT_PREFIX)
+                        && renewed.insert(account.id.clone())
+                    {
+                        match native_auth::refresh_refused_account_in(
+                            &state.backend,
+                            &account.id,
+                            &account.credential,
+                            now,
+                            REFRESH_TIMEOUT,
+                        ) {
+                            Some(Ok(_)) => {
+                                if let Some(candidate) =
+                                    candidates.accounts.iter_mut().find(|a| a.id == account.id)
+                                {
+                                    candidate.enabled = true;
+                                }
+                                tried -= 1;
+                                continue;
+                            }
+                            Some(Err(message)) => refusals.push(message),
+                            None => {}
+                        }
+                    }
                     let cools = usage::status_cools(status);
                     state.record_error(
                         &account.id,
@@ -2627,6 +2656,76 @@ mod tests {
         assert_eq!(ledger.account("s1").unwrap().errors, 1);
         assert_eq!(ledger.account("s2").unwrap().input_tokens, 11);
         assert_eq!(ledger.account("s2").unwrap().requests, 1);
+    }
+
+    #[test]
+    fn a_token_the_upstream_calls_expired_is_refreshed_once_and_the_turn_retried() {
+        let agent = agent_dir();
+        let expired = json!({
+            "error": {
+                "message": "Your authentication token has expired. Please try refreshing it.",
+                "code": "token_expired"
+            },
+            "status": 401
+        })
+        .to_string();
+        let payload = [
+            json!({"type":"response.output_text.delta","delta":"morning"}),
+            json!({"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":1}}}),
+        ].iter().map(|event| format!("data: {event}\n\n")).collect::<String>();
+        let (url, seen) = upstream(vec![(401, expired, false), (200, payload, true)]);
+        let fresh = json!({"access_token":"fresh-access","refresh_token":"fresh-refresh","expires_in":864000});
+        let (token_url, refreshes) = upstream(vec![(200, fresh.to_string(), false)]);
+        native_auth::set_refresh_endpoint_for_tests(Some(token_url));
+        let mut saved = account("s1", &url);
+        // The recorded expiry is far ahead, so only the refusal can start the trade.
+        saved.credential = Credential::Subscription {
+            provider: "openai-codex".into(),
+            access: "stale-access".into(),
+            refresh: Some("stale-refresh".into()),
+            expires_ms: Some(i64::MAX / 2),
+            account_id: Some("s1".into()),
+            email: Some("pat@example.com".into()),
+            plan: Some("pro".into()),
+            renews_at_ms: None,
+        };
+        config::save(&agent, &config(vec![saved])).unwrap();
+        let handle = start_with_clock(agent.clone(), fixed_clock).unwrap();
+        let (status, body) = call(
+            handle.endpoint(),
+            "POST",
+            "/v1/chat/completions",
+            Some(&turn("auto", true)),
+            &handle.endpoint().token,
+        );
+        native_auth::set_refresh_endpoint_for_tests(None);
+        assert_eq!(status, 200, "{body}");
+        assert!(body.contains("morning"), "{body}");
+        assert_eq!(refreshes.try_iter().count(), 1);
+        let bearers: Vec<String> = seen
+            .try_iter()
+            .map(|request| request["__authorization"].as_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(bearers, ["Bearer stale-access", "Bearer fresh-access"]);
+        let kept = config::load(&agent).unwrap();
+        let Credential::Subscription {
+            access,
+            refresh,
+            email,
+            ..
+        } = &kept.accounts[0].credential
+        else {
+            panic!("The account lost its subscription.");
+        };
+        assert_eq!(access, "fresh-access");
+        assert_eq!(refresh.as_deref(), Some("fresh-refresh"));
+        assert_eq!(email.as_deref(), Some("pat@example.com"));
+        assert!(usage::load(&agent)
+            .account("s1")
+            .unwrap()
+            .last_error
+            .is_none());
+        std::fs::remove_dir_all(agent).unwrap();
     }
 
     #[test]
