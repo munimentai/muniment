@@ -19,6 +19,7 @@ mod e2e_folder_dialog;
 mod fonts;
 mod home;
 mod extend;
+mod input_mark;
 mod launcher;
 #[cfg(target_os = "linux")]
 mod linux_runtime_service;
@@ -193,6 +194,7 @@ pub fn run() {
             cef_browser::artifact_read,
             onboarding_diagnostics::onboarding_model_settings_error,
             fonts::installed_fonts,
+            input_mark::input_mark_dismiss,
             auth::auth_sign_in,
             auth::auth_status,
             auth::auth_entitlement_snapshot,
@@ -464,6 +466,7 @@ mod command_thread_tests {
         "dictation_status",
         "dictation_stop",
         "home_folder_settings",
+        "input_mark_dismiss",
         "installed_fonts",
         "launcher_close",
         "launcher_is_visible",

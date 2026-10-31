@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'vitest'
-import { landFocus, shown } from './focus-landing.js'
+import { landFocus, shown, takesText } from './focus-landing.js'
 
 const SKIP = '#sidebar, .titlebar, [data-panel="workspace"]'
 afterEach(() => { document.body.innerHTML = '' })
@@ -94,4 +94,14 @@ it('leaves focus on the body over a thread', () => {
   expect(document.activeElement).toBe(document.body)
   expect(landFocus(root, { skip: SKIP })).toBeNull()
   expect(document.activeElement).toBe(document.body)
+})
+
+it('tells a field that takes typed text from a heading, a button and the body', () => {
+  document.body.innerHTML = `
+    <h2 tabindex="-1">Agents</h2><button>Run now</button><input type="checkbox" aria-label="Pick">
+    <input aria-label="Name"><input type="search" aria-label="Search"><textarea aria-label="Message"></textarea>
+    <div contenteditable="true">Draft</div>`
+  const [heading, button, box, name, search, message, draft] = document.body.querySelectorAll('h2, button, input, textarea, div')
+  expect([heading, button, box, document.body, null].map(takesText)).toEqual([false, false, false, false, false])
+  expect([name, search, message, draft].map(takesText)).toEqual([true, true, true, true])
 })

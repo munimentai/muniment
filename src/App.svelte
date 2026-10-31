@@ -16,7 +16,7 @@
   import StatusChip from './lib/ui/StatusChip.svelte'
   import StatusRing from './sidebar/StatusRing.svelte'
   import { floatingMenu } from './lib/floating-menu.js'
-  import { landFocus } from './lib/focus-landing.js'
+  import { landFocus, takesText } from './lib/focus-landing.js'
   import { panelScroll } from './lib/panel-scroll.js'
   import UserQuestion from './lib/UserQuestion.svelte'
   import { THREAD_ORGANIZATION_KEY, readThreadOrganization, listedThreads } from './lib/thread-organization.js'
@@ -531,9 +531,15 @@
   // terminal, or on the body under the old caret. Two frames later, once the
   // opener placed its own focus and the page drew, focus on a node the user
   // cannot see, or on the body over a page, moves to the page's heading or region.
+  // When focus then rests off any text field, the shell hides the system's
+  // input-source mark, which WebKit leaves at the old caret.
   $effect(() => {
     void [settingsOpen, settingsSection, agentsOpen, artifactsOpen, projectsOpen, fullPage, browserPanel]
-    let frame = requestAnimationFrame(() => { frame = requestAnimationFrame(() => landFocus(workspace, { skip: '#sidebar, .titlebar, [data-panel="workspace"]', fallback: composer, page: !threadView })) })
+    const land = () => {
+      landFocus(workspace, { skip: '#sidebar, .titlebar, [data-panel="workspace"]', fallback: composer, page: !threadView })
+      if (!takesText(document.activeElement)) tauri?.invoke('input_mark_dismiss')?.catch(() => {})
+    }
+    let frame = requestAnimationFrame(() => { frame = requestAnimationFrame(land) })
     return () => cancelAnimationFrame(frame)
   })
   let workspacePanelWidth = $state(500)

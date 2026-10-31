@@ -41,3 +41,14 @@ export function landFocus(root, { skip = '', fallback = null, page = false } = {
   active?.blur?.()
   return null
 }
+
+const NO_TEXT = new Set(['button', 'checkbox', 'color', 'file', 'hidden', 'image', 'radio', 'range', 'reset', 'submit'])
+
+// Whether the element takes typed text, so the system draws its caret and its
+// input-source mark there. WebKit leaves that mark at the old caret when focus
+// moves to an element that takes no text, and only the shell can hide it.
+export function takesText(element) {
+  if (!element || element === document.body) return false
+  if (element.isContentEditable || element.localName === 'textarea') return true
+  return element.localName === 'input' && !NO_TEXT.has(element.type)
+}

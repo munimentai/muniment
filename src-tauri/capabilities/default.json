@@ -63,6 +63,7 @@
     "allow-artifact-read",
     "allow-onboarding-model-settings-error",
     "allow-installed-fonts",
+    "allow-input-mark-dismiss",
     "allow-auth-sign-in",
     "allow-auth-status",
     "allow-auth-entitlement-snapshot",
