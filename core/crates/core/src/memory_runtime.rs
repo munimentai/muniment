@@ -835,6 +835,74 @@ const MEMORY_SAVE_APPROVAL: &str = r#"      const clip = (text, limit) => { cons
       }
 "#;
 
+/// How old a thread extension is before the startup sweep may remove it, so
+/// a run that wrote its file and is about to start Pi keeps it.
+const EXTENSION_SWEEP_MIN_AGE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
+/// Removes the thread extensions, and their temporary files, that sessions
+/// which ended before this runtime started left in `database_root`. A file
+/// a running process names in its arguments, as a live Pi names its
+/// `--extension`, stays, and so does a file written within the last hour.
+/// Without the process list nothing is removed. Answers the count removed.
+pub fn sweep_ended_extensions(database_root: &Path) -> usize {
+    match running_process_arguments() {
+        Some(arguments) => {
+            sweep_extensions(database_root, &arguments, std::time::SystemTime::now())
+        }
+        None => 0,
+    }
+}
+
+fn sweep_extensions(database_root: &Path, arguments: &str, now: std::time::SystemTime) -> usize {
+    let Ok(entries) = std::fs::read_dir(database_root) else {
+        return 0;
+    };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let extension = name.starts_with("memory-search-extension-")
+            && (name.ends_with(".mjs") || name.ends_with(".js"));
+        let temporary = name.starts_with(".memory-search-extension.") && name.ends_with(".tmp");
+        if !(extension || temporary) || arguments.contains(name.as_str()) {
+            continue;
+        }
+        // The entry's own metadata: a symbolic link is not followed or removed.
+        let old = entry.metadata().ok().is_some_and(|metadata| {
+            metadata.is_file()
+                && metadata
+                    .modified()
+                    .ok()
+                    .and_then(|modified| now.duration_since(modified).ok())
+                    .is_some_and(|age| age >= EXTENSION_SWEEP_MIN_AGE)
+        });
+        if old && std::fs::remove_file(entry.path()).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+/// The arguments of every running process, one per line.
+#[cfg(unix)]
+fn running_process_arguments() -> Option<String> {
+    let output = std::process::Command::new("/bin/ps")
+        .args(["axww", "-o", "args="])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Windows has no process list here, so the sweep keeps every file.
+#[cfg(not(unix))]
+fn running_process_arguments() -> Option<String> {
+    None
+}
+
 #[cfg(not(windows))]
 fn replace_extension(temporary: &Path, destination: &Path) -> std::io::Result<()> {
     std::fs::rename(temporary, destination)
@@ -875,6 +943,84 @@ mod tests {
     use std::fs;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{mpsc, Arc, Barrier};
+
+    #[cfg(unix)]
+    fn aged(path: &Path, age: std::time::Duration) {
+        fs::write(path, "export default function () {}\n").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - age)
+            .unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_startup_sweep_removes_extensions_of_ended_sessions_only() {
+        let root = std::env::temp_dir().join(Uuid::new_v4().to_string());
+        fs::create_dir_all(&root).unwrap();
+        let runtime = ApplicationMemoryRuntime::new(root.join("config"), root.clone());
+        let day = std::time::Duration::from_secs(24 * 60 * 60);
+        let ended_mjs = runtime.agent_extension_path("01a19206-af92-710f-8dee-dfab9ba6301a");
+        let ended_js = ended_mjs.with_extension("js");
+        let ended_tmp = root.join(".memory-search-extension.0190.tmp");
+        let running = runtime.agent_extension_path("thread-running");
+        let fresh = runtime.agent_extension_path("thread-fresh");
+        let index = root.join("memory-index.sqlite3");
+        for path in [&ended_mjs, &ended_js, &ended_tmp, &running, &index] {
+            aged(path, day);
+        }
+        aged(&fresh, std::time::Duration::from_secs(60));
+        let linked = root.join("memory-search-extension-linked.mjs");
+        std::os::unix::fs::symlink(&index, &linked).unwrap();
+        let arguments = format!(
+            "/usr/local/bin/bun pi --mode rpc --extension {}\n/sbin/launchd\n",
+            running.display()
+        );
+        assert_eq!(
+            sweep_extensions(&root, &arguments, std::time::SystemTime::now()),
+            3
+        );
+        for gone in [&ended_mjs, &ended_js, &ended_tmp] {
+            assert!(!gone.exists(), "{}", gone.display());
+        }
+        for kept in [&running, &fresh, &index, &linked] {
+            assert!(fs::symlink_metadata(kept).is_ok(), "{}", kept.display());
+        }
+        // A missing folder sweeps nothing.
+        assert_eq!(
+            sweep_extensions(&root.join("missing"), "", std::time::SystemTime::now()),
+            0
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_startup_sweep_keeps_the_file_a_running_process_names() {
+        let root = std::env::temp_dir().join(Uuid::new_v4().to_string());
+        fs::create_dir_all(&root).unwrap();
+        let runtime = ApplicationMemoryRuntime::new(root.join("config"), root.clone());
+        let live = runtime.agent_extension_path(&Uuid::new_v4().to_string());
+        let ended = runtime.agent_extension_path(&Uuid::new_v4().to_string());
+        let day = std::time::Duration::from_secs(24 * 60 * 60);
+        aged(&live, day);
+        aged(&ended, day);
+        // The child names the file in its arguments, as a live Pi does.
+        let mut child = std::process::Command::new("/bin/sh")
+            .args(["-c", "sleep 30; exit 0", "pi"])
+            .arg(&live)
+            .spawn()
+            .unwrap();
+        let removed = sweep_ended_extensions(&root);
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert_eq!(removed, 1);
+        assert!(live.exists());
+        assert!(!ended.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn agent_facts_are_scoped_recoverable_and_recalled_after_reopen() {
