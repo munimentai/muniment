@@ -402,6 +402,11 @@ impl RuntimeAttachState {
         self.approval.clone()
     }
 
+    /// Returns the profile directory this runtime state opened.
+    pub fn profile_directory(&self) -> &Path {
+        &self.profile_directory
+    }
+
     /// Returns the version the runtime announces on attach.
     pub fn runtime_version(&self) -> &'static str {
         self.host.runtime_version
