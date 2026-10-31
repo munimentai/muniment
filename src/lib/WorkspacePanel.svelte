@@ -3,7 +3,6 @@
   import { getCurrentWindow } from '@tauri-apps/api/window'
   import { confirm } from '@tauri-apps/plugin-dialog'
   import LucideIcon from './LucideIcon.svelte'
-  import OverflowText from './OverflowText.svelte'
   import { workspaceLabel, browserLabel } from './workspace-labels.js'
   import { overflowFade } from './overflow-fade.js'
   import BrowserWorkspace from './BrowserWorkspace.svelte'
@@ -99,7 +98,7 @@
       {#each tabs as tab (tab.id)}
         <div class="tab" class:active={selected === tab.id}>
           <button type="button" role="tab" title={tab.file?.path || (tab.id === 'files' ? folderPaths[contextKey] : tab.id === 'terminal' ? terminalPaths[contextKey] : tabName(tab))} aria-selected={selected === tab.id} tabindex={selected === tab.id ? 0 : -1} onclick={() => onselect(tab.id)}>
-            {#if tab.file}<FileIcon name={tab.name} />{:else}<LucideIcon name={tab.icon} />{/if}{#if tab.id === 'files' || tab.id === 'terminal'}<OverflowText text={tabName(tab)} side="left" scroll={false} />{:else}<span class="tab-label">{tabName(tab)}</span>{/if}{#if dirtyFiles.has(tab.id)}<span class="dirty" aria-label="Unsaved changes">•</span>{/if}
+            {#if tab.file}<FileIcon name={tab.name} />{:else}<LucideIcon name={tab.icon} />{/if}<span class="tab-label">{tabName(tab)}</span>{#if dirtyFiles.has(tab.id)}<span class="dirty" aria-label="Unsaved changes">•</span>{/if}
           </button>
           <button class="tab-close" type="button" aria-label={`Close ${tab.name} tab`} onclick={() => close(tab.id)}><LucideIcon name="x" size={12} /></button>
         </div>
@@ -130,7 +129,7 @@
   button { display:flex; align-items:center; gap:6px; min-width:0; padding:5px 6px; border:0; border-radius:var(--radius-control); background:transparent; color:var(--muted); font:var(--text-12) var(--font-human); cursor:pointer; }
   .active button { color:var(--ink); } button:hover { background:var(--faint); }
   .tab button[role="tab"] { flex:1; overflow:hidden; }
-  /* A folder path keeps its end in view. A name keeps its start and ends in an ellipsis. */
+  /* A tab name keeps its start and ends in an ellipsis only when it does not fit. The tooltip holds the full path. */
   .tab-label { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:left; }
   .tab :global(svg), .dirty { flex:none; }
   .tab-close { flex:none; padding:4px; } .panel-control { flex:none; width:28px; height:28px; justify-content:center; }

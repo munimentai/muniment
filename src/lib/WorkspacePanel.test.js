@@ -34,6 +34,24 @@ it('keeps each context shell alive and restores it without restarting', async ()
   vi.unstubAllGlobals()
 })
 
+it('keeps the start of a terminal tab name, so a thread folder never loses its first letters', async () => {
+  vi.stubGlobal('ResizeObserver', class {observe() {} disconnect() {}})
+  vi.stubGlobal('matchMedia', () => ({addEventListener() {}, removeEventListener() {}}))
+  const invoke = vi.fn(async (command, args) => {
+    if (command === 'workspace_folders') return [{path: '/work/Pong_test_renamed-0a1b2c3d'}]
+    if (command === 'terminal_start') return args.path
+    if (command === 'terminal_read') return {bytes: [], exited: false}
+  })
+  await import('./TerminalWorkspace.svelte')
+  const view = render(WorkspacePanel, {props: {tauri: {invoke}, selected: 'terminal', context: {threadId: 't1'}, onselect: vi.fn()}})
+  const tab = await screen.findByRole('tab', {name: 'Pong test renamed'}, {timeout: 10000})
+  const label = tab.querySelector('.tab-label')
+  expect(label).toHaveTextContent('Pong test renamed')
+  expect(label.classList.contains('fade-viewport')).toBe(false)
+  view.unmount()
+  vi.unstubAllGlobals()
+})
+
 it('keeps the start of an artifact name and ends a long one in an ellipsis with the full name as its tooltip', async () => {
   vi.stubGlobal('ResizeObserver', class {observe() {} disconnect() {}})
   const invoke = vi.fn(async (command) => {

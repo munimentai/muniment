@@ -202,9 +202,9 @@ The `@` file list supports arrows, Enter, Tab and Escape.
 
 Workspace tabs keep a fixed width. Their scroll area hides its scrollbar and
 fades clipped tabs without covering panel controls. Browser labels preserve the
-host and URL path, query and fragment, with a right fade. Folder labels use the
-last folder with a left fade. Terminal and Files share the full-path scroll
-component. Hidden features leave no controls, Settings entries or empty space.
+host and URL path, query and fragment. Folder labels use the last folder. A
+label keeps its start and ends in an ellipsis when it does not fit. Terminal
+and Files headers share the full-path scroll component. Hidden features leave no controls, Settings entries or empty space.
 
 ## Tools
 
