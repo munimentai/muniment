@@ -208,17 +208,19 @@ mod macos_os_log {
     }
 }
 
-/// Names the diagnostic event for one attach bind failure.
+/// Names the diagnostic event the bind records for one attach bind failure.
+/// A contended lock records none here: the runtime yields to the runtime that
+/// holds it, and the activation records that one `instance_lock_wait` line.
 #[cfg(any(target_os = "macos", test))]
-fn bind_failure_event(failure: MacosAttachBindFailure) -> MacosDiagnosticEvent {
+fn bind_failure_event(failure: MacosAttachBindFailure) -> Option<MacosDiagnosticEvent> {
     match failure {
-        MacosAttachBindFailure::Contended => MacosDiagnosticEvent::InstanceLockWait,
-        MacosAttachBindFailure::Unavailable => MacosDiagnosticEvent::SocketBindFailed,
-        MacosAttachBindFailure::SocketPathTooLong => MacosDiagnosticEvent::SocketPathTooLong,
+        MacosAttachBindFailure::Contended => None,
+        MacosAttachBindFailure::Unavailable => Some(MacosDiagnosticEvent::SocketBindFailed),
+        MacosAttachBindFailure::SocketPathTooLong => Some(MacosDiagnosticEvent::SocketPathTooLong),
         MacosAttachBindFailure::DesktopExecutableCheckFailed => {
-            MacosDiagnosticEvent::DesktopExecutableCheckFailed
+            Some(MacosDiagnosticEvent::DesktopExecutableCheckFailed)
         }
-        MacosAttachBindFailure::StateOpenFailed => MacosDiagnosticEvent::StateOpenFailed,
+        MacosAttachBindFailure::StateOpenFailed => Some(MacosDiagnosticEvent::StateOpenFailed),
     }
 }
 
@@ -257,14 +259,18 @@ impl WindowsAttachFactory for SystemMacosAttachFactory {
             &self.config_directory,
         )
         .map_err(|error| {
-            muniment_core::runtime_eprintln!(
-                "muniment-runtime: attach bind failed reason={error:?}"
-            );
-            let event = bind_failure_event(error);
-            if let Ok(directory) = crate::effective_user_macos_log_directory() {
-                let _ = write_macos_diagnostic(directory, event);
-            } else {
-                emit_macos_unified_log(event);
+            // A runtime that finds another one holding the instance lock
+            // yields to it, which is the expected outcome when the service and
+            // the app's child start together, so that bind logs nothing.
+            if let Some(event) = bind_failure_event(error) {
+                muniment_core::runtime_eprintln!(
+                    "muniment-runtime: attach bind failed reason={error:?}"
+                );
+                if let Ok(directory) = crate::effective_user_macos_log_directory() {
+                    let _ = write_macos_diagnostic(directory, event);
+                } else {
+                    emit_macos_unified_log(event);
+                }
             }
             match error {
                 MacosAttachBindFailure::Contended => WindowsAttachBindFailure::Contended,
@@ -347,13 +353,11 @@ mod tests {
                 MacosAttachBindFailure::StateOpenFailed,
                 MacosDiagnosticEvent::StateOpenFailed,
             ),
-            (
-                MacosAttachBindFailure::Contended,
-                MacosDiagnosticEvent::InstanceLockWait,
-            ),
         ] {
-            assert_eq!(bind_failure_event(failure), event);
+            assert_eq!(bind_failure_event(failure), Some(event));
         }
+        // A contended lock is a yield, which the activation records once.
+        assert_eq!(bind_failure_event(MacosAttachBindFailure::Contended), None);
     }
 
     #[test]
