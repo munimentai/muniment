@@ -5,12 +5,18 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+#[cfg(not(unix))]
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use muniment_core::chat_launch::ChatGrant;
 use muniment_core::sidecar::pi_install::{PiArtifactDescriptor, PI_SELECTED_ARTIFACT};
 
+#[cfg(unix)]
+#[path = "../../../../test_support/socket_path.rs"]
+pub mod socket_path;
+
+#[cfg(not(unix))]
 static TEMPORARY_PROFILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// The bound for a test that waits for a runtime to start, become ready,
@@ -63,24 +69,37 @@ pub struct TemporaryProfile {
     pub root: PathBuf,
     pub profile: PathBuf,
     pub config: PathBuf,
+    #[cfg(unix)]
+    _socket_root: socket_path::SocketDirectory,
 }
 
 impl TemporaryProfile {
     pub fn new(test_name: &str, scaffold_home: bool) -> Self {
         isolate_state_directory();
+        #[cfg(unix)]
+        let socket_root = socket_path::SocketDirectory::new().unwrap();
+        #[cfg(unix)]
+        let root = socket_root.to_path_buf();
+        #[cfg(unix)]
+        let _ = test_name;
+        #[cfg(not(unix))]
         let sequence = TEMPORARY_PROFILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        #[cfg(not(unix))]
         let root = std::env::temp_dir().join(format!(
             "muniment-runtime-{test_name}-{}-{}-{sequence}",
             std::process::id(),
             *PROCESS_TOKEN
         ));
-        let _ = fs::remove_dir_all(&root);
+        #[cfg(not(unix))]
+        fs::create_dir(&root).unwrap();
         let profile = root.join("profile");
         let config = root.join("config");
         let temporary_profile = Self {
             root,
             profile,
             config,
+            #[cfg(unix)]
+            _socket_root: socket_root,
         };
         fs::create_dir_all(&temporary_profile.profile).unwrap();
         fs::create_dir_all(&temporary_profile.config).unwrap();
@@ -97,6 +116,7 @@ impl TemporaryProfile {
 
 impl Drop for TemporaryProfile {
     fn drop(&mut self) {
+        #[cfg(not(unix))]
         let _ = fs::remove_dir_all(&self.root);
     }
 }
