@@ -106,7 +106,7 @@ describe('Notifications page', () => {
     expect(await screen.findByText('Nothing needs you')).toBeInTheDocument()
     expect(screen.getByRole('list', { name: 'Next scheduled runs' })).toHaveTextContent('Weekday briefing')
     // A name too long for the row ends in an ellipsis, and its tooltip holds all of it.
-    expect(screen.getByText('Weekday briefing')).toHaveAttribute('title', 'Weekday briefing')
+    expect(screen.getByText('Weekday briefing')).toHaveAttribute('data-tooltip', 'Weekday briefing')
     expect(screen.getByText('Weekday briefing')).toHaveClass('name')
   })
 

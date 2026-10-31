@@ -93,7 +93,7 @@
           {#if page.upcoming.length}
             <ul class="upcoming" aria-label="Next scheduled runs">
               {#each page.upcoming as next (`${next.agent_id}:${next.routine_id}`)}
-                <li><LucideIcon name="clock" size={14} /><span class="name" title={next.agent_name}>{next.agent_name}</span><span class="name muted" title={next.routine_name}>{next.routine_name}</span>{#if showMachine && next.machine}<MachineChip machine={next.machine} {runtimeList} />{/if}<time datetime={new Date(next.at_ms).toISOString()}>{scheduleTime(next.at_ms)}</time></li>
+                <li><LucideIcon name="clock" size={14} /><span class="name" data-tooltip={next.agent_name}>{next.agent_name}</span><span class="name muted" data-tooltip={next.routine_name}>{next.routine_name}</span>{#if showMachine && next.machine}<MachineChip machine={next.machine} {runtimeList} />{/if}<time datetime={new Date(next.at_ms).toISOString()}>{scheduleTime(next.at_ms)}</time></li>
               {/each}
             </ul>
           {/if}
