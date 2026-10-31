@@ -52,3 +52,20 @@ export function takesText(element) {
   if (element.isContentEditable || element.localName === 'textarea') return true
   return element.localName === 'input' && !NO_TEXT.has(element.type)
 }
+
+// The terminal draws its prompt where AppKit draws the input-source mark,
+// beside the caret of xterm's hidden text field, so the mark covers the
+// prompt. Each poke waits `delay` ms after the last focus or keystroke, then
+// asks the shell to hide the mark. macOS shows it again on its own when the
+// input source changes.
+export const INPUT_MARK_SETTLE_MS = 1000
+export function inputMarkSettler(invoke, delay = INPUT_MARK_SETTLE_MS) {
+  let timer
+  return {
+    poke() {
+      clearTimeout(timer)
+      timer = setTimeout(() => { Promise.resolve(invoke?.('input_mark_dismiss')).catch(() => {}) }, delay)
+    },
+    stop() { clearTimeout(timer) },
+  }
+}

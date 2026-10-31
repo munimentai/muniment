@@ -4,6 +4,7 @@
   import { FitAddon } from '@xterm/addon-fit'
   import '@xterm/xterm/css/xterm.css'
   import { TYPE_EVENT, codeFontSize } from './type-state.js'
+  import { inputMarkSettler } from './focus-landing.js'
   let { tauri, context = null, hidden = false, path = '', threadId = null, projectId = null, oncwd } = $props()
   let host
   let terminal
@@ -16,6 +17,8 @@
   let active = true
   let timer
   let inputQueue = Promise.resolve()
+  // The input-source mark leaves the prompt once focus or typing settles.
+  const inputMark = inputMarkSettler((command) => tauri?.invoke(command))
   // A folder path too long for the line drops its start behind a leading
   // ellipsis, as the Files panel does, and only then names the full path on hover.
   let pathCut = $state(false)
@@ -81,7 +84,8 @@
       terminal.clear()
       return false
     })
-    const input = terminal.onData(data => { if (!id || exited) return; const session = id; inputQueue = inputQueue.then(() => tauri.invoke('terminal_write', { id: session, data })).catch(e => { if (active) error = String(e) }) })
+    const input = terminal.onData(data => { inputMark.poke(); if (!id || exited) return; const session = id; inputQueue = inputQueue.then(() => tauri.invoke('terminal_write', { id: session, data })).catch(e => { if (active) error = String(e) }) })
+    const field = terminal.textarea; field?.addEventListener('focus', inputMark.poke)
     const observer = new ResizeObserver(() => { void resize() }); observer.observe(host)
     const themes = new MutationObserver(theme); themes.observe(document.documentElement,{attributes:true,attributeFilter:['data-theme','style']})
     const media = matchMedia('(prefers-color-scheme: dark)'); media.addEventListener('change',theme)
@@ -89,7 +93,7 @@
     const sized = (event) => { terminal.options.fontSize = codeFontSize(event.detail); void resize() }
     window.addEventListener(TYPE_EVENT, sized)
     void start()
-    return () => { active = false; clearTimeout(timer); observer.disconnect(); themes.disconnect(); media.removeEventListener('change',theme); window.removeEventListener(TYPE_EVENT, sized); input.dispose(); terminal.dispose(); if (id) void tauri.invoke('terminal_close',{id}).catch(() => {}) }
+    return () => { active = false; clearTimeout(timer); inputMark.stop(); field?.removeEventListener('focus', inputMark.poke); observer.disconnect(); themes.disconnect(); media.removeEventListener('change',theme); window.removeEventListener(TYPE_EVENT, sized); input.dispose(); terminal.dispose(); if (id) void tauri.invoke('terminal_close',{id}).catch(() => {}) }
   })
 </script>
 <section class="terminal-workspace" class:hidden aria-label="Terminal">

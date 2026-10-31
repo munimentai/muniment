@@ -1,4 +1,4 @@
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import { userEvent } from 'vitest/browser'
 import { flushSync, mount, tick, unmount } from 'svelte'
 import '../styles/tokens.css'
@@ -111,4 +111,33 @@ it('insets the prompt from the panel edge as far as the header path, so the two 
   const prompt = [...target.querySelectorAll('.xterm-rows > div')].find((row) => row.textContent.includes('$')).getBoundingClientRect()
   expect(prompt.left - panel.left).toBeGreaterThanOrEqual(12)
   expect(prompt.left).toBe(line.getBoundingClientRect().left)
+})
+
+it('hides the input-source mark a second after the terminal takes focus and after each keystroke', async () => {
+  const { target, calls } = await terminal(600, '/tmp/work', PROMPT)
+  await expect.poll(() => target.querySelector('.xterm-rows')?.textContent ?? '').toContain('$')
+  const dismissed = () => calls.filter(([command]) => command === 'input_mark_dismiss').length
+  const field = target.querySelector('.xterm-helper-textarea')
+  // The shell's start focused the terminal: let that wait run out, then focus it again.
+  field.blur()
+  await new Promise((resolve) => setTimeout(resolve, 1100))
+  const before = dismissed()
+  expect(before).toBeGreaterThanOrEqual(1)
+  calls.length = 0
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  try {
+    field.focus()
+    vi.advanceTimersByTime(999)
+    expect(dismissed()).toBe(0)
+    vi.advanceTimersByTime(1)
+    expect(dismissed()).toBe(1)
+    await userEvent.keyboard('ls')
+    vi.advanceTimersByTime(500)
+    expect(dismissed()).toBe(1)
+    await userEvent.keyboard('{Enter}')
+    vi.advanceTimersByTime(999)
+    expect(dismissed()).toBe(1)
+    vi.advanceTimersByTime(1)
+    expect(dismissed()).toBe(2)
+  } finally { vi.useRealTimers() }
 })

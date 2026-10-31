@@ -1,5 +1,5 @@
-import { afterEach, expect, it } from 'vitest'
-import { landFocus, shown, takesText } from './focus-landing.js'
+import { afterEach, expect, it, vi } from 'vitest'
+import { INPUT_MARK_SETTLE_MS, inputMarkSettler, landFocus, shown, takesText } from './focus-landing.js'
 
 const SKIP = '#sidebar, .titlebar, [data-panel="workspace"]'
 afterEach(() => { document.body.innerHTML = '' })
@@ -104,4 +104,36 @@ it('tells a field that takes typed text from a heading, a button and the body', 
   const [heading, button, box, name, search, message, draft] = document.body.querySelectorAll('h2, button, input, textarea, div')
   expect([heading, button, box, document.body, null].map(takesText)).toEqual([false, false, false, false, false])
   expect([name, search, message, draft].map(takesText)).toEqual([true, true, true, true])
+})
+
+it('hides the input-source mark once, a second after the last focus or keystroke', async () => {
+  vi.useFakeTimers()
+  try {
+    const invoke = vi.fn(async () => {})
+    const settler = inputMarkSettler(invoke)
+    expect(INPUT_MARK_SETTLE_MS).toBe(1000)
+    settler.poke()
+    vi.advanceTimersByTime(999)
+    expect(invoke).not.toHaveBeenCalled()
+    // Each keystroke starts the wait again.
+    settler.poke()
+    vi.advanceTimersByTime(600)
+    settler.poke()
+    vi.advanceTimersByTime(999)
+    expect(invoke).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(1)
+    expect(invoke).toHaveBeenCalledTimes(1)
+    expect(invoke).toHaveBeenCalledWith('input_mark_dismiss')
+    vi.advanceTimersByTime(5000)
+    expect(invoke).toHaveBeenCalledTimes(1)
+    // A stopped settler asks nothing, and a failed call stays quiet.
+    settler.poke()
+    settler.stop()
+    vi.advanceTimersByTime(5000)
+    expect(invoke).toHaveBeenCalledTimes(1)
+    const failing = inputMarkSettler(vi.fn(() => Promise.reject(new Error('no shell'))))
+    failing.poke()
+    vi.advanceTimersByTime(1000)
+    await Promise.resolve()
+  } finally { vi.useRealTimers() }
 })
