@@ -5,6 +5,7 @@
 import { LOCAL_RUNTIME_ID, machineName as listedMachineName } from './runtimes.js'
 import { memberMachine } from '../agents/swarm.js'
 import { formatClock, formatDateTime } from '../lib/time-format.svelte.js'
+import { providerName } from '../lib/provider-catalog.js'
 
 // The clock time as the Time setting shows times.
 export function clockTime(value) {
@@ -193,18 +194,59 @@ function machineName(swarm, runtimeId) {
 
 const RUNTIME_ID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g
 
+// What a sealed secret holds, by the class its id starts with. Core names
+// each `<class>:<owner>`, a vault token or lease `<class>:<owner>:<member>`
+// and a handover `handover:<owner>:<account>`.
+const SECRET_CLASSES = {
+  models: 'Model connections',
+  mcp: 'MCP connections',
+  keys: 'Keys',
+  swarm: 'Fleet connections',
+  vault: 'Vault token',
+  lease: 'Sign-in lease',
+  handover: 'Sign-in handover',
+}
+
+function secretName(id, swarm, accounts) {
+  const [kind, owner, ...rest] = String(id).split(':')
+  const label = SECRET_CLASSES[kind]
+  if (!label || !owner) return id
+  const tail = rest.join(':')
+  if (kind === 'handover' && tail) return `${label} of ${connectionName(tail, accounts)} from ${machineName(swarm, owner)}`
+  if (tail) return `${label} of ${machineName(swarm, owner)} for ${machineName(swarm, tail)}`
+  return `${label} of ${machineName(swarm, owner)}`
+}
+
+// A model or MCP connection's name from core's `fleet.credentials`
+// accounts: a sign-in by its provider, a router account by its label.
+// A connection the accounts do not list keeps its name.
+const HARNESS_SIGN_IN = /^pi:(.+)$/
+function connectionName(name, accounts) {
+  const text = String(name ?? '')
+  const shared = /^shared:swarm:[^:]+:(.+)$/.exec(text)
+  if (shared) return connectionName(`router:${shared[1]}`, accounts)
+  const account = (accounts ?? []).find((entry) => entry.name === text)
+  const harness = HARNESS_SIGN_IN.exec(text)
+  if (harness) return providerName(account?.provider || harness[1])
+  if (text.startsWith('router:') && account?.label) return account.label
+  const mcp = /^mcp(?:-oauth)?:(.+)$/.exec(text)
+  if (mcp) return mcp[1]
+  return account?.label || text
+}
+
 // One `fleet.audit` entry as a log row: when, what, the machines it moved
 // between in the direction it went, and the record's detail. Core keys each
-// entry `<writer>:<uuidv7>`, and `actor_runtime` is the writer.
-export function auditRow(entry, swarm) {
+// entry `<writer>:<uuidv7>`, and `actor_runtime` is the writer. `accounts`
+// from `fleet.credentials` names the connections a secret carries.
+export function auditRow(entry, swarm, accounts = null) {
   const record = entry?.record ?? {}
   const rows = Number.isInteger(record.rows) ? `${record.rows} ${record.rows === 1 ? 'row' : 'rows'}` : ''
   const detail = [
     record.operation,
-    record.secret_id,
-    record.account,
+    record.secret_id ? secretName(record.secret_id, swarm, accounts) : '',
+    record.account ? connectionName(record.account, accounts) : '',
     record.from && record.to ? `${record.from} to ${record.to}` : '',
-    Array.isArray(record.keys) ? record.keys.join(', ') : '',
+    Array.isArray(record.keys) ? record.keys.map((key) => connectionName(key, accounts)).join(', ') : '',
     Array.isArray(record.recipients) ? `${record.recipients.length} ${record.recipients.length === 1 ? 'recipient' : 'recipients'}` : '',
     rows,
     record.result,

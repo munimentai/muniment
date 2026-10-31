@@ -137,7 +137,19 @@ describe('the audit log', () => {
     expect(auditRow({ at: 'x', kind: 'something_new', runtime_id: 'core-unknown-machine' }, swarm)).toMatchObject({ what: 'something new', machines: 'core-unk', time: '' })
     const named = { members: [{ runtime_id: '018f0000-0000-7000-8000-000000000041', runtime_name: 'Laptop' }] }
     expect(auditRow({ kind: 'sealed', runtime_id: null, actor_runtime: '018f0000-0000-7000-8000-000000000041', record: { secret_id: 'models:018f0000-0000-7000-8000-000000000041', version: 3, recipients: ['a', 'b'], keys: ['pi:anthropic'] } }, named))
-      .toMatchObject({ machines: 'Laptop', detail: 'models:Laptop · pi:anthropic · 2 recipients' })
+      .toMatchObject({ machines: 'Laptop', detail: 'Model connections of Laptop · Anthropic · 2 recipients' })
+  })
+
+  it('names each secret and connection in words, not ids', () => {
+    const accounts = [{ name: 'router:a1b2', label: 'Work', provider: 'openai-codex' }, { name: 'pi:anthropic', label: 'anthropic', provider: 'anthropic' }]
+    const opened = auditRow({ kind: 'opened', actor_runtime: LAPTOP, runtime_id: STUDIO, record: { secret_id: `models:${STUDIO}`, recipients: [LAPTOP], keys: ['pi:anthropic', 'router:a1b2', `shared:swarm:${BOX}:a1b2`, 'mcp:github'] } }, swarm, accounts)
+    expect(opened.detail).toBe('Model connections of Studio · Anthropic, Work, Work, github · 1 recipient')
+    expect(opened.detail).not.toMatch(/core-|models:|router:/)
+    expect(auditRow({ kind: 'sealed', actor_runtime: LAPTOP, record: { secret_id: `vault:${LAPTOP}:${BOX}` } }, swarm).detail).toBe('Vault token of This computer for Build box')
+    expect(auditRow({ kind: 'sealed', actor_runtime: LAPTOP, record: { secret_id: `handover:${LAPTOP}:router:a1b2` } }, swarm, accounts).detail).toBe('Sign-in handover of Work from This computer')
+    expect(auditRow({ kind: 'hold_moved', actor_runtime: LAPTOP, runtime_id: STUDIO, record: { account: 'router:a1b2' } }, swarm, accounts).detail).toBe('Work')
+    // A connection the accounts do not list keeps its name.
+    expect(auditRow({ kind: 'hold_moved', actor_runtime: LAPTOP, runtime_id: STUDIO, record: { account: 'router:gone' } }, swarm, []).detail).toBe('router:gone')
   })
 
   it('reads each entry in the direction the action went', () => {

@@ -125,6 +125,18 @@ describe('the fleet log', () => {
     expect(role).toHaveTextContent('full to worker')
   })
 
+  it('names the secret and the connections an entry carries, with no raw id', async () => {
+    const opened = { id: 'core-laptop:0192c', at: '2026-01-01T14:09:00Z', kind: 'opened', actor_runtime: 'core-laptop', runtime_id: 'core-studio', record: { secret_id: 'models:core-studio', recipients: ['core-laptop'], keys: ['router:w1'] } }
+    const tauri = agentBridge({ 'fleet.audit': { entries: [opened], more: false }, 'swarm.members': swarm, 'fleet.sync_status': { state: 'synced', classes: [] }, 'fleet.credentials': { accounts: [{ name: 'router:w1', label: 'Work', provider: 'openai-codex' }] } })
+    render(AuditLog, { tauri })
+    const [row] = within(await screen.findByRole('list', { name: 'Machine log' })).getAllByRole('listitem')
+    await waitFor(() => expect(row.querySelector('.detail')).toHaveTextContent('Model connections of Studio · Work · 1 recipient'))
+    // The time and the event are separate cells, so the time never runs into the event.
+    expect(row.querySelector('time')).toHaveAttribute('datetime', '2026-01-01T14:09:00Z')
+    expect(row.querySelector('.what')).toHaveTextContent(/^Opened a secret$/)
+    expect(row).not.toHaveTextContent(/models:|router:/)
+  })
+
   it('raises the limit for Show more and stops at the most core answers', async () => {
     const limits = []
     const tauri = agentBridge({
