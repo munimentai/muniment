@@ -264,8 +264,15 @@ function uniqueSentences(text) {
 }
 
 // The retry button carries the next step, not the recorded cause.
+// The router opens a refusal with the route's `family/model` id. The reply
+// names the model as the picker does, so a stored reply reads the same.
+const routeId = /(^|[.!?]\s+)[a-z][\w-]*\/(\S+?): /g
+function namedRoutes(text) {
+  return text.replace(routeId, (_, start, model) => `${start}${modelLabel(model)}: `)
+}
+
 export function runFailureMessage(run) {
-  const recorded = failureText(run)
+  const recorded = namedRoutes(failureText(run))
   const raw = RAW_REJECTION.exec(recorded)
   if (raw) return REJECTIONS[raw[1]] ?? 'The runtime rejected the request.'
   const reason = recorded.replace(retryGuidance, '').trim()

@@ -180,6 +180,15 @@ describe('chat composer and projection', () => {
     expect(runAnnouncement({ phase: 'failed', failureReason })).toBe('No eligible model served this turn.')
   })
 
+  it('names a refused route by its model name, live and restored, and leaves addresses alone', () => {
+    const failureReason = 'openai/gpt-6.1-sol: Every account for this provider is temporarily unavailable.'
+    const restored = historyMessages([{ runId: 'r', phase: 'failed', text: '', failureReason }])[0].run
+    expect(runFailureMessage(restored)).toBe('GPT-6.1 Sol: Every account for this provider is temporarily unavailable.')
+    expect(runFailureMessage({ failureReason: 'No eligible model served this turn. anthropic/claude-opus-4-7: Every account for this provider is turned off.' }))
+      .toBe('No eligible model served this turn. Claude Opus 4.7: Every account for this provider is turned off.')
+    expect(runFailureMessage({ failureReason: 'Cannot reach https://example.com/v1: refused' })).toBe('Cannot reach https://example.com/v1: refused.')
+  })
+
   it('keeps cause punctuation and folds line breaks without changing addresses or decimals', () => {
     expect(runFailureMessage({ failureReason: '  Cannot reach\nhttps://example.com after 1.5 seconds  ' }))
       .toBe('Cannot reach https://example.com after 1.5 seconds.')
