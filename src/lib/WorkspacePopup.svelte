@@ -13,6 +13,12 @@
   let menu
   let shown = false
   const popup = getCurrentWindow()
+  // One native window draws every menu, so each open names the window for
+  // the menu it shows, and a screen reader announces that menu's name.
+  async function name(title) {
+    document.title = title
+    try { await popup.setTitle(title) } catch { /* The menu keeps its aria-label. */ }
+  }
   // The opener says whether a pointer press opened the menu, so the first
   // item shows the focus fill only when the keys opened it.
   function markFocusSource(pointer) {
@@ -36,20 +42,22 @@
     const retain = off => { if (disposed) off(); else stops.push(off) }
     void listen('workspace-menu-open', async ({payload}) => {
       actionId = null
-      label = 'Workspace tools'
+      label = payload.label || 'Workspace tools'
       items = workspaceItems
       selected = payload.selected
       markFocusSource(payload.pointer)
       applyTheme(document.documentElement, readStoredTheme())
+      await name(label)
       await tick()
       shown = true; await popup.show()
       await popup.setFocus()
       menu.querySelector('button')?.focus()
     }).then(retain)
     void listen('action-menu-open', async ({payload}) => {
-      actionId = payload.id; label = payload.label; items = payload.items; selected = null
+      actionId = payload.id; label = payload.label || 'Actions'; items = payload.items; selected = null
       markFocusSource(payload.pointer)
       applyTheme(document.documentElement, readStoredTheme())
+      await name(label)
       await tick(); shown = true; await popup.show(); await popup.setFocus(); menu.querySelector('button:not(:disabled)')?.focus()
     }).then(retain)
     void popup.onFocusChanged(({payload}) => { if (!payload && shown) void close() }).then(retain)
