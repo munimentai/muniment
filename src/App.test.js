@@ -3817,6 +3817,32 @@ describe('thread name', () => {
     expect(appRules.get('.thread-row-title[data-unread]')).toMatch(/font-weight:\s*var\(--weight-semibold\)/)
   })
 
+  it('lights no result on a row until the first thread opens at launch, and never on the open thread', async () => {
+    const at = '2026-07-28T11:55:00Z'
+    threadSummaryResult = [{ threadId: 'morning', title: 'Tauri Morning', updatedAt: at, runtimeId: 'local' }, { threadId: 'other', title: 'Other result', updatedAt: at, runtimeId: 'local' }]
+    const thread = (id, title) => ({ thread_id: id, title, project_id: '', project_name: '', status: 'done', status_label: 'Done', home: false, pinned: false, updated_at: at })
+    const project = (row) => ({ id: row.thread_id, name: row.title, kind: 'thread', triggers: '', agent_ids: [], updated_at: at, status: row.status, status_label: row.status_label, pinned: false, threads: [row] })
+    let open
+    const opened = new Promise((resolve) => { open = resolve })
+    const core = window.__TAURI__.core.invoke
+    // Core's arrangement made before the window knows the open thread calls both results unread.
+    window.__TAURI__.core.invoke = (command, ...args) => command === 'sidebar_arrange'
+      ? Promise.resolve({ projects: [thread('morning', 'Tauri Morning'), thread('other', 'Other result')].map(project), archived: [], results: [] })
+      : command === 'chat_current_thread' ? Promise.resolve('morning')
+        : command === 'chat_thread_open' ? opened.then(() => core(command, ...args))
+          : core(command, ...args)
+    onTestFinished(() => { window.__TAURI__.core.invoke = core })
+    render(App)
+    const list = await screen.findByRole('list', { name: 'Projects list' })
+    const row = async (title) => (await within(list).findByText(title, { selector: '.thread-row-title' })).closest('.thread-row')
+    await row('Tauri Morning')
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(list.querySelector('.status-ring')).toBeNull()
+    open()
+    await waitFor(async () => expect((await row('Other result')).querySelector('.status-ring')).toHaveAttribute('data-phase', 'lit'))
+    expect((await row('Tauri Morning')).querySelector('.status-ring')).toBeNull()
+  })
+
   it('draws a hovered row lighter than the open thread and a selection darker', () => {
     const hover = appRules.get('button.thread-row:hover:not([aria-disabled="true"])')
     expect(hover).toMatch(/background:\s*color-mix\(in srgb, var\(--faint\) 55%, transparent\)/)

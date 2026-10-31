@@ -1072,6 +1072,11 @@
   const listedThreadId = $derived(freshThread && !agentChat?.record ? null : currentThreadId)
   const showFreshThread = $derived(freshThread && messages.length > 0 && !selectedAgent && !currentCreation && !threadSearch.trim())
   const sidebarRuns = $derived(runStates(activityRuns))
+  // A result lights a row only once the window knows which thread it shows:
+  // the open thread is read, and until the first thread opens at launch an
+  // arrangement made without it would light that thread's result.
+  let threadShown = $state(false)
+  const settledStatus = (status, threadId) => (status === 'done' || status === 'failed') && (!threadShown || threadId === currentThreadId) ? 'read' : status
   const sidebarFeed = $derived(sidebarInput({
     summaries: threadSummaries,
     agentListing, agents: roster.filter(agent => !catalogArchived('agent', agent)), groups: swarm.groups, agentChats: agentChatRows, catalog: projectCatalog, remote: remoteProjectRows,
@@ -1738,14 +1743,14 @@
     onCancelError: (next) => { cancelError = next },
     onQueueError: (next) => { queueError = next },
     onThreadListError: (next, action) => { threadListError = next; threadListErrorAction = action },
-    onHistoryError: (next, action) => { historyError = next; historyErrorAction = action },
+    onHistoryError: (next, action) => { historyError = next; historyErrorAction = action; if (next) threadShown = true },
     onThreadSummaries: (next) => { threadSummaries = dedupeThreads(next, swarm) },
     onMoreThreads: (next) => { moreThreads = next },
     readProject: () => selectedProject,
     readAgent: () => selectedAgent,
-    onThreadSelected: (next) => { selectTask(next); profileOnlyAgent = null; selectedAgent = agentThreadMap[next] ?? startingAgent ?? null; if (!selectedAgent) agentProfileOpen = false; void refreshProjects(next); void refreshAgents(); void refreshCreations() },
+    onThreadSelected: (next) => { threadShown = true; selectTask(next); profileOnlyAgent = null; selectedAgent = agentThreadMap[next] ?? startingAgent ?? null; if (!selectedAgent) agentProfileOpen = false; void refreshProjects(next); void refreshAgents(); void refreshCreations() },
     onThreadSwitch: (next) => { threadSwitching = next },
-    onFreshThread: (next) => { freshThread = next },
+    onFreshThread: (next) => { freshThread = next; if (next) threadShown = true },
     onHistoryStart: () => { expandedReceipts = new Set(); parallelTools = new Map() },
     onHistoryLoaded: () => { pinned = true; transcriptWindow = tailWindow() },
     onFollow: followNewContent,
@@ -3725,7 +3730,7 @@
   {@const owner = !agent && threadOwner(summary, swarm, runtimeList)}
   {@const lined = !!owner || pairedRuntimes(runtimeList).length > 0}
   {@const machine = lined && !agent && !owner ? runtimeList.runtimes.find((runtime) => runtime.id === (summary.runtimeId ?? LOCAL_RUNTIME_ID)) : null}
-  {@const status = summary.row?.status}
+  {@const status = settledStatus(summary.row?.status, summary.threadId)}
   {@const ring = { status, label: summary.row?.status_label ?? '', key: `${summary.threadId}:${summary.row?.updated_at ?? summary.updatedAt ?? ''}` }}
   {@const unread = status === 'done' || status === 'failed' ? 'true' : undefined}
   {@const at = rowTime(summary, sidebarRuns, status)}
