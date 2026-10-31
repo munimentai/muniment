@@ -63,7 +63,8 @@ export function runStates(runs = []) {
 
 // The items of the notifications page that point at a thread or an agent.
 export function attention(needsYou = []) {
-  return needsYou.filter((item) => item && item.kind !== 'offline').map((item) => ({
+  // A failed run's thread already reads Failed, so it keeps that word.
+  return needsYou.filter((item) => item && item.kind !== 'offline' && item.kind !== 'failed').map((item) => ({
     kind: item.kind,
     thread_id: item.run?.thread_id ?? item.approval?.thread_id ?? null,
     agent_id: item.agent_id ?? item.approval?.agent_id ?? null,

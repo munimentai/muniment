@@ -20,8 +20,11 @@ export const NOTIFY_KEY = 'notify'
 // when one finishes is off: a finished run waits on the page.
 export const DEFAULT_NOTIFY = Object.freeze({ needs_you: true, finished: false })
 
-export function readNotifications(tauri, machines, { view = 'all', machine = null, agent = null } = {}) {
+// `read` maps each thread id to when this device last read it, so a failed
+// run leaves Needs you once its thread is open.
+export function readNotifications(tauri, machines, { view = 'all', machine = null, agent = null, read = null } = {}) {
   const filter = { view, utc_offset_minutes: zoneOffsetMinutes() }
+  if (read && Object.keys(read).length) filter.read = read
   if (machine) filter.machine = machine
   if (agent) filter.agent = agent
   return tauri.invoke('notifications_list', { machines, filter })
@@ -112,10 +115,16 @@ const NEEDS = {
   approval: { icon: 'shield-alert', title: 'Approval needed' },
   input: { icon: 'message-square', title: 'Answer needed' },
   limit: { icon: 'triangle-alert', title: 'Usage limit reached' },
+  failed: { icon: 'circle-x', title: 'Run failed' },
   offline: { icon: 'globe-off', title: 'Machine offline' },
 }
 export function needsMark(kind) {
   return NEEDS[kind] ?? NEEDS.input
+}
+
+// Whether a failure names Settings → Models as the step that fixes it.
+export function pointsToModels(text) {
+  return typeof text === 'string' && /\bin Models\.\s*$/.test(text.trim())
 }
 
 // A row's time as the Time setting shows times: the clock time today, else the date.

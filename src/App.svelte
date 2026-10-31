@@ -51,7 +51,7 @@
   import { agentColor } from './lib/agent-avatar.js'
   import AgentProfile from './lib/AgentProfile.svelte'
   import NotificationsPage from './notifications/NotificationsPage.svelte'
-  import { isNotificationsShortcut, notificationsShortcut, notifyAllowed, readNotifications, readNotifyPreferences } from './notifications/notifications.js'
+  import { isNotificationsShortcut, notificationsShortcut, notifyAllowed, pointsToModels, readNotifications, readNotifyPreferences } from './notifications/notifications.js'
   import { agentMachine, agentRequest, agentThreads, applyRunUpdate, emptyListing, listAgents, listRuns } from './agents/agent-runtime.js'
   import { notificationKey, notificationText, shouldNotify, showNotification } from './agents/notify.js'
   import { applyApproval, emptySwarm, listSwarm, moveRequest, postTarget, swarmRoster, swarmThreads } from './agents/swarm.js'
@@ -3090,7 +3090,7 @@
   async function refreshNeedsYou() {
     if (!tauri || !(auth.name === 'local' || auth.name === 'signed-in')) return
     try {
-      const page = await readNotifications(tauri, machineRefs(runtimeList), { view: 'needs_you' })
+      const page = await readNotifications(tauri, machineRefs(runtimeList), { view: 'needs_you', read: readState.read })
       needsYou = page?.counts?.needs_you ?? 0
       needsYouItems = page?.needs_you ?? []
     } catch (_) {}
@@ -3100,6 +3100,15 @@
     clearTimeout(needsYouTimer)
     needsYouTimer = setTimeout(() => { void refreshNeedsYou() }, 800)
   }
+  // Opening a failed run's thread reads it, so the badge counts again.
+  $effect(() => {
+    const read = readState.read
+    untrack(() => {
+      if (!needsYouItems.some((item) => item.kind === 'failed' && read[item.run?.thread_id])) return
+      clearTimeout(needsYouTimer)
+      needsYouTimer = setTimeout(() => { void refreshNeedsYou() }, 800)
+    })
+  })
   const needsYouMachines = $derived(JSON.stringify(machineRefs(runtimeList)))
   $effect(() => { void needsYouMachines; void auth.name; untrack(() => { void refreshNeedsYou() }) })
   onMount(() => {
@@ -3992,7 +4001,7 @@
                   </div>
                 {/if}
               {/each}
-              {#if message.run.phase === 'failed'}<div class="run-error">{runFailureMessage(message.run)} <button disabled={!message.run.prompt?.trim() || !!active || (!!draft.trim() && draft !== message.run.prompt) || !!selectedFiles.length || dictationBusy() || runtimeUpgradePending()} onclick={() => prepareRetry(message.run)}>Try again</button>{#if runFailureDetails(message.run).length}<details class="run-error-details"><summary>Show log</summary>{#each runFailureDetails(message.run) as line, index (index)}<p>{line}</p>{/each}</details>{/if}</div>{/if}
+              {#if message.run.phase === 'failed'}<div class="run-error">{runFailureMessage(message.run)} {#if pointsToModels(runFailureMessage(message.run))}<button onclick={() => openSettings('providers')}>Open Models</button> {/if}<button disabled={!message.run.prompt?.trim() || !!active || (!!draft.trim() && draft !== message.run.prompt) || !!selectedFiles.length || dictationBusy() || runtimeUpgradePending()} onclick={() => prepareRetry(message.run)}>Try again</button>{#if runFailureDetails(message.run).length}<details class="run-error-details"><summary>Show log</summary>{#each runFailureDetails(message.run) as line, index (index)}<p>{line}</p>{/each}</details>{/if}</div>{/if}
               {#if message.run.phase === 'cancelled'}<div class="run-error">Reply stopped. {#if message.run.prompt}<button disabled={!!active || (!!draft.trim() && draft !== message.run.prompt) || !!selectedFiles.length || dictationBusy() || runtimeUpgradePending()} onclick={() => prepareRetry(message.run)}>Try again</button>{/if}</div>{/if}
               {#if message.run.phase === 'interrupted'}<div class="run-error" role={message.run.resumeError ? 'alert' : undefined}>{message.run.resumeError ?? 'Reply interrupted.'} {#if message.run.resumable}<button disabled={!!active || !!backgroundRun || dictationBusy() || runtimeUpgradePending()} onclick={() => chatController.resume(message.run)}>Resume</button>{:else if message.run.prompt}<button disabled={!!active || (!!draft.trim() && draft !== message.run.prompt) || !!selectedFiles.length || dictationBusy() || runtimeUpgradePending()} onclick={() => prepareRetry(message.run)}>Try again</button>{/if}</div>{/if}
               {#if message.run.phase === 'pending-permission' && message.run.pendingPermission && !openApprovals.some(approval => approval.run_id === message.run.id)}
@@ -4362,7 +4371,7 @@
   {#if browserPanel}<div class="artifact-divider workspace-divider" role="separator" aria-label="Workspace panel width" aria-orientation="vertical" aria-valuemin="340" aria-valuemax={workspacePanelMaximum} aria-valuenow={workspacePanelWidth} tabindex="0" onpointerdown={workspaceResize.pointerDown} onpointermove={workspaceResize.pointerMove} onpointerup={workspaceResize.pointerEnd} onpointercancel={workspaceResize.pointerEnd} onkeydown={workspaceResize.keydown}><span class="divider-grip" aria-hidden="true"><LucideIcon name="ellipsis-vertical" size={14} variant="action" /></span></div>{/if}
   <WorkspacePanel ondirty={value => { workspaceDirty = value }} context={fileContext} {requestedArtifact} {tauri} onfolder={path => { workspaceDirectory = path; if (mention) updateMention() }} navigation={requestedNavigation} onnavigationhandled={request => { if (requestedNavigation === request) requestedNavigation = null }} selected={browserPanel} onselect={showBrowser} threadId={currentThreadId} projectId={selectedProject} requestedFile={requestedWorkspaceFile} suspended={!!deletingThreadId} />
   {#if fullPage === 'usage'}<UsagePage {tauri} {runtimeList} {folderAccess} onconnect={() => openSettings('providers')} />{/if}
-  {#if fullPage === 'notifications'}<NotificationsPage {tauri} {runtimeList} agents={roster} {swarm} refreshKey={notificationsKey} onread={() => { void refreshNeedsYou() }} onopen={(run) => openRunThread(run).catch(error => { submitError = String(error) })}
+  {#if fullPage === 'notifications'}<NotificationsPage {tauri} {runtimeList} agents={roster} {swarm} refreshKey={notificationsKey} read={readState.read} onmodels={() => openSettings('providers')} onread={() => { void refreshNeedsYou() }} onopen={(run) => openRunThread(run).catch(error => { submitError = String(error) })}
     onapprovalopen={(approval) => openRunThread(approval).catch(error => { submitError = String(error) })} />{/if}
   {#if paletteOpen && tauri}<CommandPalette {tauri} input={paletteFor} onrun={runPaletteItem} onclose={() => { paletteOpen = false }} />{/if}
   {#if moveTarget}<ProjectPicker title={moveTarget.title} projects={moveProjects} current={projectCatalog.threads[moveTarget.threadId] ?? null} busy={moveBusy} error={moveError} onmove={(projectId) => moveThread(moveTarget.threadId, projectId)} onclose={() => { moveTarget = null }} />{/if}

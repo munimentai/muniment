@@ -2,7 +2,8 @@
   // One item that needs the user. An approval is its approval card with the
   // answers core accepts, a question takes a reply posted to the run's
   // thread, a run a usage limit stopped names the reset and runs again once
-  // it passes, and a machine that does not answer says so.
+  // it passes, a failed run names its error with Open thread, and Open
+  // Models when the fix is there, and a machine that does not answer says so.
   import ApprovalCard from '../agents/ApprovalCard.svelte'
   import AgentAvatar from '../lib/AgentAvatar.svelte'
   import LucideIcon from '../lib/LucideIcon.svelte'
@@ -11,9 +12,9 @@
   import { agentRequest } from '../agents/agent-runtime.js'
   import { memberMachine } from '../agents/swarm.js'
   import { resetsIn } from '../usage/usage.js'
-  import { clockTime, needsMark, runWithMachine } from './notifications.js'
+  import { clockTime, needsMark, pointsToModels, runWithMachine } from './notifications.js'
 
-  let { tauri, item, agents = [], swarm = null, runtimeList = null, showMachine = false, now = Date.now(), onopen = () => {}, onanswered = () => {}, onapprovalopen = null } = $props()
+  let { tauri, item, agents = [], swarm = null, runtimeList = null, showMachine = false, now = Date.now(), onopen = () => {}, onanswered = () => {}, onapprovalopen = null, onmodels = null } = $props()
   const mark = $derived(needsMark(item.kind))
   const agent = $derived(agents.find((entry) => entry.id === item.agent_id) ?? (item.agent_id ? { id: item.agent_id, name: item.agent_name } : null))
   const resetPassed = $derived(Number.isFinite(item.resets_at_ms) && item.resets_at_ms <= now)
@@ -74,6 +75,12 @@
           <Button icon="play" disabled={busy || (Number.isFinite(item.resets_at_ms) && !resetPassed)} onclick={runAgain}>{resetPassed || !Number.isFinite(item.resets_at_ms) ? 'Run again' : 'Run again at reset'}</Button>
           <Button onclick={() => onopen(runWithMachine(item.run, item.machine))}>Open thread</Button>
         </div>
+      {:else if item.kind === 'failed'}
+        <p class="detail">{item.detail || 'The run failed.'}</p>
+        <div class="actions">
+          {#if onmodels && pointsToModels(item.detail)}<Button icon="settings" onclick={() => onmodels()}>Open Models</Button>{/if}
+          <Button disabled={!item.run?.thread_id} onclick={() => onopen(runWithMachine(item.run, item.machine))}>Open thread</Button>
+        </div>
       {:else}
         {#if item.detail}<p class="detail">{item.detail}</p>{/if}
         <form class="reply" onsubmit={(event) => { event.preventDefault(); void send() }}>
@@ -90,11 +97,11 @@
 <style>
   .needs { display: flex; gap: 10px; padding: 12px 0; }
   .mark { flex: none; display: inline-flex; padding-top: 1px; color: var(--warning); }
-  [data-kind="offline"] .mark { color: var(--danger); }
+  [data-kind="offline"] .mark, [data-kind="failed"] .mark { color: var(--danger); }
   .body { display: grid; flex: 1; gap: 6px; min-width: 0; }
   .head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 0; color: var(--ink); font-size: var(--text-13); }
   .kind { color: var(--warning); font-size: var(--text-12); }
-  [data-kind="offline"] .kind { color: var(--danger); }
+  [data-kind="offline"] .kind, [data-kind="failed"] .kind { color: var(--danger); }
   time { margin-left: auto; color: var(--muted); font-size: var(--text-12); }
   .detail, .note { margin: 0; color: var(--muted); font-size: var(--text-13); overflow-wrap: anywhere; }
   .actions, .reply { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }

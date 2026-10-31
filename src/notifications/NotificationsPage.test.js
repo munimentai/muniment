@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/sve
 import '@testing-library/jest-dom/vitest'
 import NotificationsPage from './NotificationsPage.svelte'
 import SidebarActions from '../lib/SidebarActions.svelte'
-import { DEFAULT_NOTIFY, isNotificationsShortcut, notifyAllowed, notifyPreferences, resultLine, triggerIcon, triggerLabel } from './notifications.js'
+import { DEFAULT_NOTIFY, isNotificationsShortcut, notifyAllowed, notifyPreferences, pointsToModels, resultLine, triggerIcon, triggerLabel } from './notifications.js'
 import { machineLight } from '../lib/status-tone.js'
 
 afterEach(cleanup)
@@ -131,6 +131,23 @@ describe('Notifications page', () => {
     const upcoming = screen.getByRole('list', { name: 'Next scheduled runs' })
     expect(upcoming.querySelector('.machine-chip')).toHaveAttribute('data-light', 'red')
     expect(upcoming).toHaveTextContent('Build box, Offline')
+  })
+
+  it('keeps a failed run in Needs you with Open Models and sends the threads this device read', async () => {
+    const failed = { kind: 'failed', id: 'r6', machine: local, agent_id: 'scout', agent_name: 'Tauri Morning', run: run('r6', 'failed'), detail: 'The OpenAI sign-in expired. Sign in again in Models.', at: at(2) }
+    const invoke = vi.fn(async (command) => command === 'notifications_list' ? page({ needs_you: [failed] }) : {})
+    const onmodels = vi.fn()
+    const onopen = vi.fn()
+    render(NotificationsPage, { tauri: { invoke }, runtimeList: null, read: { 'thread-r1': at(1) }, onmodels, onopen })
+    const item = await screen.findByRole('article', { name: 'Run failed: Tauri Morning' })
+    expect(screen.queryByText('Nothing needs you')).toBeNull()
+    expect(item).toHaveTextContent('The OpenAI sign-in expired. Sign in again in Models.')
+    expect(invoke).toHaveBeenCalledWith('notifications_list', expect.objectContaining({ filter: expect.objectContaining({ read: { 'thread-r1': expect.any(String) } }) }))
+    await fireEvent.click(within(item).getByRole('button', { name: 'Open Models' }))
+    expect(onmodels).toHaveBeenCalledOnce()
+    await fireEvent.click(within(item).getByRole('button', { name: 'Open thread' }))
+    expect(onopen).toHaveBeenCalledWith(expect.objectContaining({ id: 'r6', thread_id: 'thread-r6' }))
+    expect(pointsToModels('The model could not complete this reply.')).toBe(false)
   })
 
   it('asks again for the failed view', async () => {

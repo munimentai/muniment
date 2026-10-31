@@ -54,6 +54,15 @@ describe('Hold sign-in here', () => {
   })
 })
 
+describe('a refused sign-in', () => {
+  it('says the sign-in expired in place of a rate limit until a turn succeeds', () => {
+    const expired = { ...subscription('work', 'Work'), credential_refused: true, cooldown_until_ms: Date.now() + 60_000 }
+    render(ModelAccounts, { tauri: { invoke: vi.fn() }, settings: { ...settings, accounts: [expired] }, family: 'openai', fleet: null })
+    expect(within(card('Work')).getByText('Sign-in expired. Sign in again to use this account.')).toBeInTheDocument()
+    expect(within(card('Work')).queryByText(/Rate limited/)).toBeNull()
+  })
+})
+
 describe('sign-ins on other machines', () => {
   it('lists each sign-in another machine holds that this machine cannot use yet, with no hold control', async () => {
     const inventory = { providers: [], hidden: [] }

@@ -2,8 +2,8 @@
   // Notifications takes the main panel: what needs the user, pinned first,
   // then the runs in flight, then every other run by day. Core builds the
   // page from every machine that answers. The page asks again when a filter
-  // changes, when `refreshKey` moves on a run or approval event, and every
-  // half minute while it shows.
+  // changes, when `refreshKey` moves on a run or approval event, when `read`
+  // marks a thread read, and every half minute while it shows.
   import { onMount } from 'svelte'
   import PanelPage from '../lib/ui/PanelPage.svelte'
   import Group from '../lib/ui/Group.svelte'
@@ -18,7 +18,7 @@
   import { machineRefs } from '../usage/usage.js'
   import { NOTIFICATION_VIEWS, dayLabel, markAllRead, readNotifications, runWithMachine, scheduleTime } from './notifications.js'
 
-  let { tauri, runtimeList = null, agents = [], swarm = null, refreshKey = 0, onopen = () => {}, onapprovalopen = null, onread = () => {} } = $props()
+  let { tauri, runtimeList = null, agents = [], swarm = null, refreshKey = 0, read = null, onopen = () => {}, onapprovalopen = null, onread = () => {}, onmodels = null } = $props()
   let view = $state('all')
   let machine = $state('')
   let agent = $state('')
@@ -37,7 +37,7 @@
     const ticket = ++request
     loading = true
     try {
-      const next = await readNotifications(tauri, machines, { view, machine: machine || null, agent: agent || null })
+      const next = await readNotifications(tauri, machines, { view, machine: machine || null, agent: agent || null, read })
       if (ticket !== request) return
       page = next
       error = ''
@@ -59,7 +59,7 @@
     }
   }
 
-  $effect(() => { void view; void machine; void agent; void refreshKey; void machines.map((entry) => entry.id).join(); void refresh() })
+  $effect(() => { void view; void machine; void agent; void refreshKey; void read; void machines.map((entry) => entry.id).join(); void refresh() })
   onMount(() => {
     const poll = () => { if (!document.hidden) void refresh() }
     const timer = setInterval(poll, 30_000)
@@ -101,7 +101,7 @@
       {:else}
         <Group heading="Needs you" count={page.counts.needs_you || null}>
           {#each page.needs_you as item (`${item.kind}:${item.id}`)}
-            <NeedsYouItem {tauri} {item} {agents} {swarm} {runtimeList} {showMachine} {now} {onopen} {onapprovalopen} onanswered={() => void refresh()} />
+            <NeedsYouItem {tauri} {item} {agents} {swarm} {runtimeList} {showMachine} {now} {onopen} {onapprovalopen} {onmodels} onanswered={() => void refresh()} />
           {/each}
         </Group>
       {/if}

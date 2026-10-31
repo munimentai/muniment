@@ -29,11 +29,12 @@ describe('sidebar model', () => {
     expect([...since]).toEqual([['a', '2026-10-18T10:00:00Z']])
   })
 
-  it('points each needs-you item at its thread or agent and leaves out offline machines', () => {
+  it('points each needs-you item at its thread or agent and leaves out offline machines and failed runs', () => {
     expect(attention([
       { kind: 'input', run: { thread_id: 't1' }, agent_id: 'a1' },
       { kind: 'approval', approval: { agent_id: 'a2' } },
       { kind: 'offline', id: 'box' },
+      { kind: 'failed', run: { thread_id: 't3' }, agent_id: 'a3' },
     ])).toEqual([
       { kind: 'input', thread_id: 't1', agent_id: 'a1' },
       { kind: 'approval', thread_id: null, agent_id: 'a2' },

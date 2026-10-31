@@ -198,8 +198,10 @@
   {#if status}<p class="support" role="status">{status}</p>{/if}
   {#if formError}<p class="support" role="alert">{formError}</p>{/if}
   {#snippet routingNote(account)}
-    {#if !account.enabled || account.servable === false || cooling(account) || account.weight === 0}
-      <p class="support">{!account.enabled ? 'Disabled' : account.servable === false ? 'Routing unavailable' : cooling(account) ? `Rate limited · retry ${until(account.cooldown_until_ms)}` : 'Excluded from routing'}
+    <!-- The provider refused the sign-in or key on the last turn, until a turn succeeds. -->
+    {#if account.credential_refused && account.enabled}<p class="support refused" role="status">{account.source === 'key' ? 'The provider refused this key. Replace it to use it again.' : 'Sign-in expired. Sign in again to use this account.'}</p>{/if}
+    {#if !account.enabled || account.servable === false || (cooling(account) && !account.credential_refused) || account.weight === 0}
+      <p class="support">{!account.enabled ? 'Disabled' : account.servable === false ? 'Routing unavailable' : cooling(account) && !account.credential_refused ? `Rate limited · retry ${until(account.cooldown_until_ms)}` : 'Excluded from routing'}
         <!-- Every account routes. One switched off or set to no share before the card dropped those controls gets one way back. -->
         {#if !account.enabled || account.weight === 0}<button type="button" class="quiet small" disabled={pending} onclick={() => run('model_router_update_account', { id: account.id, enabled: true, weight: 1 })}>Turn on</button>{/if}
       </p>
@@ -323,6 +325,7 @@
   .keys { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
   .key-card { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; min-width: 0; min-height: 44px; padding: 6px 6px 6px 12px; box-sizing: border-box; border: 1px solid var(--border); border-radius: var(--radius-control); }
   .key-card.cooling { border-color: var(--muted); }
+  .refused { color: var(--danger); }
   .key-text { display: grid; flex: 1 1 160px; gap: 2px; min-width: 0; }
   .overflow { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: var(--text-12); }
   .key-card .card-label { gap: 8px; }
