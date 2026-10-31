@@ -112,6 +112,7 @@ const CLASS_NAMES = {
   memory: 'Memory',
   artifact: 'Artifacts',
   extension: 'Skills',
+  mcp: 'MCP servers',
   account: 'Model accounts',
   route: 'Routing',
   'decision-model': 'Decision models',

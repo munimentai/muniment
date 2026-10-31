@@ -107,6 +107,10 @@ describe('offline and bootstrap', () => {
     expect(listsArrived({ classes: [{ class: 'agent', percent: 100 }, { class: 'thread', percent: 100 }, { class: 'history', percent: 5 }] })).toBe(true)
   })
 
+  it('names the MCP class with its acronym', () => {
+    expect(bootstrapRows({ classes: [{ class: 'mcp', percent: 40 }] })[0].name).toBe('MCP servers')
+  })
+
   it('says where each missing sign-in comes from', () => {
     const credentials = { accounts: [
       { name: 'router:work', label: 'Work', holder: BOX, holder_name: 'Build box', this_machine: false, usable_here: false },
