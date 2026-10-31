@@ -697,14 +697,28 @@ impl ApplicationMemoryRuntime {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(session);
-        self.contexts
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(session);
+        let ended = {
+            let mut contexts = self
+                .contexts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            contexts
+                .remove(session)
+                .map(|(thread, _)| thread)
+                .filter(|thread| contexts.values().all(|(open, _)| open != thread))
+        };
         self.sessions
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(session);
+        // Pi read the thread's extension when its run started, so the file
+        // goes once no open session of that thread needs it. The `.js` twin
+        // is the name older versions wrote.
+        if let Some(thread) = ended {
+            let path = self.agent_extension_path(&thread);
+            let _ = std::fs::remove_file(path.with_extension("js"));
+            let _ = std::fs::remove_file(path);
+        }
     }
 
     /// The recall settings read when the session opened.
@@ -1380,6 +1394,26 @@ mod tests {
         ModelMemoryCapability {
             minimum_cacheable_prefix_characters: 8192,
         }
+    }
+
+    #[test]
+    fn a_thread_extension_goes_when_the_last_session_of_its_thread_ends() {
+        let (root, runtime) = recall_runtime(None);
+        let thread = "01900000-0000-7000-8000-000000000001";
+        runtime.open_session("one", thread, capability()).unwrap();
+        runtime.open_session("two", thread, capability()).unwrap();
+        let path = runtime.agent_extension_path(thread);
+        let older = path.with_extension("js");
+        fs::write(&older, "export default function () {}\n").unwrap();
+        runtime.close_session("one");
+        assert!(
+            path.is_file(),
+            "an open session of the thread still needs it"
+        );
+        runtime.close_session("two");
+        assert!(!path.exists());
+        assert!(!older.exists());
+        fs::remove_dir_all(root).unwrap();
     }
 
     fn node_check(path: &Path) {
