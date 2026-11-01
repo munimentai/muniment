@@ -649,8 +649,79 @@ fn resolve_revision(
     descriptor: PiArtifactDescriptor,
 ) -> Result<PathBuf, PiInstallError> {
     let archive = revision.join(descriptor.archive);
-    verify_archive_for(&archive, descriptor)?;
+    verify_installed_archive(&archive, descriptor)?;
     verify_executable_for(revision, descriptor)
+}
+
+/// The state of a file as its metadata shows it: size, times and, on Unix,
+/// device and inode. A write, a replacement or a rename changes it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FileStamp {
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+    #[cfg(unix)]
+    node: (u64, u64, i64, i64),
+}
+
+impl FileStamp {
+    fn of(metadata: &fs::Metadata) -> Self {
+        #[cfg(unix)]
+        use std::os::unix::fs::MetadataExt;
+        Self {
+            len: metadata.len(),
+            modified: metadata.modified().ok(),
+            #[cfg(unix)]
+            node: (
+                metadata.dev(),
+                metadata.ino(),
+                metadata.ctime(),
+                metadata.ctime_nsec(),
+            ),
+        }
+    }
+}
+
+/// The installed archives this process hashed, with the digest each matched
+/// and the file's state at that hash. Every run resolves the installed Pi
+/// more than once, so an archive whose state is unchanged is not hashed again.
+static VERIFIED_ARCHIVES: std::sync::Mutex<Vec<(PathBuf, &'static str, FileStamp)>> =
+    std::sync::Mutex::new(Vec::new());
+
+fn verify_installed_archive(
+    path: &Path,
+    descriptor: PiArtifactDescriptor,
+) -> Result<(), PiInstallError> {
+    let stamp = fs::symlink_metadata(path)
+        .ok()
+        .filter(|metadata| metadata.file_type().is_file())
+        .map(|metadata| FileStamp::of(&metadata));
+    let verified = |list: &Vec<(PathBuf, &'static str, FileStamp)>| {
+        stamp.is_some_and(|stamp| {
+            list.iter().any(|(held, digest, seen)| {
+                held == path && *digest == descriptor.sha256 && *seen == stamp
+            })
+        })
+    };
+    let mut list = VERIFIED_ARCHIVES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if verified(&list) {
+        return Ok(());
+    }
+    list.retain(|(held, _, _)| held != path);
+    drop(list);
+    verify_archive_for(path, descriptor)?;
+    let after = fs::symlink_metadata(path)
+        .ok()
+        .map(|metadata| FileStamp::of(&metadata));
+    // A file that changed while it was hashed is hashed again next time.
+    if let Some(stamp) = stamp.filter(|stamp| after == Some(*stamp)) {
+        VERIFIED_ARCHIVES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((path.to_owned(), descriptor.sha256, stamp));
+    }
+    Ok(())
 }
 
 fn read_pointer_for(
@@ -1080,6 +1151,34 @@ mod tests {
                 new.version
             );
         }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn an_installed_archive_is_hashed_again_once_it_changes() {
+        let root = std::env::temp_dir().join(format!(
+            "muniment-pi-archive-stamp-{}",
+            uuid::Uuid::now_v7()
+        ));
+        fs::create_dir_all(root.join("pi")).unwrap();
+        let descriptor = PiArtifactDescriptor {
+            version: "stamp",
+            archive: "pi.tar.gz",
+            byte_size: 1,
+            sha256: "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+            executable: "pi/pi",
+        };
+        fs::write(root.join(descriptor.archive), b"a").unwrap();
+        fs::write(root.join(descriptor.executable), b"executable").unwrap();
+        assert!(resolve_revision(&root, descriptor).is_ok());
+        assert!(resolve_revision(&root, descriptor).is_ok());
+        fs::write(root.join(descriptor.archive), b"b").unwrap();
+        assert_eq!(
+            resolve_revision(&root, descriptor),
+            Err(PiInstallError::DigestMismatch)
+        );
+        fs::write(root.join(descriptor.archive), b"a").unwrap();
+        assert!(resolve_revision(&root, descriptor).is_ok());
         fs::remove_dir_all(root).unwrap();
     }
 }
