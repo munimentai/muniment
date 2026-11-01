@@ -3912,7 +3912,7 @@
                       {#if !agentThreadMap[summary.threadId] && !swarm.groups.some((group) => group.thread_id === summary.threadId)}<button type="button" role="menuitem" disabled={running} onclick={() => openMoveDialog(summary.threadId)}>Move to project</button>{/if}
                       <button type="button" role="menuitem" disabled={running} onclick={() => setThreadOrganization(summary.threadId, 'archived')}>{threadOrganization[summary.threadId]?.archived ? 'Restore' : 'Archive'}</button>
                       {#if !agentThreadMap[summary.threadId] && !agentChatRows.some((chat) => chat.threadId === summary.threadId)}<button type="button" role="menuitem" disabled={switchLocked} onclick={() => { const { threadId, title } = summary; closeThreadMenu(); void openAgentChat({ fromThread: { id: threadId, title: title || rowTitle }, projectId: projectCatalog.projects[projectCatalog.threads[threadId]] ? projectCatalog.threads[threadId] : null }) }}>Make this an agent</button>{/if}
-                      <button type="button" role="menuitem" aria-label={deleteLabel(summary.threadId, rowTitle)} disabled={threadSwitching || runLocked || deletionHoldsRun(summary.threadId)} onclick={() => askToDeleteThread(summary.threadId)}>{deletionTargets(summary.threadId).length > 1 ? deleteLabel(summary.threadId, rowTitle) : 'Delete'}</button>
+                      <button type="button" role="menuitem" data-danger aria-label={deleteLabel(summary.threadId, rowTitle)} disabled={threadSwitching || runLocked || deletionHoldsRun(summary.threadId)} onclick={() => askToDeleteThread(summary.threadId)}>{deletionTargets(summary.threadId).length > 1 ? deleteLabel(summary.threadId, rowTitle) : 'Delete'}</button>
                     </div>
                   {/if}
         <aside data-panel="sidebar" id="sidebar" class="sidebar" use:overflowLabels={'.side-action span, .thread-row-title, .project-title span'}>
@@ -4807,6 +4807,7 @@
   .title-thread-actions { flex: none; }
   .thread-menu button { display: block; width: 100%; min-width: 24px; min-height: 24px; padding: 3px 8px; border-color: transparent; background: transparent; color: var(--ink); font-size: var(--text-13); text-align: left; }
   .thread-menu button:hover:not(:disabled) { border-color: transparent; background: var(--faint); }
+  .thread-menu button[data-danger] { color: var(--danger); }
   /* A narrow sidebar shortens the first control, never its start. */
   /* Sidebar labels overrun the way thread titles do: one line that ends in an ellipsis. */
   .side-action span { flex: 1; min-width: 0; white-space: nowrap; text-overflow: ellipsis; }

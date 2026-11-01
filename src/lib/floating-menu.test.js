@@ -10,12 +10,14 @@ it('routes popup selections to the original menu and ignores other menu sessions
  window.__TAURI_INTERNALS__={}
  const popup={setSize:vi.fn(),setPosition:vi.fn(),emit:vi.fn(),hide:vi.fn()}
  Window.getByLabel.mockResolvedValue(popup)
- const node=document.createElement('div');node.setAttribute('role','menu');node.innerHTML='<button>Rename</button><button disabled>Delete</button>';document.body.append(node)
+ const node=document.createElement('div');node.setAttribute('role','menu');node.innerHTML='<button>Rename</button><button disabled data-danger>Delete</button>';document.body.append(node)
  const click=vi.fn();node.firstChild.addEventListener('click',click)
  const action=floatingMenu(node)
  await waitFor(()=>expect(popup.emit).toHaveBeenCalled())
  const payload=popup.emit.mock.calls[0][1]
  expect(payload.items[1].disabled).toBe(true)
+ // The popup draws a destructive item, such as Delete, in the danger color.
+ expect(payload.items.map(item=>item.danger)).toEqual([false,true])
  const select=listen.mock.calls.find(([name])=>name==='action-menu-select')[1]
  select({payload:{id:'other',item:0}});expect(click).not.toHaveBeenCalled()
  select({payload:{id:payload.id,item:0}});expect(click).toHaveBeenCalledOnce()

@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 import { listen } from '@tauri-apps/api/event'
 import WorkspacePopup from './WorkspacePopup.svelte'
+import popupSource from './WorkspacePopup.svelte?raw'
 const setTitle = vi.hoisted(() => vi.fn(async () => {}))
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ show: async () => {}, hide: async () => {}, setFocus: async () => {}, setTitle, onFocusChanged: async () => () => {} }) }))
 vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn().mockResolvedValue(() => {}), emitTo: vi.fn().mockResolvedValue() }))
@@ -39,4 +40,11 @@ it('names the native window for the menu it shows, not the workspace tools', asy
   await waitFor(() => expect(listen.mock.calls.some(([name]) => name === 'workspace-menu-open')).toBe(true))
   await listen.mock.calls.findLast(([name]) => name === 'workspace-menu-open')[1]({ payload: { selected: null, label: 'Workspace tools', pointer: true } })
   expect(setTitle).toHaveBeenLastCalledWith('Workspace tools')
+})
+
+it('draws a destructive item, such as a thread\'s Delete, in the danger color', async () => {
+  await opened({ pointer: true, items: [{ id: 0, name: 'Rename' }, { id: 1, name: 'Archive' }, { id: 2, name: 'Delete', danger: true }] })
+  expect(screen.getByRole('menuitem', { name: 'Delete' })).toHaveAttribute('data-danger')
+  expect(screen.getByRole('menuitem', { name: 'Archive' })).not.toHaveAttribute('data-danger')
+  expect(popupSource).toMatch(/button\[data-danger\]\s*\{\s*color:\s*var\(--danger\)/)
 })

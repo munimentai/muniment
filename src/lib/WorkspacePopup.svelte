@@ -67,7 +67,7 @@
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <div data-panel="workspace-menu" data-panel-variant="overlay" class="tools" role="menu" tabindex="-1" aria-label={label} bind:this={menu} use:followPointer onkeydown={keys}>
   {#each items as item}
-    <button type="button" role="menuitem" disabled={item.disabled} onclick={() => choose(item.id)}>{#if item.icon}<LucideIcon name={item.icon}/>{/if}<span>{item.name}</span>{#if !actionId && selected === item.id}<LucideIcon name="check"/>{/if}</button>
+    <button type="button" role="menuitem" disabled={item.disabled} data-danger={item.danger || undefined} onclick={() => choose(item.id)}>{#if item.icon}<LucideIcon name={item.icon}/>{/if}<span>{item.name}</span>{#if !actionId && selected === item.id}<LucideIcon name="check"/>{/if}</button>
   {/each}
 </div>
 <style>
@@ -76,4 +76,6 @@
   button { display:flex; align-items:center; gap:10px; width:100%; min-height:36px; padding:8px; border:0; text-align:left; border-radius:var(--radius-control); color:var(--ink); background:transparent; cursor:pointer; font:var(--text-13) var(--font-human); }
   button:disabled { opacity: .5; cursor: default; }
   button:hover:not(:disabled) { background:var(--faint); } span { flex:1; }
+  /* A destructive item, such as a thread's Delete, reads in the danger color. */
+  button[data-danger] { color:var(--danger); }
 </style>

@@ -3319,6 +3319,10 @@ describe('thread name', () => {
     expect(menu).toHaveStyle({ left: '120px', top: '80px' })
     const remove = within(menu).getByRole('menuitem', { name: 'Delete Vendor audit' })
     expect(within(menu).getByRole('menuitem', { name: 'Rename' })).toHaveFocus()
+    // Delete is the menu's one destructive item and reads in the danger color, as the native popup draws it too.
+    expect(remove).toHaveAttribute('data-danger')
+    expect(within(menu).getAllByRole('menuitem').filter((item) => item.hasAttribute('data-danger'))).toEqual([remove])
+    expect(appRules.get('.thread-menu button[data-danger]')).toMatch(/color:\s*var\(--danger\)/)
 
     await fireEvent.keyDown(menu, { key: 'Escape' })
     expect(screen.queryByRole('menu')).not.toBeInTheDocument()

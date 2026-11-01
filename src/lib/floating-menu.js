@@ -30,7 +30,7 @@ export function floatingMenu(node) {
       const [origin, scale] = await Promise.all([main.innerPosition(), main.scaleFactor()])
       if (disposed) return
       const rect = node.getBoundingClientRect()
-      const items = buttons().map((button, index) => ({ id: index, name: button.textContent.trim(), disabled: button.disabled, icon: button.querySelector('svg')?.getAttribute('data-icon') }))
+      const items = buttons().map((button, index) => ({ id: index, name: button.textContent.trim(), disabled: button.disabled, danger: button.hasAttribute('data-danger'), icon: button.querySelector('svg')?.getAttribute('data-icon') }))
       const width = Math.min(320, Math.max(180, rect.width + 16))
       // The page measures CSS pixels, and the interface zoom scales them to window pixels.
       const zoom = currentZoom()
