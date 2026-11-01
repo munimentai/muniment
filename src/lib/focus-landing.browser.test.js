@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mount, tick, unmount } from 'svelte'
 import MachinePicker from '../runtimes/MachinePicker.svelte'
 import { INPUT_MARK_THROTTLE_MS, inputMarkSettler, landFocus, settleInputMark, shown, takesText } from './focus-landing.js'
@@ -168,20 +168,23 @@ it('asks to hide the mark when focus moves from one text field to another, as in
     // The composer's caret hands focus straight to the picker's search field.
     search.focus()
     expect(settler.poke).toHaveBeenCalledTimes(1)
-    // Focus on a control that takes no text asks nothing here.
+    // A click that moves focus off the text field asks, and a move between
+    // controls that take no text asks nothing.
     click(pin)
-    expect(settler.poke).toHaveBeenCalledTimes(1)
-    // Back to the composer by way of a button: the last text field was the search field.
+    expect(settler.poke).toHaveBeenCalledTimes(2)
     click(button)
-    click(composer)
     expect(settler.poke).toHaveBeenCalledTimes(2)
-    // A click that returns to the same field asks nothing.
+    // Back to the composer by way of a button: the last text field was the search field.
+    click(composer)
+    expect(settler.poke).toHaveBeenCalledTimes(3)
+    // A blur asks, and a click that returns to the same field asks nothing.
     composer.blur()
+    expect(settler.poke).toHaveBeenCalledTimes(4)
     click(composer)
-    expect(settler.poke).toHaveBeenCalledTimes(2)
+    expect(settler.poke).toHaveBeenCalledTimes(4)
   } finally { stop() }
   search.focus()
-  expect(settler.poke).toHaveBeenCalledTimes(2)
+  expect(settler.poke).toHaveBeenCalledTimes(4)
 })
 
 // Each trigger, through the real settler on fake timers: the count of watch
@@ -206,16 +209,20 @@ it('asks to hide the mark when code focuses the composer, as at launch, on Open 
   try {
     expect(watches()).toBe(1)
     vi.advanceTimersByTime(INPUT_MARK_THROTTLE_MS)
-    // "Open agent" and a thread switch move focus off the field, then code focuses it again.
+    // "Open agent" and a thread switch move focus off the field, then code
+    // focuses it again: the blur asks at once and the focus at the throttle's end.
     composer.blur()
     composer.focus()
     expect(watches()).toBe(2)
     vi.advanceTimersByTime(INPUT_MARK_THROTTLE_MS)
-    // A plain click into the composer asks nothing.
+    expect(watches()).toBe(3)
     composer.blur()
+    vi.advanceTimersByTime(5000)
+    expect(watches()).toBe(4)
+    // A plain click into the composer asks nothing.
     click(composer)
     vi.advanceTimersByTime(5000)
-    expect(watches()).toBe(2)
+    expect(watches()).toBe(4)
   } finally { stop(); vi.useRealTimers() }
 })
 
@@ -231,10 +238,12 @@ it('asks to hide the mark when the window becomes active over a focused text fie
     document.dispatchEvent(new Event('visibilitychange'))
     expect(watches()).toBe(2)
     vi.advanceTimersByTime(INPUT_MARK_THROTTLE_MS)
+    // The click onto the button asks once, and activation over it asks nothing.
     click(machines)
+    expect(watches()).toBe(3)
     window.dispatchEvent(new FocusEvent('focus'))
     vi.advanceTimersByTime(5000)
-    expect(watches()).toBe(2)
+    expect(watches()).toBe(3)
   } finally { stop(); vi.useRealTimers() }
 })
 
@@ -262,13 +271,15 @@ it('asks to hide the mark when a menu opens over a focused text field', async ()
     await Promise.resolve()
     expect(watches()).toBe(3)
     vi.advanceTimersByTime(INPUT_MARK_THROTTLE_MS)
-    // A menu that opens after a click moved focus off any text field asks nothing.
+    // A click that moves focus from the composer to a button asks, and the
+    // menu that opens then asks again at the throttle's end.
     click(composer)
     click(machines)
+    expect(watches()).toBe(4)
     document.querySelector('aside').insertAdjacentHTML('beforeend', '<div role="listbox"></div>')
     await Promise.resolve()
     vi.advanceTimersByTime(5000)
-    expect(watches()).toBe(3)
+    expect(watches()).toBe(5)
   } finally { stop(); vi.useRealTimers() }
 })
 
@@ -347,4 +358,51 @@ it('asks to hide the mark when a menu closes back to a composer that kept focus'
     vi.advanceTimersByTime(5000)
     expect(watches()).toBe(2)
   } finally { stop(); vi.useRealTimers() }
+})
+
+// Each way focus leaves the composer with no text field to take it, through
+// the real settler on fake timers. AppKit keeps the mark beside a caret the
+// user clicked, as TextEdit does, so the click into the composer asks nothing
+// and each departure asks once.
+describe('the mark after focus leaves the composer', () => {
+  const departures = [
+    ['a click on Save', ({ machines }) => click(machines)],
+    ['a click on Send', ({ send }) => click(send)],
+    ['a blur to the page', ({ composer }) => composer.blur()],
+    ['code that focuses a heading', ({ heading }) => heading.focus()],
+    ['an agent delete that removes the composer', ({ composer }) => composer.closest('main').remove()],
+    ['a composer that turns disabled', ({ composer }) => { composer.disabled = true }],
+  ]
+  for (const [name, leave] of departures) {
+    it(`asks to hide the mark after ${name}`, async () => {
+      const parts = markWatch()
+      const { watches, composer, settler } = parts
+      document.querySelector('main').insertAdjacentHTML('beforeend', '<button>Send</button><h1 tabindex="-1">Agents</h1>')
+      const send = document.querySelector('main button')
+      const heading = document.querySelector('h1')
+      const stop = settleInputMark(document, settler)
+      try {
+        click(composer)
+        vi.advanceTimersByTime(12_000)
+        expect(watches()).toBe(0)
+        leave({ ...parts, send, heading })
+        await Promise.resolve()
+        expect(watches()).toBe(1)
+        vi.advanceTimersByTime(20_000)
+        expect(watches()).toBe(1)
+      } finally { stop(); vi.useRealTimers() }
+    })
+  }
+
+  it('asks nothing when the window loses focus over the composer', () => {
+    const { watches, composer, settler } = markWatch()
+    const stop = settleInputMark(document, settler)
+    try {
+      click(composer)
+      // A window blur leaves the composer as the active element.
+      composer.dispatchEvent(new FocusEvent('focusout', { bubbles: true, relatedTarget: null }))
+      vi.advanceTimersByTime(5000)
+      expect(watches()).toBe(0)
+    } finally { stop(); vi.useRealTimers() }
+  })
 })
