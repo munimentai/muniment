@@ -84,8 +84,20 @@ impl PiLaunchBoundaries for Boundary {
             return self.answer;
         }
         // The user chose Allow: Pi's held read completes once Pi makes it.
+        // One write open releases one reader, and a release that pairs with
+        // another reader leaves Pi held, so the gate releases every reader
+        // until the test removes it.
         let gate = self.folder.join(GATE);
-        std::thread::spawn(move || drop(std::fs::OpenOptions::new().write(true).open(gate)));
+        std::thread::spawn(move || {
+            use std::os::unix::fs::OpenOptionsExt;
+            while gate.exists() {
+                let _ = std::fs::OpenOptions::new()
+                    .write(true)
+                    .custom_flags(libc::O_NONBLOCK)
+                    .open(&gate);
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        });
         FolderAccess::Open
     }
 }
