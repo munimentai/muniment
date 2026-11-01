@@ -41,6 +41,27 @@ describe('sidebar model', () => {
     expect(rowTime({ threadId: 'd', updatedAt: '2026-10-18T09:00:00Z' }, runs, undefined)).toBe('2026-10-18T09:00:00Z')
   })
 
+  it('sorts a thread by its newest run once that run changes before the thread list reloads', () => {
+    const runs = runStates([
+      { thread_id: 'agent-home', status: 'completed', created_at: '2026-10-18T09:58:00Z', updated_at: '2026-10-18T10:00:00Z' },
+      { thread_id: 'notes', status: 'completed', updated_at: '2026-10-18T08:00:00Z' },
+    ])
+    const input = sidebarInput({
+      summaries: [
+        { threadId: 'notes', title: 'Notes', updatedAt: '2026-10-18T09:55:00Z' },
+        { threadId: 'agent-home', title: 'Morning', updatedAt: '2026-10-18T09:00:00Z' },
+      ],
+      changed: runs.changed,
+    })
+    // The agent's run ended after the other thread's last change, so core
+    // places its row first, as its row time reads.
+    expect(input.threads.map((thread) => [thread.id, thread.updated_at])).toEqual([
+      ['notes', '2026-10-18T09:55:00Z'],
+      ['agent-home', '2026-10-18T10:00:00Z'],
+    ])
+    expect(input.threads.find((thread) => thread.id === 'agent-home').updated_at).toBe(rowTime({ threadId: 'agent-home', updatedAt: '2026-10-18T09:00:00Z' }, runs, 'done'))
+  })
+
   it('points each needs-you item at its thread or agent and leaves out offline machines and failed runs', () => {
     expect(attention([
       { kind: 'input', run: { thread_id: 't1' }, agent_id: 'a1' },

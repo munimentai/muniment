@@ -87,8 +87,10 @@ export function attention(needsYou = []) {
 // Core's input from the window's state. Each agent carries its color, which
 // its rows show. `agentChats` are agent creation chats as
 // { threadId, title, updatedAt, agentId }: a chat shows once it holds a
-// message, and a saved agent's chat sits with the agent.
-export function sidebarInput({ summaries = [], agentListing = null, agents = [], groups = [], agentChats = [], catalog = { projects: {}, threads: {} }, remote = [], organization = {}, marks = { read: {}, baseline: null }, working = [], failed = [], needsYou = [], current = null, query = '', machineOf = () => null }) {
+// message, and a saved agent's chat sits with the agent. `changed` is
+// `runStates().changed`: a thread whose newest run changed after its summary
+// sorts by that run, as its row time reads, before the thread list reloads.
+export function sidebarInput({ summaries = [], agentListing = null, agents = [], groups = [], agentChats = [], catalog = { projects: {}, threads: {} }, remote = [], organization = {}, marks = { read: {}, baseline: null }, working = [], failed = [], changed = new Map(), needsYou = [], current = null, query = '', machineOf = () => null }) {
   const threads = summaries.map((summary) => ({ id: summary.threadId, title: summary.title || '', updated_at: summary.updatedAt || '', machine: machineOf(summary.runtimeId) }))
   const known = new Set(threads.map((thread) => thread.id))
   for (const list of Object.values(agentListing?.threads ?? {})) {
@@ -112,6 +114,10 @@ export function sidebarInput({ summaries = [], agentListing = null, agents = [],
       if (chat.title) thread.title = chat.title
       if (Date.parse(chat.updatedAt ?? '') > (Date.parse(thread.updated_at) || 0)) thread.updated_at = chat.updatedAt
     }
+  }
+  for (const thread of threads) {
+    const ran = changed.get(thread.id)
+    if (Date.parse(ran ?? '') > (Date.parse(thread.updated_at) || 0)) thread.updated_at = ran
   }
   const projects = [
     ...Object.entries(catalog.projects ?? {}).map(([id, name]) => ({ id, name, owner: null })),
