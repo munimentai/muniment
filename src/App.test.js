@@ -11083,13 +11083,13 @@ describe('command palette', () => {
 
 describe('per-thread model', () => {
   const twoModels = { providers: [{ id: 'ollama', name: 'Ollama', source: 'local', base_url: 'http://localhost:11434/v1', models: [{ id: 'llama3.2:3b', context: '128K', thinking: false }, { id: 'qwen3:8b', context: '40K', thinking: false }] }], default_provider: 'ollama', default_model: 'llama3.2:3b', hidden: [] }
-  function modelRuntime(settings) {
+  function modelRuntime(settings, inventory = twoModels) {
     localModeStatus = true
     let current = settings
     const original = invoke.getMockImplementation()
     invoke.mockImplementation(async (command, args) => {
       if (command === 'auth_status') return { signed_in: false, subject: null }
-      if (command === 'local_mode_provider_inventory') return twoModels
+      if (command === 'local_mode_provider_inventory') return inventory
       if (command === 'project_list') return { projects: { 'p-homelab': 'Homelab' }, threads: { 'thread-1': 'p-homelab' }, settings: { 'p-homelab': { model: { provider: 'ollama', model: 'llama3.2:3b' } } } }
       if (command === 'thread_settings') return current
       if (command === 'thread_settings_set') {
@@ -11120,6 +11120,22 @@ describe('per-thread model', () => {
     await fireEvent.click(within(again).getByRole('button', { name: 'Use the project model' }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('thread_settings_set', { threadId: 'thread-1', reset: true }))
     expect(invoke).not.toHaveBeenCalledWith('local_mode_set_default_model', expect.anything())
+  })
+
+  it('names the model the open thread runs on in the chip, even one the picker hides', async () => {
+    modelRuntime({ thread_id: 'thread-1', model: { provider: 'ollama', model: 'qwen3:8b' }, layer: 'thread' }, { ...twoModels, hidden: ['ollama/qwen3:8b'] })
+    render(App)
+    await findReadyWorkspaceComposer()
+    expect(await screen.findByRole('button', { name: 'Model: qwen3:8b' })).toHaveTextContent('qwen3:8b')
+    expect(screen.queryByRole('button', { name: 'Model: llama3.2:3b' })).toBeNull()
+  })
+
+  it("marks the open thread's model unavailable when no provider lists it, and names no other model", async () => {
+    modelRuntime({ thread_id: 'thread-1', model: { provider: 'ollama', model: 'gone:1b' }, layer: 'thread' })
+    render(App)
+    await findReadyWorkspaceComposer()
+    expect(await screen.findByRole('button', { name: 'Model: gone:1b (unavailable)' })).toHaveTextContent('gone:1b (unavailable)')
+    expect(screen.queryByRole('button', { name: 'Model: llama3.2:3b' })).toBeNull()
   })
 
   it('carries a model picked before any thread exists on the first message', async () => {

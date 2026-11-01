@@ -94,6 +94,42 @@ describe('provider catalog', () => {
   })
 })
 
+describe("a thread's or an agent's own model in the chip", () => {
+  // The agent runs Grok 4.20 Multi Agent, which the picker hides, while Anthropic leads the picker.
+  const agentThread = {
+    providers: [
+      { id: 'anthropic', name: 'Anthropic', source: 'key', models: [{ id: 'claude-haiku-5-5' }] },
+      { id: 'xai', name: 'xAI', source: 'key', models: [{ id: 'grok-4.20-0309-reasoning' }, { id: 'grok-4.20-multi-agent-0309', name: 'Grok 4.20 Multi Agent 0309' }] },
+    ],
+    hidden: ['xai/grok-4.20-multi-agent-0309'],
+    default_provider: 'xai',
+    default_model: 'grok-4.20-multi-agent-0309',
+  }
+
+  it('names the kept model the picker hides, never the first row', () => {
+    expect(pickerGroups(agentThread).flatMap((group) => group.models).some((model) => model.id === 'grok-4.20-multi-agent-0309')).toBe(false)
+    expect(currentModel(agentThread, { kept: true })).toEqual({ provider: 'xai', model: 'grok-4.20-multi-agent-0309', label: 'Grok 4.20 Multi Agent 0309' })
+    expect(modelChipLabel(agentThread, { kept: true })).toBe('Grok 4.20 Multi Agent 0309')
+    // The default, which a run may leave, still falls back to the first shown row.
+    expect(currentModel(agentThread)).toMatchObject({ provider: 'anthropic', model: 'claude-haiku-5-5' })
+  })
+
+  it('names a kept model no provider lists by its name and marks it unavailable', () => {
+    const gone = { ...agentThread, default_provider: 'xai', default_model: 'grok-4.20-retired' }
+    expect(currentModel(gone, { kept: true })).toEqual({ provider: 'xai', model: 'grok-4.20-retired', label: modelDisplayName(gone, 'xai', 'grok-4.20-retired'), unavailable: true })
+    expect(modelChipLabel(gone, { kept: true })).toBe(`${modelDisplayName(gone, 'xai', 'grok-4.20-retired')} (unavailable)`)
+    const disconnected = { ...agentThread, default_provider: 'openai', default_model: 'gpt-6.1-sol' }
+    expect(currentModel(disconnected, { kept: true })).toMatchObject({ provider: 'openai', model: 'gpt-6.1-sol', unavailable: true })
+    expect(modelChipLabel(disconnected, { kept: true })).not.toContain('Claude')
+  })
+
+  it('names a kept model the picker shows as the picker does', () => {
+    const shown = { ...agentThread, default_model: 'grok-4.20-0309-reasoning' }
+    expect(currentModel(shown, { kept: true })).toEqual(currentModel(shown))
+    expect(currentModel(shown, { kept: true }).unavailable).toBeUndefined()
+  })
+})
+
 describe('the model router in the picker', () => {
   const routed = {
     providers: [

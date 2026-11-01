@@ -234,7 +234,11 @@ function groupCatalogId(id) {
 
 // The row in use: the saved default when a row still saves it, else the first
 // row, else nothing. The answer names the provider and the choice the row saves.
-export function currentModel(inventory) {
+// `kept` names a model a run uses whatever the picker shows, as an open
+// thread's or an agent's own model from core's `thread_settings`: a row the
+// picker hides still names it, and a model no row lists names it by its
+// display name marked `unavailable`, never another model.
+export function currentModel(inventory, { kept = false } = {}) {
   if (!inventory) return null
   const rows = pickerGroups(inventory).flatMap((group) => group.models)
   const saved = inventory.default_provider && inventory.default_model
@@ -242,9 +246,22 @@ export function currentModel(inventory) {
     : null
   const sourceGroup = pickerGroups(inventory).find((group) => group.id === inventory.default_provider)
   const equivalent = sourceGroup?.models.find((row) => row.id === inventory.default_model)
+  if (kept && !saved && !equivalent && inventory.default_provider && inventory.default_model) return keptModel(inventory)
   // With no saved row, the first row some account serves leads.
   const row = saved ?? equivalent ?? rows.find((entry) => !entry.unavailable) ?? rows[0]
   return row ? { provider: row.provider, model: row.choice, label: row.label } : null
+}
+
+// A kept model the picker does not show: its hidden row when one lists it,
+// else its name, unavailable.
+function keptModel(inventory) {
+  const { default_provider: provider, default_model: model } = inventory
+  const groups = pickerGroups(inventory, '', { all: true })
+  const rows = groups.flatMap((group) => group.models)
+  const row = rows.find((entry) => entry.provider === provider && entry.choice === model)
+    ?? groups.find((group) => group.id === provider)?.models.find((entry) => entry.id === model)
+  if (row) return { provider: row.provider, model: row.choice, label: row.label, ...(row.unavailable ? { unavailable: true } : {}) }
+  return { provider, model, label: modelDisplayName(inventory, provider, model), unavailable: true }
 }
 
 // Router catalog entries remain visible when their account pool is empty.
@@ -259,11 +276,11 @@ export function currentModelAvailable(inventory) {
 }
 
 // The composer chip: the model id in use beside the provider's mark, `Connect a
-// model` when none answers.
-export function modelChipLabel(inventory) {
-  const current = currentModel(inventory)
+// model` when none answers, and a kept model no provider serves marked unavailable.
+export function modelChipLabel(inventory, options) {
+  const current = currentModel(inventory, options)
   if (!current) return 'Connect a model'
-  return current.label
+  return current.unavailable ? `${current.label} (unavailable)` : current.label
 }
 
 // A model's name wherever the app shows one, the same name its picker row and
