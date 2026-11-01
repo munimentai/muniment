@@ -217,7 +217,9 @@
   })
 </script>
 
-{#if onboarding.name !== 'complete'}
+<!-- Until the Home read settles, the window keeps its neutral lockup: a
+     configured Home never shows the first run for a frame. -->
+{#if onboarding.name !== 'complete' && onboarding.name !== 'loading'}
   <section class="onboarding" aria-label={settings ? 'Home settings' : 'First run'} data-home-picker={JSON.stringify(pickerOutcome)}>
     {#if settings}
       <h1>Home settings</h1>

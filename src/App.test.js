@@ -3823,6 +3823,31 @@ describe('thread name', () => {
     expect(appRules.get('.thread-row-title[data-unread]')).toMatch(/font-weight:\s*var\(--weight-semibold\)/)
   })
 
+  it.each([true, false])('never shows the first run while the Home read is pending at launch (configured %s)', async (configured) => {
+    homeStatus = { configured, homePath: '/Documents/Muniment' }
+    const home = deferred()
+    const core = window.__TAURI__.core.invoke
+    window.__TAURI__.core.invoke = (command, ...args) => command === 'home_status' ? home.promise.then(() => core(command, ...args)) : core(command, ...args)
+    onTestFinished(() => { window.__TAURI__.core.invoke = core })
+    const seen = []
+    const observer = new MutationObserver(() => { if (/Finding Home|Connect a model/.test(document.body.textContent)) seen.push('first run') })
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true })
+    onTestFinished(() => observer.disconnect())
+    render(App)
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(screen.queryByRole('region', { name: 'First run' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Finding Home…')).not.toBeInTheDocument()
+    home.resolve()
+    if (configured) {
+      await findWorkspaceComposer()
+      expect(seen).toEqual([])
+    } else {
+      const firstRun = await screen.findByRole('region', { name: 'First run' })
+      expect(within(firstRun).getByRole('heading', { name: 'Connect a model' })).toBeVisible()
+      expect(within(firstRun).getByTestId('onboarding-home-path')).toHaveTextContent('/Documents/Muniment')
+    }
+  })
+
   it('shows a loading line, no empty list and no new thread until the first thread read settles at launch', async () => {
     const at = '2026-07-28T11:55:00Z'
     threadSummaryResult = [{ threadId: 'morning', title: 'Tauri Morning', updatedAt: at, runtimeId: 'local' }]
