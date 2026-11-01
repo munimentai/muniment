@@ -182,7 +182,7 @@ describe('Usage page', () => {
     }))
     await fireEvent.click(screen.getByRole('button', { name: 'Machine: Studio (offline)' }))
     await fireEvent.click(screen.getByRole('menuitemradio', { name: 'Build box' }))
-    await vi.waitFor(() => expect(invoke).toHaveBeenLastCalledWith('usage_summary', expect.objectContaining({ machines: [{ id: 'box', name: 'Build box' }], machine: 'box' })))
+    await vi.waitFor(() => expect(invoke).toHaveBeenLastCalledWith('usage_summary', expect.objectContaining({ machines: [{ id: 'local', name: 'This computer' }, { id: 'box', name: 'Build box' }], machine: 'box' })))
   })
 
   it('asks each account again on Refresh, then reads usage', async () => {

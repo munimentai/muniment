@@ -31,10 +31,9 @@
   let error = $state('')
   let now = $state(Date.now())
   const machines = $derived(machineRefs(runtimeList))
-  // A machine that does not answer counts from the copies the others hold,
-  // so its filter asks every machine that answers.
+  // A machine filter still asks every machine that answers: a machine that
+  // gives no answer counts from the copies the others hold of its runs.
   const members = $derived(offlineMembers(runtimeList))
-  const asked = $derived(machines.some((entry) => entry.id === machine) ? machines.filter((entry) => entry.id === machine) : machines)
   const machineOptions = $derived([{ value: '', label: 'All machines' }, ...machines.map((entry) => ({ value: entry.id, label: entry.name })), ...members.map((entry) => ({ value: entry.id, label: `${entry.name} (offline)` }))])
   const failed = $derived((summary?.machines ?? []).filter((entry) => entry.state !== 'ok'))
   const rows = $derived(breakdown === 'machine' ? summary?.breakdown?.machine ?? [] : summary?.breakdown?.[breakdown] ?? [])
@@ -45,7 +44,7 @@
     const ticket = ++request
     loading = true
     try {
-      const next = await readUsage(tauri, asked, { range, provider: provider || null, machine, members })
+      const next = await readUsage(tauri, machines, { range, provider: provider || null, machine, members })
       if (ticket !== request) return
       summary = next
       error = ''
@@ -63,7 +62,7 @@
     await refresh()
   }
 
-  $effect(() => { void range; void provider; void machine; void asked.map((entry) => entry.id).join(); void refresh() })
+  $effect(() => { void range; void provider; void machine; void machines.map((entry) => entry.id).join(); void refresh() })
   onMount(() => {
     const poll = () => { if (!document.hidden) void refresh() }
     const timer = setInterval(poll, 60_000)
