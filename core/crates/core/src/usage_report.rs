@@ -459,9 +459,15 @@ pub fn split_model(model: &str) -> (String, String) {
         (ROUTER_PROVIDER, Some((family, model))) => (family, model),
         _ => (provider, rest),
     };
-    let provider = family::family_for_pi_provider(provider)
-        .map(|family| family.id)
-        .unwrap_or(provider);
+    // A turn on a Claude Code account runs through the bridge provider, and
+    // its runs belong to the Anthropic account's card.
+    let provider = if provider == crate::models::claude_accounts::PROVIDER {
+        "anthropic"
+    } else {
+        family::family_for_pi_provider(provider)
+            .map(|family| family.id)
+            .unwrap_or(provider)
+    };
     let provider = if provider.is_empty() {
         "unknown"
     } else {
@@ -2116,6 +2122,18 @@ mod tests {
             ("xai", "pending")
         );
         let _ = std::fs::remove_dir_all(&agent);
+    }
+
+    #[test]
+    fn a_claude_code_turn_counts_under_its_anthropic_account() {
+        assert_eq!(
+            split_model("claude-bridge/claude-opus-4-8"),
+            ("anthropic".to_owned(), "claude-opus-4-8".to_owned())
+        );
+        assert_eq!(
+            split_model("openai-codex/gpt-6"),
+            ("openai".to_owned(), "gpt-6".to_owned())
+        );
     }
 
     #[test]

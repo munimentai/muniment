@@ -195,7 +195,7 @@ pub(super) fn status(executable: &Path, folder: Option<&Path>) -> Option<Status>
 }
 
 /// The plan windows in a `get_usage` answer. `None` when the answer is not
-/// one.
+/// one, or when plan limits apply and Claude Code read no window.
 pub(super) fn parse_usage(response: &Value, now_ms: i64) -> Option<(Usage, Option<String>)> {
     let readable = response.get("rate_limits_available")?.as_bool()?;
     let plan = response
@@ -250,6 +250,12 @@ pub(super) fn parse_usage(response: &Value, now_ms: i64) -> Option<(Usage, Optio
                 }
             }
         }
+    }
+    // Plan limits apply, yet Claude Code has no windows: its read of the
+    // usage endpoint failed, such as on a 429. That is no reading, so the
+    // held one stays rather than reading as unavailable.
+    if readable && windows.is_empty() {
+        return None;
     }
     Some((
         Usage {
@@ -905,6 +911,21 @@ mod tests {
         let (usage, plan) = parse_usage(&key, 1).unwrap();
         assert!(!usage.readable && usage.windows.is_empty() && plan.is_none());
         assert!(parse_usage(&json!({}), 1).is_none());
+    }
+
+    #[test]
+    fn a_failed_limits_read_is_no_reading_and_a_reset_is_a_whole_second() {
+        // Claude Code answers so when its usage endpoint refused, such as on
+        // a 429: plan limits apply, and it read none.
+        let refused =
+            json!({"subscription_type": "max", "rate_limits_available": true, "rate_limits": null});
+        assert!(parse_usage(&refused, 1).is_none());
+        let answer = json!({
+            "rate_limits_available": true,
+            "rate_limits": {"seven_day": {"utilization": 13.0, "resets_at": "2026-11-01T22:00:00.381+00:00"}}
+        });
+        let (usage, _) = parse_usage(&answer, 1).unwrap();
+        assert_eq!(usage.windows[0].resets_at_ms, Some(1_793_570_400_000));
     }
 
     /// A stand-in `claude` at the bundled path. `auth login` names its
