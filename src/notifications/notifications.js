@@ -6,7 +6,7 @@ import { agentRequest } from '../agents/agent-runtime.js'
 import { LOCAL_RUNTIME_ID } from '../runtimes/runtimes.js'
 import { routineIcon } from '../agents/routine-labels.js'
 import { markdownPlainText } from '../lib/assistant-markdown.js'
-import { formatClock, formatDate, sameDay, zoneOffsetMinutes } from '../lib/time-format.svelte.js'
+import { displayZone, formatClock, formatDate, sameDay, zoneOffsetMinutes } from '../lib/time-format.svelte.js'
 
 export const NOTIFICATION_VIEWS = [
   { value: 'needs_you', label: 'Needs you' },
@@ -21,9 +21,10 @@ export const NOTIFY_KEY = 'notify'
 export const DEFAULT_NOTIFY = Object.freeze({ needs_you: true, finished: false })
 
 // `read` maps each thread id to when this device last read it, so a failed
-// run leaves Needs you once its thread is open.
+// run leaves Needs you once its thread is open. Core starts each day at the
+// shown zone's own midnight, so a daylight saving change moves no run.
 export function readNotifications(tauri, machines, { view = 'all', machine = null, agent = null, read = null } = {}) {
-  const filter = { view, utc_offset_minutes: zoneOffsetMinutes() }
+  const filter = { view, utc_offset_minutes: zoneOffsetMinutes(), time_zone: displayZone() }
   if (read && Object.keys(read).length) filter.read = read
   if (machine) filter.machine = machine
   if (agent) filter.agent = agent

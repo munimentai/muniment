@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { TIME_EVENT, TIME_STORAGE_KEY, dayNumber, displayZone, formatClock, formatDate, formatDateTime, formatHour, formatWallTime, parseTimeSetting, saveTimeSetting, scheduleTime, startTimeSetting, systemClock, systemTimeZone, timeSetting, twelveHour, zoneOffsetMinutes } from './time-format.svelte.js'
+import { TIME_EVENT, TIME_STORAGE_KEY, dayNumber, displayZone, formatClock, formatDate, formatDateTime, formatHour, formatWallTime, parseTimeSetting, sameDay, saveTimeSetting, scheduleTime, startTimeSetting, systemClock, systemTimeZone, timeSetting, twelveHour, zoneOffsetMinutes } from './time-format.svelte.js'
 import { runTimeLabel } from './agent-labels.js'
 import { messageLocalTime } from './chat-state.js'
 import { clockTime, readNotifications, scheduleTime as notificationTime } from '../notifications/notifications.js'
@@ -73,6 +73,31 @@ it('formats message, notification and usage times through the setting', async ()
   const invoke = vi.fn(async () => ({}))
   await readNotifications({ invoke }, [])
   expect(invoke.mock.calls[0][1].filter.utc_offset_minutes).toBe(330)
+  expect(invoke.mock.calls[0][1].filter.time_zone).toBe('Asia/Kolkata')
+})
+
+it('counts days from each zone midnight across both daylight saving changes', async () => {
+  // New York: daylight time ends at 06:00Z on Nov 1 and starts at 07:00Z on Mar 8.
+  await saveTimeSetting(null, { zone: 'America/New_York', clock: '12h' })
+  const fall = Date.parse('2026-11-01T15:00:00Z')
+  expect(sameDay('2026-11-01T04:10:00Z', fall)).toBe(true)
+  expect(sameDay('2026-11-01T03:50:00Z', fall)).toBe(false)
+  expect(runTimeLabel('2026-11-01T04:10:00Z', fall)).toBe('Today at 12:10 AM')
+  expect(runTimeLabel('2026-11-01T03:50:00Z', fall)).toBe('Yesterday at 11:50 PM')
+  const spring = Date.parse('2026-03-09T03:30:00Z')
+  expect(runTimeLabel('2026-03-08T05:10:00Z', spring)).toBe('Today at 12:10 AM')
+  expect(runTimeLabel('2026-03-08T04:30:00Z', spring)).toBe('Yesterday at 11:30 PM')
+  // Sydney: daylight time ends at 16:00Z on Apr 4 and starts at 16:00Z on Oct 3.
+  await saveTimeSetting(null, { zone: 'Australia/Sydney' })
+  const autumn = Date.parse('2026-04-05T02:00:00Z')
+  expect(runTimeLabel('2026-04-04T13:30:00Z', autumn)).toBe('Today at 12:30 AM')
+  expect(runTimeLabel('2026-04-04T12:50:00Z', autumn)).toBe('Yesterday at 11:50 PM')
+  const sydneySpring = Date.parse('2026-10-04T12:30:00Z')
+  expect(runTimeLabel('2026-10-03T14:10:00Z', sydneySpring)).toBe('Today at 12:10 AM')
+  expect(runTimeLabel('2026-10-03T13:30:00Z', sydneySpring)).toBe('Yesterday at 11:30 PM')
+  const invoke = vi.fn(async () => ({}))
+  await readNotifications({ invoke }, [])
+  expect(invoke.mock.calls[0][1].filter.time_zone).toBe('Australia/Sydney')
 })
 
 it('saves the choice to core on this computer with the computer clock, and keeps a copy', async () => {
