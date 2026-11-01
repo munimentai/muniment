@@ -582,6 +582,9 @@
   const profileAgent = $derived(roster.find(agent => agent.id === (profileOnlyAgent ?? selectedAgent)))
   // Agents from every machine the app reaches, each with its `runtimeId`.
   let agentListing = $state(emptyListing())
+  // Whether the first agent listing answered or failed. Until then a thread
+  // row cannot tell an agent's thread from a plain one.
+  let agentsListed = $state(false)
   // The swarm every reachable machine reports: members, the agent directory,
   // groups, pending approvals and the absence pause.
   let swarm = $state(emptySwarm())
@@ -620,9 +623,10 @@
       const value = await listAgents(tauri, runtimeList, untrack(() => agentListing))
       if (version !== agentListVersion) return
       agentListing = value
+      agentsListed = true
       selectedAgent = { ...swarmThreads(swarm), ...agentThreads(value) }[currentThreadId] ?? startingAgent ?? null
     }
-    catch (_) { /* The manager presents errors and retry state. */ }
+    catch (_) { if (version === agentListVersion) agentsListed = true /* The manager presents errors and retry state. */ }
   }
   const showAgentMachines = $derived(pairedRuntimes(runtimeList).length > 0 || swarm.members.length > 1)
   // A group's thread opens on the machine that holds it, like any thread.
@@ -1073,6 +1077,9 @@
   // replaces the last whole. Reading a thread changes its status, not its
   // place, so rows move only on new activity.
   let sidebarArrangement = $state.raw(emptySidebar())
+  // Whether core arranged the rows after the first agent listing, so each
+  // agent's thread row names its agent.
+  let arrangedWithAgents = $state(false)
   let readState = $state.raw(readMarks())
   let archivedOpen = $state(false)
   let needsYouItems = $state.raw([])
@@ -1109,14 +1116,16 @@
   let sidebarAsked = ''
   $effect(() => {
     const input = sidebarFeed
+    const listed = agentsListed
     if (!tauri) return
-    const asked = JSON.stringify(input)
+    const asked = `${listed}:${JSON.stringify(input)}`
     if (asked === sidebarAsked) return
     sidebarAsked = asked
     const request = ++sidebarRequest
     Promise.resolve(arrangeSidebar(tauri, input)).then((next) => {
       if (request !== sidebarRequest || !next) return
       sidebarArrangement = next
+      arrangedWithAgents = listed
     }).catch(() => { if (request === sidebarRequest) sidebarAsked = '' })
   })
   // The thread that shows is the one launch opens again, and a new thread
@@ -3788,13 +3797,15 @@
   {@const known = agent && (roster.find((entry) => entry.id === agent.id) ?? agent)}
   {@const owner = !agent && threadOwner(summary, swarm, runtimeList)}
   {@const lined = !!owner || pairedRuntimes(runtimeList).length > 0}
-  {@const machine = lined && !agent && !owner ? runtimeList.runtimes.find((runtime) => runtime.id === (summary.runtimeId ?? LOCAL_RUNTIME_ID)) : null}
+  {@const labeled = !!agent || arrangedWithAgents}
+  {@const machine = lined && labeled && !agent && !owner ? runtimeList.runtimes.find((runtime) => runtime.id === (summary.runtimeId ?? LOCAL_RUNTIME_ID)) : null}
+  {@const hint = machine && statusHint(machine) && (!machine.local || (threadShown && desktopClientStatus?.connected !== true))}
   {@const status = settledStatus(summary.row?.status, summary.threadId)}
   {@const ring = { status, label: summary.row?.status_label ?? '', key: `${summary.threadId}:${summary.row?.updated_at ?? summary.updatedAt ?? ''}` }}
   {@const unread = status === 'done' || status === 'failed' ? 'true' : undefined}
   {@const at = rowTime(summary, sidebarRuns, status)}
   {#if lined}
-    <div class="thread-row-body"><div class="thread-row-title" id={rowId && `${rowId}-title`} data-unread={unread}>{title}</div><span class="thread-row-meta" id={rowId && `${rowId}-meta`}>{#if agent}<StatusRing {...ring}><AgentAvatar agent={known} size={14} tooltip={false} /></StatusRing><span class="row-agent">{agent.name}</span>{:else if owner}<OwnerChip machine={owner}>{#snippet icon()}<StatusRing {...ring} size={12}><LucideIcon name={kindIcon(owner)} size={12} /></StatusRing>{/snippet}</OwnerChip>{:else if machine}<StatusRing {...ring} size={12}><LucideIcon name={kindIcon(machine)} size={12} /></StatusRing><span class="machine-name">{machineName(machine)}</span>{#if statusHint(machine)}<StatusChip dot tone={machineStatusTone(machine.status)}>, {statusLabel(machine)}</StatusChip>{/if}{:else}<StatusRing {...ring} size={12} />{/if}<time datetime={at}>{relativeTime(at, minuteClock())}</time></span></div>
+    <div class="thread-row-body"><div class="thread-row-title" id={rowId && `${rowId}-title`} data-unread={unread}>{title}</div><span class="thread-row-meta" id={rowId && `${rowId}-meta`}>{#if agent}<StatusRing {...ring}><AgentAvatar agent={known} size={14} tooltip={false} /></StatusRing><span class="row-agent">{agent.name}</span>{:else if owner && labeled}<OwnerChip machine={owner}>{#snippet icon()}<StatusRing {...ring} size={12}><LucideIcon name={kindIcon(owner)} size={12} /></StatusRing>{/snippet}</OwnerChip>{:else if machine}<StatusRing {...ring} size={12}><LucideIcon name={kindIcon(machine)} size={12} /></StatusRing><span class="machine-name">{machineName(machine)}</span>{#if hint}<StatusChip dot tone={machineStatusTone(machine.status)}>, {statusLabel(machine)}</StatusChip>{/if}{:else}<StatusRing {...ring} size={12} />{/if}<time datetime={at}>{relativeTime(at, minuteClock())}</time></span></div>
   {:else}
     <div class="thread-row-body" data-layout="single">{#if agent}<StatusRing {...ring} id={rowId && `${rowId}-lead`}><AgentAvatar agent={known} size={14} tooltip={false} /></StatusRing><span class="row-agent visually-hidden" id={rowId && `${rowId}-agent`}>{agent.name}</span>{:else}<StatusRing {...ring} id={rowId && `${rowId}-lead`} />{/if}<div class="thread-row-title" id={rowId && `${rowId}-title`} data-unread={unread}>{title}</div><time id={rowId && `${rowId}-meta`} datetime={at}>{relativeTime(at, minuteClock())}</time></div>
   {/if}

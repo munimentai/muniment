@@ -4063,6 +4063,61 @@ async function openSidebarPage(label) {
 const agentListAnswer = (agents, primaryThreads = {}) => ({ agents, primary_threads: primaryThreads, latest_runs: {}, errors: [] })
 const isAgentList = (command, args) => command === 'agent_request' && args?.operation === 'agent.list'
 
+describe('launch rows', () => {
+  const machines = { appVersion: '0.2.0', deviceName: 'Laptop', selected: 'local', runtimes: [
+    // The shell lists this computer offline until its runtime connects.
+    { id: 'local', name: 'This computer', kind: 'local', formFactor: 'laptop', status: 'offline', local: true, active: true, scopes: [] },
+    { id: 'box', name: 'Build box', kind: 'container', status: 'online', local: false, active: false, scopes: ['run.write'] },
+  ] }
+  const rowMeta = (title) => [...document.querySelectorAll('#sidebar .thread-row')].find((row) => row.querySelector('.thread-row-title')?.textContent === title)?.querySelector('.thread-row-meta')
+
+  function launch({ connected }) {
+    const agents = deferred()
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args) ? agents.promise
+      : command === 'runtime_list' ? machines
+        : command === 'attach_listener_status' ? { connected, supervisor_running: true }
+          : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
+    threadSummaryResult = [
+      { threadId: 'morning-thread', title: 'Tauri Morning', updatedAt: '2026-07-28T11:55:00Z', runtimeId: 'local' },
+      { threadId: 'plain-thread', title: 'Lease renewal', updatedAt: '2026-07-27T11:55:00Z', runtimeId: 'local' },
+    ]
+    const seen = []
+    const observer = new MutationObserver(() => {
+      const meta = rowMeta('Tauri Morning')
+      if (meta) seen.push({ morning: meta.textContent, dots: document.querySelectorAll('#sidebar .thread-row .status-chip').length })
+    })
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true })
+    onTestFinished(() => observer.disconnect())
+    render(App)
+    return { seen, answerAgents: () => agents.resolve(agentListAnswer([{ id: 'agent-1', name: 'Morning', instructions: '', projectId: null, schedule: null, routines: [] }], { 'agent-1': 'morning-thread' })) }
+  }
+
+  it('names no machine on a row before the agent list arrives, and no offline dot before the runtime connects', async () => {
+    const { seen, answerAgents } = launch({ connected: true })
+    await waitFor(() => expect(rowMeta('Tauri Morning')).toBeTruthy())
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', expect.objectContaining({ operation: 'agent.list' })))
+    // Before the agent list answers, each row holds its meta line to its time.
+    expect(rowMeta('Tauri Morning')).not.toHaveTextContent('This computer')
+    expect(rowMeta('Lease renewal')).not.toHaveTextContent('This computer')
+    answerAgents()
+    await waitFor(() => expect(rowMeta('Tauri Morning').querySelector('.row-agent')).toHaveTextContent('Morning'))
+    await waitFor(() => expect(rowMeta('Lease renewal')).toHaveTextContent('This computer'))
+    // The agent's row never read as this computer's, and no row drew an offline dot.
+    expect(seen.length).toBeGreaterThan(0)
+    expect(seen.filter((state) => state.morning.includes('This computer'))).toEqual([])
+    expect(seen.filter((state) => state.dots)).toEqual([])
+    expect(document.querySelectorAll('#sidebar .thread-row .status-chip')).toHaveLength(0)
+  })
+
+  it('draws this computer offline once launch settles and the runtime reports no connection', async () => {
+    const { answerAgents } = launch({ connected: false })
+    answerAgents()
+    await waitFor(() => expect(rowMeta('Lease renewal')).toHaveTextContent('This computer'))
+    await waitFor(() => expect(rowMeta('Lease renewal').querySelector('.status-chip')).toHaveTextContent('Offline'))
+  })
+})
+
 describe('agent poll', () => {
   it('skips the agent poll while the window is hidden and refreshes once when it shows', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
