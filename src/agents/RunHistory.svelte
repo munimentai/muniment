@@ -15,19 +15,31 @@
   // it is now. Failures core kept that the run list no longer holds join the
   // list as failed rows. `embedded` drops the heading and the section rule
   // for a panel that draws its own, such as the agent card's History.
+  // Show older reads the next page of `agent.runs` from the agent's machine,
+  // older than the oldest run listed, and shows `limit` more rows. `complete`
+  // says `runs` already holds every run, so the list asks for no more.
+  import { untrack } from 'svelte'
   import LucideIcon from '../lib/LucideIcon.svelte'
   import { runOutcome, runTimeLabel, runTitle } from '../lib/agent-labels.js'
   import { runFailureText } from '../lib/run-failure.js'
+  import { agentRequest } from './agent-runtime.js'
   import { loadReplays, replayRun } from './replays.js'
 
-  let { tauri, agent, runs = [], limit = 20, embedded = false, disabled = false, onopen = null, onrun = () => {} } = $props()
+  let { tauri, agent, runs = [], limit = 20, complete = false, embedded = false, disabled = false, onopen = null, onrun = () => {} } = $props()
   let replays = $state([])
   let busy = $state('')
   let error = $state('')
   let now = $state(Date.now())
+  let shown = $state(untrack(() => limit))
+  let older = $state([])
+  let olderDone = $state(false)
+  let loadingOlder = $state(false)
 
   $effect(() => {
     agent.id
+    shown = untrack(() => limit)
+    older = []
+    olderDone = false
     void loadReplays(tauri, agent).then((answer) => { replays = answer.replays; error = answer.error })
   })
   // The day words move on while the profile stays open.
@@ -37,11 +49,39 @@
   })
 
   const startedAt = (run) => run.created_at ?? run.updated_at
-  const rows = $derived.by(() => {
+  const listed = $derived.by(() => {
     const known = new Set(runs.map((run) => run.id))
+    const read = older.filter((run) => !known.has(run.id))
+    for (const run of read) known.add(run.id)
     const kept = replays.filter((replay) => !known.has(replay.replay_id)).map((replay) => ({ id: replay.replay_id, agent_id: replay.agent_id, thread_id: replay.thread_id ?? null, trigger: replay.trigger, status: 'failed', error: replay.error, created_at: replay.failed_at, runtimeId: agent.runtimeId ?? 'local' }))
-    return [...runs, ...kept].sort((a, b) => Date.parse(startedAt(b)) - Date.parse(startedAt(a))).slice(0, limit)
+    return [...runs, ...read, ...kept].sort((a, b) => Date.parse(startedAt(b)) - Date.parse(startedAt(a)))
   })
+  const rows = $derived(listed.slice(0, shown))
+  // The list asks for older runs once it shows a full page and the machine
+  // may hold more than it has read.
+  const moreToRead = $derived(!complete && !olderDone && runs.length + older.length >= limit)
+  const hasOlder = $derived(listed.length > shown || moreToRead)
+
+  async function showOlder() {
+    if (loadingOlder) return
+    error = ''
+    if (moreToRead && listed.length <= shown + limit) {
+      // Run ids sort by time, and core lists the runs older than the cursor id.
+      const oldest = [...runs, ...older].map((run) => run.id).sort().at(0)
+      loadingOlder = true
+      try {
+        const answer = await agentRequest(tauri, agent.runtimeId, 'agent.runs', { agent_id: agent.id, limit, cursor: oldest })
+        older = [...older, ...(answer?.runs ?? []).map((run) => ({ ...run, runtimeId: agent.runtimeId ?? 'local' }))]
+        olderDone = !answer?.next_cursor
+      } catch (failure) {
+        error = String(failure?.message ?? failure)
+        return
+      } finally {
+        loadingOlder = false
+      }
+    }
+    shown += limit
+  }
   const replayFor = (run) => run.status === 'failed' ? replays.find((replay) => replay.replay_id === run.id) : null
 
   async function retry(replay) {
@@ -78,6 +118,7 @@
       <li class="empty">No runs yet.</li>
     {/each}
   </ul>
+  {#if hasOlder}<button type="button" class="older" disabled={loadingOlder} onclick={showOlder}>{loadingOlder ? 'Loading older runs…' : 'Show older'}</button>{/if}
   {#if error}<p role="alert">{error}</p>{/if}
 </section>
 
@@ -103,6 +144,9 @@
   .retry { position: absolute; top: 50%; right: 4px; display: grid; place-items: center; width: 24px; height: 24px; padding: 0; transform: translateY(-50%); border: 0; border-radius: var(--radius-control); background: transparent; color: var(--muted); cursor: pointer; }
   .retry:hover:not(:disabled) { background: var(--faint); color: var(--ink); }
   .retry:disabled { opacity: .5; cursor: default; }
+  .older { justify-self: start; padding: 4px 6px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--muted); font: var(--text-12) var(--font-human); cursor: pointer; }
+  .older:hover:not(:disabled) { background: var(--faint); color: var(--ink); }
+  .older:disabled { cursor: default; }
   .empty { padding: 4px 6px; color: var(--muted); font-size: var(--text-12); }
   [role="alert"] { margin: 0; color: var(--danger); font-size: var(--text-12); }
   .embedded [role="alert"] { margin: 2px 8px; }

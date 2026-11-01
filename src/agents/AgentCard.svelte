@@ -113,7 +113,7 @@
     let alive = true
     runs = { list: untrack(() => runs.list), loading: true, error: '' }
     agentRequest(tauri, agent.runtimeId, 'agent.runs', { agent_id: agent.id, limit: 20 })
-      .then((answer) => { if (alive) runs = { list: (answer?.runs ?? []).map((run) => ({ ...run, runtimeId: agent.runtimeId ?? 'local' })), loading: false, error: '' } })
+      .then((answer) => { if (alive) runs = { list: (answer?.runs ?? []).map((run) => ({ ...run, runtimeId: agent.runtimeId ?? 'local' })), complete: !answer?.next_cursor, loading: false, error: '' } })
       .catch((failure) => { if (alive) runs = { list: [], loading: false, error: String(failure?.message ?? failure) } })
     return () => { alive = false }
   })
@@ -271,7 +271,7 @@
         {#if readOnly}<p class="empty">Runs show once {machineName} answers.</p>
         {:else if runs.loading && !runs.list.length}<p class="empty" role="status">Loading runs…</p>
         {:else if runs.error}<p class="error" role="alert">{runs.error}</p>
-        {:else}<RunHistory embedded {tauri} {agent} runs={runs.list} disabled={busy} {onrun} onopen={onopenrun} />{/if}
+        {:else}<RunHistory embedded {tauri} {agent} runs={runs.list} complete={runs.complete} disabled={busy} {onrun} onopen={onopenrun} />{/if}
       {/if}
     </div>
   </div>

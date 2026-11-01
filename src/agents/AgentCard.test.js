@@ -292,6 +292,35 @@ it('lists runs in its History as the profile does and opens a run\'s conversatio
   expect(onopenrun).toHaveBeenCalledWith(expect.objectContaining({ id: 'r1', thread_id: 't1', runtimeId: 'box' }))
 })
 
+it('pages its History: Show older reads the runs before the oldest one listed', async () => {
+  const machineCore = core()
+  const invoke = machineCore.tauri.invoke
+  // Run ids sort by time, newest highest, as core's are.
+  const made = (index) => ({ id: `r${String(index).padStart(2, '0')}`, agent_id: 'scout', thread_id: `t${index}`, status: 'completed', trigger: { kind: 'cron', routine_id: 'daily' }, created_at: new Date(Date.now() - (30 - index) * 60_000).toISOString() })
+  const all = Array.from({ length: 25 }, (_, index) => made(index)).reverse()
+  machineCore.tauri.invoke = vi.fn(async (command, args) => {
+    if (command !== 'agent_request' || args.operation !== 'agent.runs') return invoke(command, args)
+    const page = all.filter((run) => !args.body.cursor || run.id < args.body.cursor).slice(0, args.body.limit)
+    return { runs: page, next_cursor: page.length === args.body.limit && page.at(-1) !== all.at(-1) ? page.at(-1).id : null }
+  })
+  show({ tauri: machineCore.tauri })
+  await fireEvent.click(screen.getByRole('tab', { name: 'History' }))
+  const history = await screen.findByRole('region', { name: 'History' })
+  await waitFor(() => expect(within(history).getAllByRole('button', { name: /^Daily brief, / })).toHaveLength(20))
+  await fireEvent.click(within(history).getByRole('button', { name: 'Show older' }))
+  await waitFor(() => expect(within(history).getAllByRole('button', { name: /^Daily brief, / })).toHaveLength(25))
+  expect(machineCore.tauri.invoke).toHaveBeenCalledWith('agent_request', { runtime: 'box', operation: 'agent.runs', body: { agent_id: 'scout', limit: 20, cursor: 'r05' } })
+  expect(within(history).queryByRole('button', { name: 'Show older' })).toBeNull()
+})
+
+it('offers no Show older when the machine listed every run', async () => {
+  show({ tauri: core().tauri })
+  await fireEvent.click(screen.getByRole('tab', { name: 'History' }))
+  const history = await screen.findByRole('region', { name: 'History' })
+  await within(history).findByText('No runs yet.')
+  expect(within(history).queryByRole('button', { name: 'Show older' })).toBeNull()
+})
+
 it('shows an agent whose machine is offline read only, with a note', async () => {
   show({ tauri: core().tauri, modes, agent: { ...agent, online: false, replica: true } })
   expect(screen.getByRole('note')).toHaveTextContent('Read only while Build box is offline.')
