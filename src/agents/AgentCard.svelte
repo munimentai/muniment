@@ -157,24 +157,25 @@
     const rail = event.currentTarget
     void tick().then(() => rail?.querySelector('[aria-selected="true"]')?.focus())
   }
-  // A rail mark's name shows outside the card, right of it, so it never covers
-  // a panel's labels or the sidebar left of the page. The tip sits on the
+  // A rail mark's name shows beside its icon, at its right and centered on
+  // it, so the eye finds it next to the icon. The tip sits on the
   // page, since the card clips what overflows it.
-  let card = $state()
+  const TIP_GAP = 10
   function showTip(event, entry) {
-    const mark = event.currentTarget.getBoundingClientRect()
-    tip = { label: entry.label, top: mark.top + mark.height / 2, left: card.getBoundingClientRect().right + 6 }
+    const mark = event.currentTarget
+    const icon = (mark.querySelector('svg') ?? mark).getBoundingClientRect()
+    tip = { label: entry.label, top: icon.top + icon.height / 2, left: icon.right + TIP_GAP, flip: icon.left - TIP_GAP }
   }
-  // A card at the window's right edge shows the tip beside its left edge.
+  // A mark at the window's right edge shows the tip at its left.
   function onPage(node) {
     document.body.append(node)
-    if (node.getBoundingClientRect().right > window.innerWidth - 4) Object.assign(node.style, { left: 'auto', right: `${window.innerWidth - card.getBoundingClientRect().left + 6}px` })
+    if (node.getBoundingClientRect().right > window.innerWidth - 4) Object.assign(node.style, { left: 'auto', right: `${window.innerWidth - tip.flip}px` })
     return { destroy() { node.remove() } }
   }
   const kebabActions = $derived([{ id: 'profile', label: 'Open profile', icon: 'user' }, ...(agent.replica ? [] : [{ id: 'export', label: 'Export', icon: 'download' }])])
 </script>
 
-<article class="agent-card" bind:this={card} data-agent-card={agent.id} class:read-only={readOnly} class:away={agent.online === false} aria-label={agent.name} style:--agent-color={agentColor(agent)}>
+<article class="agent-card" data-agent-card={agent.id} class:read-only={readOnly} class:away={agent.online === false} aria-label={agent.name} style:--agent-color={agentColor(agent)}>
   <header class="card-head">
     <span class="head-avatar"><AgentAvatar {agent} activity={agent.activity} size={28} /></span>
     <div class="head-name">

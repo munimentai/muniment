@@ -27,30 +27,48 @@ function card(left) {
 
 const overlaps = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom
 
-it('names a rail mark right of the card, clear of the panel labels and the sidebar at its left', async () => {
+// The gap from a rail mark's icon to its name, and the vertical offset of
+// their centers.
+function nearIcon(mark, box) {
+  const icon = mark.querySelector('svg').getBoundingClientRect()
+  const gap = Math.max(box.left - icon.right, icon.left - box.right, 0)
+  const offset = Math.abs((box.top + box.bottom) / 2 - (icon.top + icon.bottom) / 2)
+  return { gap, offset }
+}
+
+it('names a rail mark right of its icon, centered on it, clear of the sidebar at its left', async () => {
   const sidebar = document.createElement('nav')
   Object.assign(sidebar.style, { position: 'absolute', left: '0', top: '0', width: '150px', height: '400px' })
   document.body.append(sidebar)
   await page.viewport(1000, 600)
   const target = card(160)
-  await userEvent.hover(target.querySelector('[role="tab"][aria-label="History"]'))
-  const tip = document.querySelector('.rail-tip')
-  expect(tip.textContent).toBe('History')
-  const box = tip.getBoundingClientRect()
-  expect(box.left).toBeGreaterThanOrEqual(target.querySelector('.agent-card').getBoundingClientRect().right)
-  expect(box.right).toBeLessThanOrEqual(window.innerWidth)
-  expect(overlaps(box, sidebar.getBoundingClientRect())).toBe(false)
-  for (const label of target.querySelectorAll('dt')) expect(overlaps(box, label.getBoundingClientRect())).toBe(false)
+  for (const name of ['Overview', 'History']) {
+    const mark = target.querySelector(`[role="tab"][aria-label="${name}"]`)
+    await userEvent.hover(mark)
+    const tip = document.querySelector('.rail-tip')
+    expect(tip.textContent).toBe(name)
+    const box = tip.getBoundingClientRect()
+    expect(box.left).toBeGreaterThanOrEqual(mark.getBoundingClientRect().right)
+    const { gap, offset } = nearIcon(mark, box)
+    expect(gap).toBeLessThan(16)
+    expect(offset).toBeLessThanOrEqual(1)
+    expect(box.right).toBeLessThanOrEqual(window.innerWidth)
+    expect(overlaps(box, sidebar.getBoundingClientRect())).toBe(false)
+  }
 })
 
-it('names a rail mark beside the left edge of a card at the window\'s right edge', async () => {
+it('names a rail mark left of its icon only where the window\'s right edge cuts it', async () => {
   await page.viewport(1000, 600)
-  const target = card(window.innerWidth - 345)
-  await userEvent.hover(target.querySelector('[role="tab"][aria-label="Permissions"]'))
+  // A card pushed past the window's right edge, so its rail sits at that edge.
+  const target = card(window.innerWidth - 60)
+  const mark = target.querySelector('[role="tab"][aria-label="Permissions"]')
+  await userEvent.hover(mark, { force: true })
   const box = document.querySelector('.rail-tip').getBoundingClientRect()
-  expect(box.right).toBeLessThanOrEqual(target.querySelector('.agent-card').getBoundingClientRect().left)
+  expect(box.right).toBeLessThanOrEqual(mark.getBoundingClientRect().left)
   expect(box.left).toBeGreaterThanOrEqual(0)
-  for (const label of target.querySelectorAll('dt')) expect(overlaps(box, label.getBoundingClientRect())).toBe(false)
+  const { gap, offset } = nearIcon(mark, box)
+  expect(gap).toBeLessThan(16)
+  expect(offset).toBeLessThanOrEqual(1)
 })
 
 // The picked mark's edge spans the mark and meets the rail's divider, where a
