@@ -257,11 +257,6 @@ try {
       const tokens = await readTokens(); if (key in tokens) { delete tokens[key]; await writeTokens(tokens) }
     }
     state.items = state.items.filter(i => i.id !== data.id); await write(state); result = state
-  } else if (action === 'turn') {
-    if (!data.threadId || data.threadId.length > 100) throw new Error('Choose a thread.')
-    state.turns ||= {}
-    state.turns[data.threadId] = { disabled: data.disabled || [], selected: data.selected || [], automatic: !!data.automatic, automaticSelected: [] }
-    await write(state); result = state
   } else if (action === 'auth' || action === 'test') {
     const item = state.items.find(i => i.id === data.id || data.id.startsWith(`${i.id}:`))
     const member = item && data.id !== item.id ? data.id.slice(item.id.length + 1) : null
