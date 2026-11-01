@@ -46,7 +46,11 @@ it('keeps a long machine name on one line with an ellipsis, the whole name on ho
   // Hover names the whole machine in the app's tooltip.
   await userEvent.hover(trigger())
   await expect.poll(() => filter.dataset.tooltip).toBe('Docker container (offline)')
+  await expect.poll(() => getComputedStyle(filter, '::after').content).toBe('"Docker container (offline)"')
   await expect.poll(() => getComputedStyle(filter, '::after').opacity).toBe('1')
+  const tip = getComputedStyle(filter, '::after')
+  expect(tip.position).toBe('absolute')
+  expect(tip.whiteSpace).toBe('nowrap')
   // A name that fits needs no tooltip.
   await userEvent.click(trigger())
   await userEvent.click([...target.querySelectorAll('[role="menuitemradio"]')].find((item) => item.textContent.trim() === 'All machines'))

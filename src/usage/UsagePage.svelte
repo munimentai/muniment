@@ -64,7 +64,8 @@
 
   $effect(() => { void range; void provider; void machine; void machines.map((entry) => entry.id).join(); void refresh() })
   // A filter keeps one line, and a name its width clips ends in an ellipsis
-  // with the whole name on hover.
+  // with the whole name on hover. The action sets the attribute, so its
+  // styles name it as global, or the compiler drops them as unused.
   function fullName(node) {
     const hover = () => {
       const label = node.querySelector('button[aria-haspopup] > span')
@@ -138,8 +139,8 @@
   .sep { color: var(--muted); }
   .filter { position: relative; width: 170px; }
   .filter :global(button[aria-haspopup] > span) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .filter[data-tooltip]::after { content: attr(data-tooltip); position: absolute; z-index: 4; left: 0; top: calc(100% + 6px); padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-12) var(--font-human); white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity 80ms ease; }
-  .filter[data-tooltip]:hover:not(:has([aria-expanded="true"]))::after { opacity: 1; transition-delay: 350ms; }
+  .filter:global([data-tooltip])::after { content: attr(data-tooltip); position: absolute; z-index: 4; left: 0; top: calc(100% + 6px); padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-12) var(--font-human); white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity 80ms ease; }
+  .filter:global([data-tooltip]):hover:not(:has([aria-expanded="true"]))::after { opacity: 1; transition-delay: 350ms; }
   .note { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--muted); font-size: var(--text-13); }
   .note.error { color: var(--danger); }
   .limits { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr)); align-items: start; gap: 12px; }
