@@ -57,8 +57,15 @@ function pickerAt(left, embedded = false) {
   return { sidebar, picker: host.querySelector('[data-panel="model-picker"]') }
 }
 
-for (const [where, left, embedded] of [['with free page at its left', 400, false], ['beside the sidebar', 240, false], ['embedded in an agent card', 300, true]]) {
-  it(`names each rail mark next to its icon and never over a model name, ${where}`, async () => {
+// The logo the mark shows. A logo with a light and a dark variant keeps the
+// other theme's copy hidden in the mark.
+const shownIcon = (mark) => [...mark.querySelectorAll('svg')].map((node) => node.getBoundingClientRect()).find((box) => box.width && box.height)
+
+afterEach(() => { delete document.documentElement.dataset.scheme })
+
+for (const scheme of ['light', 'dark']) for (const [where, left, embedded] of [['with free page at its left', 400, false], ['beside the sidebar', 240, false], ['embedded in an agent card', 300, true]]) {
+  it(`names each rail mark next to its icon and never over a model name, ${where}, in the ${scheme} scheme`, async () => {
+    document.documentElement.dataset.scheme = scheme
     await page.viewport(1100, 700)
     const { sidebar, picker } = pickerAt(left, embedded)
     expect(listContent(picker).length).toBeGreaterThan(0)
@@ -68,7 +75,8 @@ for (const [where, left, embedded] of [['with free page at its left', 400, false
       const tip = document.querySelector('.rail-tip')
       expect(tip.textContent).toBe(name)
       const box = tip.getBoundingClientRect()
-      const icon = mark.querySelector('svg').getBoundingClientRect()
+      const icon = shownIcon(mark)
+      expect(icon).toBeTruthy()
       const gap = Math.hypot(Math.max(box.left - icon.right, icon.left - box.right, 0), Math.max(box.top - icon.bottom, icon.top - box.bottom, 0))
       expect(gap).toBeLessThan(24)
       expect(overlaps(box, icon)).toBe(false)

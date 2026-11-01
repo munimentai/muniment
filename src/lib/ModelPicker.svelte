@@ -94,7 +94,9 @@
   function placeTip(node, { mark }) {
     const box = picker.getBoundingClientRect()
     const markBox = mark.getBoundingClientRect()
-    const icon = (mark.querySelector('svg') ?? mark).getBoundingClientRect()
+    // A logo with a light and a dark variant keeps the other theme's copy in
+    // the mark, hidden with no box, so the tip measures the one that shows.
+    const icon = ([...mark.querySelectorAll('svg, img')].map((node) => node.getBoundingClientRect()).find((rect) => rect.width && rect.height) ?? markBox)
     const sidebar = document.getElementById('sidebar')?.getBoundingClientRect()
     const page = sidebar?.width && sidebar.right <= box.left + 1 && sidebar.top < box.bottom && box.top < sidebar.bottom ? sidebar.right : 0
     const { width, height } = node.getBoundingClientRect()
