@@ -110,11 +110,12 @@ describe('a listing that answers after a run event', () => {
     expect(keepNewerRuns({ latestRuns: { scout: failed } }, { agents, latestRuns: { scout: { ...running, updated_at: '2026-11-01T16:08:00Z' } } }).latestRuns.scout).toBe(failed)
   })
 
-  it('takes the listing\'s run when it is newer or the window holds none', () => {
+  it('takes the listing\'s run when it is newer or either side names none', () => {
     const later = { id: 'run-2', agent_id: 'scout', status: 'running', updated_at: '2026-11-01T16:09:00Z', runtimeId: 'local' }
     expect(keepNewerRuns({ latestRuns: { scout: failed } }, { agents, latestRuns: { scout: later } }).latestRuns.scout).toBe(later)
     expect(keepNewerRuns({ latestRuns: { scout: running } }, { agents, latestRuns: { scout: failed } }).latestRuns.scout).toBe(failed)
     expect(keepNewerRuns({ latestRuns: {} }, { agents, latestRuns: { scout: failed } }).latestRuns.scout).toBe(failed)
+    expect(keepNewerRuns({ latestRuns: { scout: failed } }, { agents, latestRuns: {} }).latestRuns).toEqual({})
   })
 
   it('drops the run of an agent the listing no longer names', () => {

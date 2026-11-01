@@ -114,16 +114,17 @@ export function applyRunUpdate(runs, update, limit = 200) {
 // run is newer. An `agent.list` that started before a run's event answers
 // with the run as it was then, so a card would show a settled run as running
 // until the next listing. The held run stays when the listing names the same
-// run still active after it settled, or when it carries a later update.
+// run still active after it settled, or an older run. A listing that names
+// no run for the agent stands.
 export function keepNewerRuns(held, fresh) {
   const latestRuns = { ...(fresh?.latestRuns ?? {}) }
   const at = (run) => { const time = Date.parse(run?.updated_at ?? ''); return Number.isFinite(time) ? time : -Infinity }
   for (const agent of fresh?.agents ?? []) {
     const kept = held?.latestRuns?.[agent.id]
     const listed = latestRuns[agent.id]
-    if (!kept || (kept.runtimeId ?? LOCAL_RUNTIME_ID) !== (agent.runtimeId ?? LOCAL_RUNTIME_ID)) continue
-    const settled = listed && kept.id === listed.id && !runActive(kept.status) && runActive(listed.status)
-    if (!listed || settled || at(kept) > at(listed)) latestRuns[agent.id] = kept
+    if (!kept || !listed || (kept.runtimeId ?? LOCAL_RUNTIME_ID) !== (agent.runtimeId ?? LOCAL_RUNTIME_ID)) continue
+    const settled = kept.id === listed.id && !runActive(kept.status) && runActive(listed.status)
+    if (settled || at(kept) > at(listed)) latestRuns[agent.id] = kept
   }
   return { ...fresh, latestRuns }
 }
