@@ -1,7 +1,10 @@
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 use tauri::{
-    utils::config::WindowConfig, Manager, PhysicalPosition, PhysicalRect, PhysicalSize, Runtime,
+    utils::config::WindowConfig, window::Color, Manager, PhysicalPosition, PhysicalRect,
+    PhysicalSize, Runtime,
 };
 use tauri_plugin_window_state::{AppHandleExt, StateFlags, WindowExt};
 
@@ -169,12 +172,83 @@ pub fn restore_main_window<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()>
     }
     #[cfg(target_os = "macos")]
     macos::install(&window, config)?;
+    // The window shows once the page reports its first themed frame. A page
+    // that never reports shows the window after the fallback.
+    let app = app.handle().clone();
+    std::thread::Builder::new()
+        .name("main-window-reveal".into())
+        .spawn(move || {
+            std::thread::sleep(REVEAL_FALLBACK);
+            let shown = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                if let Some(window) = shown.get_webview_window("main") {
+                    let _ = reveal(&window);
+                }
+            });
+        })?;
+    Ok(())
+}
+
+/// How long the hidden main window waits for the page before it shows.
+const REVEAL_FALLBACK: Duration = Duration::from_secs(3);
+static REVEALED: AtomicBool = AtomicBool::new(false);
+
+/// Shows the main window once, on the main thread.
+fn reveal<R: Runtime>(window: &tauri::WebviewWindow<R>) -> tauri::Result<()> {
+    if REVEALED.swap(true, Ordering::SeqCst) {
+        return Ok(());
+    }
     window.show()?;
     // Apply the configured inset after show. Native frame observers keep later layouts aligned.
     #[cfg(target_os = "macos")]
     macos::apply();
-    window.set_focus()?;
-    Ok(())
+    window.set_focus()
+}
+
+/// A CSS color as the page computes it, `rgb(r, g, b)`, `rgba(r, g, b, a)`
+/// or `#rrggbb`, as an opaque color.
+fn page_color(css: &str) -> Option<Color> {
+    let css = css.trim();
+    if let Some(hex) = css.strip_prefix('#') {
+        if hex.len() != 6 || !hex.is_ascii() {
+            return None;
+        }
+        let channel = |at: usize| u8::from_str_radix(&hex[at..at + 2], 16).ok();
+        return Some(Color(channel(0)?, channel(2)?, channel(4)?, 255));
+    }
+    let body = css
+        .strip_prefix("rgba(")
+        .or_else(|| css.strip_prefix("rgb("))?
+        .strip_suffix(')')?;
+    let mut channels = body
+        .split([',', ' ', '/'])
+        .filter(|part| !part.is_empty())
+        .map(str::parse::<u8>);
+    let color = Color(
+        channels.next()?.ok()?,
+        channels.next()?.ok()?,
+        channels.next()?.ok()?,
+        255,
+    );
+    Some(color)
+}
+
+/// The page drew its first frame in the stored theme. The window and the
+/// webview take the page's background, so a resize or a reload shows that
+/// color and not white, and the hidden main window shows. A later call, as
+/// after a theme change, sets the color alone.
+#[tauri::command]
+pub fn main_window_ready(
+    window: tauri::WebviewWindow,
+    background: Option<String>,
+) -> Result<(), String> {
+    if window.label() != "main" {
+        return Ok(());
+    }
+    if let Some(color) = background.as_deref().and_then(page_color) {
+        let _ = window.set_background_color(Some(color));
+    }
+    reveal(&window).map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
@@ -185,6 +259,36 @@ mod tests {
         let config: tauri::utils::config::Config =
             serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
         config.app.windows.into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn the_hidden_main_window_takes_the_default_theme_background_until_the_page_reports() {
+        let config = config();
+        assert!(!config.visible);
+        assert_eq!(config.background_color, Some(Color(0x0B, 0x1C, 0x17, 255)));
+        assert_eq!(page_color("#0B1C17"), Some(Color(0x0B, 0x1C, 0x17, 255)));
+        assert_eq!(
+            page_color("rgb(228, 244, 236)"),
+            Some(Color(228, 244, 236, 255))
+        );
+        assert_eq!(
+            page_color(" rgba(16, 38, 32, 0.5) "),
+            Some(Color(16, 38, 32, 255))
+        );
+        assert_eq!(
+            page_color("rgb(16 38 32 / 50%)"),
+            Some(Color(16, 38, 32, 255))
+        );
+        for refused in [
+            "",
+            "white",
+            "#fff",
+            "rgb(300, 0, 0)",
+            "rgb(1, 2)",
+            "color(srgb 1 0 0)",
+        ] {
+            assert_eq!(page_color(refused), None, "{refused}");
+        }
     }
 
     #[test]

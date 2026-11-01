@@ -25,7 +25,8 @@
         "width": 1280,
         "height": 800,
         "minWidth": 960,
-        "minHeight": 640
+        "minHeight": 640,
+        "backgroundColor": "#0B1C17"
       },
       {
         "label": "launcher",

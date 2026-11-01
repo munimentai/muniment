@@ -44,6 +44,7 @@ const APP_COMMANDS: &[&str] = &[
     "input_mark_dismiss",
     "input_mark_watch",
     "input_mark_unwatch",
+    "main_window_ready",
     "auth_sign_in",
     "auth_status",
     "auth_entitlement_snapshot",

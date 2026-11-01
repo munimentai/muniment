@@ -11,6 +11,7 @@ import { applyFrame, readStoredFrame } from './lib/frame-state.js'
 import { applyDisplay, followSystemMotion, readStoredDisplay } from './lib/display-state.js'
 import { loadModelRegistry } from './lib/model-registry.js'
 import { trackFocusSource } from './lib/focus-source.js'
+import { revealMainWindow } from './lib/window-reveal.js'
 
 applyTheme(document.documentElement, readStoredTheme())
 // In System a palette other than the default shows its light or dark version, so an OS switch reapplies it.
@@ -37,3 +38,5 @@ const { default: Root } = await (query.has('workspace-menu')
 mount(Root, {
   target: document.getElementById('app'),
 })
+// The hidden main window shows once its first themed frame is in place.
+if (!query.has('workspace-menu') && !query.has('launcher')) revealMainWindow(window.__TAURI__?.core)
