@@ -25,6 +25,9 @@ use crate::model_router::{config, family, quota};
 /// Percent left under which a window shows as low.
 pub const LOW_PERCENT: f64 = 20.0;
 const ROUTER_PROVIDER: &str = "muniment-router";
+/// How far apart two machines' starts of one day can lie: a daylight saving
+/// change moves a fixed offset's midnight by an hour, two in a few zones.
+const DAY_SKEW_MS: i64 = 2 * 60 * 60 * 1000;
 
 /// The span a summary covers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,9 +66,16 @@ pub struct Request {
     /// A provider family id such as `anthropic`. None is every provider.
     #[serde(default)]
     pub provider: Option<String>,
-    /// The client's offset from UTC, so days start at its midnight.
+    /// The client's offset from UTC, so days start at its midnight when
+    /// `time_zone` names no zone.
     #[serde(default)]
     pub utc_offset_minutes: i32,
+    /// The client's IANA time zone. Each day starts at its own midnight
+    /// there, so a daylight saving change moves no run to another day. A
+    /// runtime before this field refuses a request that holds it, so the
+    /// desktop asks such a runtime again without it.
+    #[serde(default)]
+    pub time_zone: Option<String>,
 }
 
 /// Token counts, summed.
@@ -506,6 +516,58 @@ fn cost(text: &str) -> Option<f64> {
 }
 
 /// The start of each bucket, oldest first, and the end of the last.
+/// The bucket starts and the end of `request`'s range as of `now_ms`: in
+/// its time zone when it names a known one, else at its fixed offset.
+fn request_buckets(request: &Request, now_ms: i64) -> (Vec<i64>, i64) {
+    match request
+        .time_zone
+        .as_deref()
+        .and_then(|zone| crate::agent_routines::parse_time_zone(zone).ok())
+    {
+        Some(zone) => zone_bucket_starts(request.range, now_ms, zone),
+        None => bucket_starts(request.range, now_ms, request.utc_offset_minutes),
+    }
+}
+
+/// The bucket starts in `zone`: whole hours back from the current hour, or
+/// each local midnight back from today's, so a day across a daylight saving
+/// change lasts 23 or 25 hours.
+fn zone_bucket_starts(range: Range, now_ms: i64, zone: chrono_tz::Tz) -> (Vec<i64>, i64) {
+    let now = Utc
+        .timestamp_millis_opt(now_ms)
+        .single()
+        .unwrap_or_else(Utc::now);
+    if range.hourly() {
+        let local = now.with_timezone(&zone);
+        let into_hour = Duration::minutes(i64::from(local.minute()))
+            + Duration::seconds(i64::from(local.second()))
+            + Duration::nanoseconds(i64::from(local.nanosecond()));
+        let last = now - into_hour;
+        let starts = (0..range.buckets())
+            .rev()
+            .map(|back| (last - Duration::hours(back)).timestamp_millis())
+            .collect();
+        return (starts, (last + Duration::hours(1)).timestamp_millis());
+    }
+    // A midnight that a daylight saving change skips starts the day at the
+    // first instant after the gap.
+    let midnight = |date: chrono::NaiveDate| {
+        let mut at = date.and_time(chrono::NaiveTime::MIN);
+        loop {
+            if let Some(start) = zone.from_local_datetime(&at).earliest() {
+                return start.with_timezone(&Utc).timestamp_millis();
+            }
+            at += Duration::minutes(15);
+        }
+    };
+    let today = now.with_timezone(&zone).date_naive();
+    let starts = (0..range.buckets())
+        .rev()
+        .map(|back| midnight(today - Duration::days(back)))
+        .collect();
+    (starts, midnight(today + Duration::days(1)))
+}
+
 fn bucket_starts(range: Range, now_ms: i64, offset_minutes: i32) -> (Vec<i64>, i64) {
     let offset = Duration::minutes(i64::from(offset_minutes));
     let now = Utc
@@ -600,7 +662,7 @@ pub fn summarize(
     request: &Request,
     now_ms: i64,
 ) -> Summary {
-    let (starts, end_ms) = bucket_starts(request.range, now_ms, request.utc_offset_minutes);
+    let (starts, end_ms) = request_buckets(request, now_ms);
     let start_ms = starts.first().copied().unwrap_or(end_ms);
     let in_range: Vec<&RunUsage> = runs
         .iter()
@@ -1089,7 +1151,7 @@ pub fn operation(
 ) -> Result<Value, String> {
     let request: Request =
         serde_json::from_value(body).map_err(|_| "The request is invalid.".to_string())?;
-    let (starts, _) = bucket_starts(request.range, now_ms, request.utc_offset_minutes);
+    let (starts, _) = request_buckets(&request, now_ms);
     let since = Utc
         .timestamp_millis_opt(starts.first().copied().unwrap_or(now_ms))
         .single()
@@ -1195,8 +1257,20 @@ pub fn merge(answers: Vec<MachineAnswer>, now_ms: i64) -> FleetSummary {
             joined.bucket = summary.bucket.clone();
         }
         let mut machine = Amount::default();
+        // A runtime before the time zone field starts its days at a fixed
+        // offset, an hour off the zone's own midnight across a daylight
+        // saving change. Its day joins the day that starts within that hour.
+        let day = summary.bucket == "day";
         for bucket in summary.series {
-            let held = series.entry(bucket.start_ms).or_default();
+            let start = if day {
+                series
+                    .range(bucket.start_ms - DAY_SKEW_MS..=bucket.start_ms + DAY_SKEW_MS)
+                    .next()
+                    .map_or(bucket.start_ms, |(start, _)| *start)
+            } else {
+                bucket.start_ms
+            };
+            let held = series.entry(start).or_default();
             for (provider, amount) in bucket.providers {
                 machine.add(&amount);
                 held.entry(provider).or_default().add(&amount);
@@ -1301,7 +1375,209 @@ mod tests {
             range,
             provider: None,
             utc_offset_minutes: 0,
+            time_zone: None,
         }
+    }
+
+    fn ms(at: &str) -> i64 {
+        DateTime::parse_from_rfc3339(at).unwrap().timestamp_millis()
+    }
+
+    fn zoned(range: Range, zone: &str, offset: i32) -> Request {
+        Request {
+            time_zone: Some(zone.into()),
+            utc_offset_minutes: offset,
+            ..request(range)
+        }
+    }
+
+    fn times(starts: &[i64]) -> Vec<String> {
+        starts
+            .iter()
+            .map(|start| crate::agent_runs::timestamp(start / 1000))
+            .collect()
+    }
+
+    #[test]
+    fn days_start_at_the_zones_own_midnight_across_both_daylight_saving_changes() {
+        // New York leaves daylight time at 06:00Z on Nov 1 and enters it at
+        // 07:00Z on Mar 8.
+        let (starts, end) = request_buckets(
+            &zoned(Range::Week, "America/New_York", -300),
+            ms("2026-11-03T15:00:00Z"),
+        );
+        assert_eq!(
+            times(&starts),
+            [
+                "2026-10-28T04:00:00Z",
+                "2026-10-29T04:00:00Z",
+                "2026-10-30T04:00:00Z",
+                "2026-10-31T04:00:00Z",
+                "2026-11-01T04:00:00Z",
+                "2026-11-02T05:00:00Z",
+                "2026-11-03T05:00:00Z",
+            ]
+        );
+        assert_eq!(end, ms("2026-11-04T05:00:00Z"));
+        let (spring, _) = request_buckets(
+            &zoned(Range::Week, "America/New_York", -240),
+            ms("2026-03-09T15:00:00Z"),
+        );
+        assert_eq!(
+            times(&spring[4..]),
+            [
+                "2026-03-07T05:00:00Z",
+                "2026-03-08T05:00:00Z",
+                "2026-03-09T04:00:00Z"
+            ]
+        );
+        // Sydney leaves daylight time at 16:00Z on Apr 4 and enters it at
+        // 16:00Z on Oct 3.
+        let (autumn, _) = request_buckets(
+            &zoned(Range::Week, "Australia/Sydney", 600),
+            ms("2026-04-06T02:00:00Z"),
+        );
+        assert_eq!(
+            times(&autumn[4..]),
+            [
+                "2026-04-03T13:00:00Z",
+                "2026-04-04T13:00:00Z",
+                "2026-04-05T14:00:00Z"
+            ]
+        );
+        let (sydney_spring, _) = request_buckets(
+            &zoned(Range::Week, "Australia/Sydney", 660),
+            ms("2026-10-05T02:00:00Z"),
+        );
+        assert_eq!(
+            times(&sydney_spring[4..]),
+            [
+                "2026-10-02T14:00:00Z",
+                "2026-10-03T14:00:00Z",
+                "2026-10-04T13:00:00Z"
+            ]
+        );
+        // Hours stay whole hours of the zone, and an unknown zone keeps the
+        // fixed offset.
+        let (hours, end) = request_buckets(
+            &zoned(Range::Day, "Asia/Kolkata", 330),
+            ms("2026-11-01T15:10:00Z"),
+        );
+        assert_eq!(hours.len(), 24);
+        assert_eq!(end, ms("2026-11-01T15:30:00Z"));
+        assert_eq!(
+            request_buckets(
+                &zoned(Range::Week, "Mars/Base", -300),
+                ms("2026-11-03T15:00:00Z")
+            ),
+            bucket_starts(Range::Week, ms("2026-11-03T15:00:00Z"), -300)
+        );
+    }
+
+    #[test]
+    fn todays_early_runs_count_on_today_after_the_change_to_standard_time() {
+        let runs = [
+            run(
+                "early",
+                ms("2026-11-01T04:10:00Z"),
+                "anthropic/claude",
+                1,
+                None,
+            ),
+            run(
+                "before",
+                ms("2026-11-01T03:50:00Z"),
+                "anthropic/claude",
+                2,
+                None,
+            ),
+        ];
+        let now = ms("2026-11-01T15:00:00Z");
+        let day = |request: &Request| {
+            let summary = summarize(
+                &runs,
+                &Owners::default(),
+                Vec::new(),
+                Vec::new(),
+                request,
+                now,
+            );
+            summary
+                .series
+                .iter()
+                .map(|bucket| {
+                    bucket
+                        .providers
+                        .get("anthropic")
+                        .map_or(0, |amount| amount.processed)
+                })
+                .collect::<Vec<_>>()
+        };
+        let zoned = day(&zoned(Range::Week, "America/New_York", -300));
+        assert_eq!(
+            &zoned[5..],
+            [
+                run("x", 0, "anthropic/claude", 2, None).tokens.processed(),
+                run("x", 0, "anthropic/claude", 1, None).tokens.processed()
+            ]
+        );
+        // The offset alone counts both on yesterday.
+        let fixed = day(&Request {
+            utc_offset_minutes: -300,
+            ..request(Range::Week)
+        });
+        assert_eq!(fixed[6], 0);
+    }
+
+    #[test]
+    fn an_older_runtimes_fixed_offset_days_join_the_zones_days() {
+        let now = ms("2026-11-03T15:00:00Z");
+        let used = |at: &str| run("x", ms(at), "anthropic/claude", 1, None);
+        let zoned_summary = summarize(
+            &[used("2026-10-30T12:00:00Z")],
+            &Owners::default(),
+            Vec::new(),
+            Vec::new(),
+            &zoned(Range::Week, "America/New_York", -300),
+            now,
+        );
+        let fixed_summary = summarize(
+            &[used("2026-10-30T12:00:00Z")],
+            &Owners::default(),
+            Vec::new(),
+            Vec::new(),
+            &Request {
+                utc_offset_minutes: -300,
+                ..request(Range::Week)
+            },
+            now,
+        );
+        let joined = merge(
+            vec![
+                MachineAnswer {
+                    id: "local".into(),
+                    name: "This computer".into(),
+                    summary: Ok(zoned_summary),
+                },
+                MachineAnswer {
+                    id: "hub".into(),
+                    name: "Factory hub".into(),
+                    summary: Ok(fixed_summary),
+                },
+            ],
+            now,
+        )
+        .summary;
+        assert_eq!(joined.series.len(), 7);
+        let oct_30 = joined
+            .series
+            .iter()
+            .find(|bucket| bucket.start_ms == ms("2026-10-30T04:00:00Z"))
+            .unwrap();
+        assert_eq!(
+            oct_30.providers["anthropic"].processed,
+            2 * used("2026-10-30T12:00:00Z").tokens.processed()
+        );
     }
 
     #[test]
