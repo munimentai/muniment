@@ -21,8 +21,10 @@ export function agentRuntimes(list) {
   return runtimes.filter((runtime) => runtime.local || runtime.status === 'online')
 }
 
+// `answered` names each machine whose agents the listing holds, so a
+// machine that has not answered yet is told apart from one with no agents.
 export function emptyListing() {
-  return { agents: [], primaryThreads: {}, threads: {}, latestRuns: {}, errors: [], unreachable: [] }
+  return { agents: [], primaryThreads: {}, threads: {}, latestRuns: {}, errors: [], unreachable: [], answered: [] }
 }
 
 // Every thread of each listed agent, from core's `agent.threads` on the
@@ -41,7 +43,10 @@ export async function listAgentThreads(tauri, agents) {
 // One listing across machines. Each agent carries the `runtimeId` it came
 // from. A paired machine that does not answer is named in `unreachable`, and
 // only a failure of this computer's runtime fails the whole listing.
-export async function listAgents(tauri, runtimeList) {
+// A machine that does not answer this time, such as a busy runtime, keeps
+// the agents the `previous` listing holds for it, so its agents never read
+// as another machine's synced copies while it is busy.
+export async function listAgents(tauri, runtimeList, previous = null) {
   const targets = agentRuntimes(runtimeList)
   const answers = await Promise.allSettled(targets.map((runtime) => agentRequest(tauri, runtime.id, 'agent.list')))
   const listing = emptyListing()
@@ -51,6 +56,13 @@ export async function listAgents(tauri, runtimeList) {
     if (answer.status === 'rejected') {
       if (runtimeId === LOCAL_RUNTIME_ID) localError = answer.reason
       else listing.unreachable.push(runtimeId)
+      if (!previous?.answered?.includes(runtimeId)) return
+      const kept = previous.agents.filter((agent) => (agent.runtimeId ?? LOCAL_RUNTIME_ID) === runtimeId)
+      const ids = new Set(kept.map((agent) => agent.id))
+      listing.agents.push(...kept)
+      for (const [id, thread] of Object.entries(previous.primaryThreads ?? {})) if (ids.has(id)) listing.primaryThreads[id] = thread
+      for (const [id, run] of Object.entries(previous.latestRuns ?? {})) if (ids.has(id)) listing.latestRuns[id] = run
+      listing.answered.push(runtimeId)
       return
     }
     const body = answer.value ?? {}
@@ -58,6 +70,7 @@ export async function listAgents(tauri, runtimeList) {
     Object.assign(listing.primaryThreads, body.primary_threads ?? {})
     Object.assign(listing.latestRuns, Object.fromEntries(Object.entries(body.latest_runs ?? {}).map(([id, run]) => [id, { ...run, runtimeId }])))
     for (const error of body.errors ?? []) listing.errors.push({ ...error, runtimeId })
+    listing.answered.push(runtimeId)
   })
   if (localError && answers.every((answer) => answer.status === 'rejected')) throw localError
   listing.threads = await listAgentThreads(tauri, listing.agents)

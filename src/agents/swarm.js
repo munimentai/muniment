@@ -137,9 +137,13 @@ export function memberMachine(swarm, coreId, runtimeList = null) {
 // Every agent the window lists: each agent a machine answered for, then each
 // agent only the swarm directory names. Each carries its primary machine,
 // whether that machine answers, and `replica` when the app sees it only
-// through a member's synced copy.
+// through a member's synced copy. An agent whose primary machine this
+// window reaches waits for that machine's own listing, so its synced copy
+// never stands in for it while that machine has not answered yet.
 export function swarmRoster(listing, swarm, runtimeList = null) {
   const listed = new Set()
+  const waiting = (entry) => Array.isArray(listing?.answered) && Object.entries(swarm?.self ?? {})
+    .some(([runtimeId, coreId]) => coreId === entry.primary_runtime && !listing.answered.includes(runtimeId))
   const roster = (listing?.agents ?? []).map((agent) => {
     listed.add(agent.id)
     const entry = swarm?.agents?.find((item) => item.agent_id === agent.id)
@@ -147,7 +151,7 @@ export function swarmRoster(listing, swarm, runtimeList = null) {
     return { ...agent, primaryRuntime: primary, primaryThread: entry?.primary_thread ?? null, replica: false }
   })
   for (const entry of swarm?.agents ?? []) {
-    if (listed.has(entry.agent_id)) continue
+    if (listed.has(entry.agent_id) || waiting(entry)) continue
     roster.push({
       id: entry.agent_id,
       name: entry.name,

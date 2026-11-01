@@ -617,7 +617,7 @@
     void refreshSwarm()
     const version = ++agentListVersion
     try {
-      const value = await listAgents(tauri, runtimeList)
+      const value = await listAgents(tauri, runtimeList, untrack(() => agentListing))
       if (version !== agentListVersion) return
       agentListing = value
       selectedAgent = { ...swarmThreads(swarm), ...agentThreads(value) }[currentThreadId] ?? startingAgent ?? null
