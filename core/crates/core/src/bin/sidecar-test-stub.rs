@@ -264,6 +264,10 @@ fn pi_resume(args: Vec<String>) {
                 })
         })
         .unwrap();
+    let mut session_file = session_file;
+    // The folder the stub's tools work in: its own until a reopened
+    // conversation names another, as Pi rebuilds its tools on a switch.
+    let mut working_folder = std::env::current_dir().unwrap();
     let mut compacted = false;
     // A reasoning stub model starts at medium and takes each level it is sent.
     let reasoning = std::env::var_os("PI_RESUME_STUB_REASONING").is_some();
@@ -303,6 +307,25 @@ fn pi_resume(args: Vec<String>) {
             continue;
         }
         match request["type"].as_str().unwrap() {
+            "switch_session" => {
+                session_file = std::path::PathBuf::from(request["sessionPath"].as_str().unwrap());
+                let header = fs::read_to_string(&session_file)
+                    .ok()
+                    .and_then(|text| {
+                        serde_json::from_str::<serde_json::Value>(text.lines().next()?).ok()
+                    })
+                    .and_then(|header| header["cwd"].as_str().map(std::path::PathBuf::from));
+                if let Some(folder) = header {
+                    working_folder = folder;
+                }
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "type":"response", "command":"switch_session", "success":true,
+                        "id":request["id"], "data":{"cancelled":false}
+                    })
+                );
+            }
             "get_state" => println!(
                 "{}",
                 serde_json::json!({
@@ -392,7 +415,23 @@ fn pi_resume(args: Vec<String>) {
                     if let Some(parent) = session_file.parent() {
                         fs::create_dir_all(parent).unwrap();
                     }
-                    fs::write(&session_file, "{}\n").unwrap();
+                    // Pi's saved conversation opens with its working folder.
+                    let header = if std::env::var_os("PI_RESUME_STUB_SESSION_HEADER").is_some() {
+                        serde_json::json!({"type":"session", "cwd":working_folder}).to_string()
+                    } else {
+                        "{}".to_owned()
+                    };
+                    fs::write(&session_file, format!("{header}\n")).unwrap();
+                }
+                if let Ok(path) = std::env::var("PI_RESUME_STUB_PROMPT_FOLDERS") {
+                    let mut folders = fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(path)
+                        .unwrap();
+                    let message = request["message"].as_str().unwrap();
+                    let last = message.lines().last().unwrap_or_default();
+                    writeln!(folders, "{last}\t{}", working_folder.display()).unwrap();
                 }
                 if let Ok(path) = std::env::var("PI_RESUME_STUB_PROMPTS") {
                     let mut prompts = fs::OpenOptions::new()

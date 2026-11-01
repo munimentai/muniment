@@ -5,12 +5,14 @@
 //! thread's slot, marked with what it started from. The thread's next reply
 //! takes that process only when the launch it would start now is the same
 //! launch, the files Pi read are unchanged, the process still answers, holds
-//! the thread's saved conversation and runs no turn. Anything else starts a
-//! new process, as every reply did before.
+//! the thread's saved conversation and runs no turn. A thread folder renamed
+//! after its title keeps its process: the process reopens the conversation in
+//! the renamed folder, so its tools work there. Anything else starts a new
+//! process.
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -60,7 +62,7 @@ pub struct LaunchKey {
 impl LaunchKey {
     pub fn of(config: &SidecarConfig) -> Self {
         Self {
-            config: config_hash(config),
+            config: config_hash(config, None),
             files: files_hash(config),
         }
     }
@@ -70,6 +72,8 @@ impl LaunchKey {
 pub struct PiLaunch {
     config: SidecarConfig,
     key: LaunchKey,
+    place: Option<Place>,
+    moved: bool,
 }
 
 impl PiLaunch {
@@ -77,13 +81,86 @@ impl PiLaunch {
     /// after Pi's own start, so a file Pi writes as it starts is part of it.
     pub fn ready(config: SidecarConfig) -> Self {
         let key = LaunchKey::of(&config);
-        Self { config, key }
+        let place = Place::of(&config);
+        Self {
+            config,
+            key,
+            place,
+            moved: false,
+        }
+    }
+
+    /// Whether the process followed its thread's renamed folder to take
+    /// this reply.
+    pub fn moved(&self) -> bool {
+        self.moved
+    }
+}
+
+/// The folder a process works in, by identity, so a rename of the folder
+/// is told apart from a move to another folder.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FolderId {
+    device: u64,
+    inode: u64,
+}
+
+fn folder_id(path: &Path) -> Option<FolderId> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = std::fs::symlink_metadata(path).ok()?;
+        metadata.is_dir().then(|| FolderId {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        })
+    }
+    // Windows refuses to rename the folder a process works in.
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        None
+    }
+}
+
+/// Where a process works: its folder by path and identity, and its launch
+/// with the folder's path left out.
+#[derive(Clone, Debug)]
+struct Place {
+    folder: PathBuf,
+    id: FolderId,
+    unplaced: u64,
+}
+
+impl Place {
+    fn of(config: &SidecarConfig) -> Option<Self> {
+        let folder = config.working_directory.as_deref()?;
+        Some(Self {
+            folder: folder.to_path_buf(),
+            id: folder_id(folder)?,
+            unplaced: config_hash(config, Some(folder)),
+        })
+    }
+
+    /// The folder `config` works in when it is this folder under a new
+    /// name: the old name is gone, the new name is the same folder, and the
+    /// launch differs only in the folder's path.
+    fn renamed<'a>(&self, config: &'a SidecarConfig) -> Option<&'a Path> {
+        let folder = config.working_directory.as_deref()?;
+        let gone = std::fs::symlink_metadata(&self.folder)
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound);
+        (folder != self.folder
+            && gone
+            && folder_id(folder) == Some(self.id)
+            && config_hash(config, Some(folder)) == self.unplaced)
+            .then_some(folder)
     }
 }
 
 /// The mark an idle process carries while its thread's next reply may take it.
 pub struct PiReuse {
     key: LaunchKey,
+    place: Option<Place>,
     transport: Arc<PiRpcTransport>,
     parked: Instant,
 }
@@ -99,6 +176,8 @@ pub enum ReuseMiss {
     Stopped,
     /// The launch differs: arguments, environment, prompt or working folder.
     Launch,
+    /// The process could not reopen the conversation in its renamed folder.
+    Moved,
     /// A file Pi reads at start changed.
     Files,
     /// The thread has no saved conversation, or the process holds another.
@@ -114,6 +193,7 @@ impl ReuseMiss {
             Self::Expired => "expired",
             Self::Stopped => "stopped",
             Self::Launch => "launch",
+            Self::Moved => "moved",
             Self::Files => "files",
             Self::Session => "session",
             Self::Busy => "busy",
@@ -159,6 +239,7 @@ fn park(process: &mut PiRuntime, launch: PiLaunch) {
     }
     process.reuse = Some(PiReuse {
         key: launch.key,
+        place: launch.place,
         transport,
         parked: Instant::now(),
     });
@@ -183,9 +264,19 @@ fn take(
         return Err(ReuseMiss::Stopped);
     }
     let key = LaunchKey::of(config);
-    if key.config != reuse.key.config {
-        return Err(ReuseMiss::Launch);
-    }
+    // A launch that differs only because the thread's folder took its
+    // title is the same launch in the renamed folder.
+    let moved = if key.config == reuse.key.config {
+        None
+    } else {
+        Some(
+            reuse
+                .place
+                .as_ref()
+                .and_then(|place| place.renamed(config))
+                .ok_or(ReuseMiss::Launch)?,
+        )
+    };
     if key.files != reuse.key.files {
         return Err(ReuseMiss::Files);
     }
@@ -211,6 +302,15 @@ fn take(
     if !holds(&state, session_root, locator) {
         return Err(ReuseMiss::Session);
     }
+    if let Some(folder) = moved {
+        follow(
+            &reuse.transport,
+            session_root,
+            locator,
+            folder,
+            config.startup_timeout,
+        )?;
+    }
     let transport = Arc::clone(&reuse.transport);
     Ok((
         process,
@@ -218,8 +318,57 @@ fn take(
         PiLaunch {
             config: config.clone(),
             key,
+            place: Place::of(config),
+            moved: moved.is_some(),
         },
     ))
+}
+
+/// Moves an idle process to its thread's renamed folder. Pi rebuilds its
+/// tools, extensions and context files for the working folder its saved
+/// conversation names, which the launch already pointed at `folder`, when
+/// it reopens that conversation.
+fn follow(
+    transport: &PiRpcTransport,
+    session_root: &Path,
+    locator: &PiSessionLocator,
+    folder: &Path,
+    timeout: Duration,
+) -> Result<(), ReuseMiss> {
+    let (_, file) = crate::sidecar::validate_pi_session(session_root, locator.as_str())
+        .map_err(|_| ReuseMiss::Session)?;
+    let stored = std::fs::read_to_string(&file).ok().and_then(|text| {
+        let header: Value = serde_json::from_str(text.lines().next()?).ok()?;
+        header.get("cwd")?.as_str().map(PathBuf::from)
+    });
+    if stored.as_deref() != Some(folder) {
+        return Err(ReuseMiss::Launch);
+    }
+    let switched = transport
+        .call(
+            json!({"type": "switch_session", "sessionPath": file}),
+            timeout,
+        )
+        .is_ok_and(|response| {
+            response.get("type").and_then(Value::as_str) == Some("response")
+                && response.get("command").and_then(Value::as_str) == Some("switch_session")
+                && response.get("success").and_then(Value::as_bool) == Some(true)
+                && response.pointer("/data/cancelled").and_then(Value::as_bool) != Some(true)
+        });
+    if !switched {
+        return Err(ReuseMiss::Moved);
+    }
+    match transport.call(json!({"type": "get_state"}), REUSE_READ_TIMEOUT) {
+        Ok(response)
+            if response.get("success").and_then(Value::as_bool) == Some(true)
+                && response
+                    .get("data")
+                    .is_some_and(|state| !busy(state) && holds(state, session_root, locator)) =>
+        {
+            Ok(())
+        }
+        _ => Err(ReuseMiss::Moved),
+    }
 }
 
 /// Whether Pi's state names a turn, a compaction or queued messages.
@@ -253,8 +402,14 @@ fn holds(state: &Value, session_root: &Path, locator: &PiSessionLocator) -> bool
 
 /// The launch without the conversation it reopens. A reply's first process
 /// starts a new conversation and the next reply reopens it by name, so the
-/// two launches differ only there.
-fn config_hash(config: &SidecarConfig) -> u64 {
+/// two launches differ only there. With `place`, the launch also leaves out
+/// that working folder's path, wherever an argument or a variable names it.
+fn config_hash(config: &SidecarConfig, place: Option<&Path>) -> u64 {
+    let place = place.map(|folder| folder.to_string_lossy().into_owned());
+    let unplaced = |text: &str| match place.as_deref() {
+        Some(folder) if !folder.is_empty() => text.replace(folder, "\u{0}folder\u{0}"),
+        _ => text.to_owned(),
+    };
     let mut hasher = DefaultHasher::new();
     config.program.hash(&mut hasher);
     let mut args = config.args.iter();
@@ -263,15 +418,21 @@ fn config_hash(config: &SidecarConfig) -> u64 {
             args.next();
             continue;
         }
-        arg.hash(&mut hasher);
+        unplaced(arg).hash(&mut hasher);
     }
-    let mut env: Vec<_> = config.env.iter().collect();
+    let mut env: Vec<_> = config
+        .env
+        .iter()
+        .map(|(name, value)| (name, unplaced(value)))
+        .collect();
     env.sort();
     env.hash(&mut hasher);
     let mut removed: Vec<_> = config.env_remove.iter().collect();
     removed.sort();
     removed.hash(&mut hasher);
-    config.working_directory.hash(&mut hasher);
+    if place.is_none() {
+        config.working_directory.hash(&mut hasher);
+    }
     // The process inherits the runtime's own environment, apart from the
     // names the launch sets or removes and the runtime's secrets.
     let mut inherited: Vec<_> = std::env::vars_os()
@@ -290,51 +451,80 @@ fn config_hash(config: &SidecarConfig) -> u64 {
 
 /// The files Pi reads when it starts: its executable, each extension by
 /// content, each skill, the agent directory's settings and context files,
-/// and the project and context files of its working folder.
+/// and the project and context files of its working folder. A path inside
+/// the working folder counts from the folder, so the folder's own name
+/// leaves the files unchanged.
 fn files_hash(config: &SidecarConfig) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    stat(Path::new(&config.program), &mut hasher);
+    let mut files = Files {
+        hasher: DefaultHasher::new(),
+        base: config.working_directory.as_deref(),
+    };
+    stat(Path::new(&config.program), &mut files);
     for pair in config.args.windows(2) {
         match pair[0].as_str() {
-            "--extension" => content(Path::new(&pair[1]), &mut hasher),
-            "--skill" => tree(Path::new(&pair[1]), &mut hasher),
+            "--extension" => content(Path::new(&pair[1]), &mut files),
+            "--skill" => tree(Path::new(&pair[1]), &mut files),
             _ => {}
         }
     }
     if let Some(file) = config.env.get("MUNIMENT_EXTEND_MCP") {
-        content(Path::new(file), &mut hasher);
+        content(Path::new(file), &mut files);
     }
     if let Some(agent) = config.env.get("PI_CODING_AGENT_DIR").map(Path::new) {
         for name in AGENT_FILES {
-            content(&agent.join(name), &mut hasher);
+            content(&agent.join(name), &mut files);
         }
         for name in AGENT_TREES {
-            tree(&agent.join(name), &mut hasher);
+            tree(&agent.join(name), &mut files);
         }
     }
     if let Some(directory) = config.working_directory.as_deref() {
         for name in PROJECT_TREES {
-            tree(&directory.join(name), &mut hasher);
+            tree(&directory.join(name), &mut files);
         }
         for folder in directory.ancestors() {
             for name in CONTEXT_FILES {
-                stat(&folder.join(name), &mut hasher);
+                stat(&folder.join(name), &mut files);
             }
         }
     }
-    hasher.finish()
+    files.hasher.finish()
 }
 
-fn content(path: &Path, hasher: &mut DefaultHasher) {
-    path.hash(hasher);
+/// The hash of the files one launch reads, and the working folder their
+/// paths count from.
+struct Files<'a> {
+    hasher: DefaultHasher,
+    base: Option<&'a Path>,
+}
+
+impl Files<'_> {
+    fn path(&mut self, path: &Path) {
+        match self.base.and_then(|base| path.strip_prefix(base).ok()) {
+            Some(inside) => {
+                true.hash(&mut self.hasher);
+                inside.hash(&mut self.hasher);
+            }
+            None => {
+                false.hash(&mut self.hasher);
+                path.hash(&mut self.hasher);
+            }
+        }
+    }
+}
+
+fn content(path: &Path, files: &mut Files) {
+    files.path(path);
+    let hasher = &mut files.hasher;
     match std::fs::read(path) {
         Ok(bytes) => bytes.hash(hasher),
         Err(error) => error.kind().hash(hasher),
     }
 }
 
-fn stat(path: &Path, hasher: &mut DefaultHasher) {
-    path.hash(hasher);
+fn stat(path: &Path, files: &mut Files) {
+    files.path(path);
+    let hasher = &mut files.hasher;
     match std::fs::metadata(path) {
         Ok(metadata) => {
             metadata.is_dir().hash(hasher);
@@ -350,8 +540,8 @@ fn stat(path: &Path, hasher: &mut DefaultHasher) {
 }
 
 /// A file, or a folder and the entries under it, by name, size and time.
-fn tree(root: &Path, hasher: &mut DefaultHasher) {
-    stat(root, hasher);
+fn tree(root: &Path, files: &mut Files) {
+    stat(root, files);
     let mut pending = vec![(root.to_path_buf(), 0)];
     let mut seen = 0;
     while let Some((folder, depth)) = pending.pop() {
@@ -364,11 +554,11 @@ fn tree(root: &Path, hasher: &mut DefaultHasher) {
             seen += 1;
             if seen > TREE_ENTRIES {
                 // A folder too large to compare is never taken as unchanged.
-                Instant::now().hash(hasher);
+                Instant::now().hash(&mut files.hasher);
                 return;
             }
             let path = entry.path();
-            stat(&path, hasher);
+            stat(&path, files);
             let file_type = entry.file_type();
             if depth < 3 && file_type.is_ok_and(|kind| kind.is_dir()) {
                 pending.push((path, depth + 1));
@@ -477,6 +667,38 @@ mod tests {
 
         std::fs::write(root.join("work/AGENTS.md"), "rules").unwrap();
         assert_ne!(LaunchKey::of(&base).files, with_skill.files);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_renamed_folder_is_the_same_launch_in_its_new_place() {
+        let root = folder();
+        let work = root.join("work");
+        let named = root.join("Named-work");
+        let mut base = launch(&root);
+        base.args[3] = format!("The working directory is {}.", work.display());
+        std::fs::write(work.join("AGENTS.md"), "rules").unwrap();
+        let key = LaunchKey::of(&base);
+        let place = Place::of(&base).unwrap();
+        let mut renamed = base.clone();
+        renamed.working_directory = Some(named.clone());
+        renamed.args[3] = format!("The working directory is {}.", named.display());
+        // While the old name exists, the new name is another folder.
+        assert!(place.renamed(&renamed).is_none());
+
+        std::fs::rename(&work, &named).unwrap();
+        assert_ne!(LaunchKey::of(&renamed).config, key.config);
+        assert_eq!(LaunchKey::of(&renamed).files, key.files);
+        assert_eq!(place.renamed(&renamed), Some(named.as_path()));
+        // Any other change to the launch still differs.
+        let mut model = renamed.clone();
+        model.args.extend(["--model".into(), "b".into()]);
+        assert!(place.renamed(&model).is_none());
+        // A new folder under the new name is not the folder the process works in.
+        std::fs::rename(&named, root.join("elsewhere")).unwrap();
+        std::fs::create_dir_all(&named).unwrap();
+        assert!(place.renamed(&renamed).is_none());
         let _ = std::fs::remove_dir_all(root);
     }
 

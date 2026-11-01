@@ -49,6 +49,11 @@ impl Harness {
         std::env::set_var("PI_RESUME_STUB_SPAWNS", temporary.root.join("spawns"));
         std::env::set_var("PI_RESUME_STUB_PROMPT_PIDS", temporary.root.join("prompts"));
         std::env::set_var("PI_RESUME_STUB_START_DELAY_MS", START_DELAY_MS.to_string());
+        std::env::set_var("PI_RESUME_STUB_SESSION_HEADER", "1");
+        std::env::set_var(
+            "PI_RESUME_STUB_PROMPT_FOLDERS",
+            temporary.root.join("folders"),
+        );
         let storage = open_profile_storage(&temporary.profile).unwrap();
         Self {
             temporary,
@@ -120,6 +125,17 @@ impl Harness {
             .unwrap_or_else(|| panic!("no process answered {prompt}"))
     }
 
+    /// The folder the process worked in when it answered `prompt`.
+    fn prompt_folder(&self, prompt: &str) -> std::path::PathBuf {
+        lines(&self.temporary.root.join("folders"))
+            .into_iter()
+            .find_map(|line| {
+                let (text, folder) = line.split_once('\t')?;
+                (text == prompt).then(|| std::path::PathBuf::from(folder))
+            })
+            .unwrap_or_else(|| panic!("no folder answered {prompt}"))
+    }
+
     fn agent_directory(&self) -> std::path::PathBuf {
         let state = muniment_core::state_root::state_directory().unwrap();
         muniment_core::state_root::agent_directory(&state)
@@ -132,6 +148,8 @@ impl Drop for Harness {
             "PI_RESUME_STUB_SPAWNS",
             "PI_RESUME_STUB_PROMPT_PIDS",
             "PI_RESUME_STUB_START_DELAY_MS",
+            "PI_RESUME_STUB_SESSION_HEADER",
+            "PI_RESUME_STUB_PROMPT_FOLDERS",
         ] {
             std::env::remove_var(variable);
         }
@@ -153,14 +171,30 @@ fn a_threads_next_reply_takes_its_idle_process_until_its_launch_changes() {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut harness = Harness::new("pi-reuse");
 
-    // The first reply names the thread's folder after it ends, so the second
-    // reply starts in the renamed folder with a new process.
+    // The first reply names the thread's folder after it ends. Its idle
+    // process follows the renamed folder and takes the second reply.
     let first = harness.reply(None, "first");
     assert_eq!(first.phase, "complete");
     let thread = first.thread.clone();
-    let cold = harness.reply(Some(&thread), "second");
-    assert_eq!(cold.phase, "complete");
-    assert_eq!(harness.spawns().len(), 2);
+    let renamed = harness.reply(Some(&thread), "second");
+    assert_eq!(renamed.phase, "complete");
+    assert_eq!(harness.spawns().len(), 1, "{:?}", harness.spawns());
+    let process = harness.prompt_process("first");
+    assert_eq!(harness.prompt_process("second"), process);
+    let started = harness.prompt_folder("first");
+    let moved = harness.prompt_folder("second");
+    assert!(started
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .starts_with("Untitled-"));
+    assert_ne!(started, moved);
+    assert!(!started.exists());
+    assert!(moved.is_dir());
+    assert_eq!(
+        moved.parent().unwrap().canonicalize().unwrap(),
+        started.parent().unwrap().canonicalize().unwrap()
+    );
 
     // The next replies take the idle process, and start without waiting on Pi.
     let warm = harness.reply(Some(&thread), "third");
@@ -169,24 +203,26 @@ fn a_threads_next_reply_takes_its_idle_process_until_its_launch_changes() {
         (warm.phase.as_str(), again.phase.as_str()),
         ("complete", "complete")
     );
-    assert_eq!(harness.spawns().len(), 2, "{:?}", harness.spawns());
-    let process = harness.prompt_process("second");
+    assert_eq!(harness.spawns().len(), 1, "{:?}", harness.spawns());
     assert_eq!(harness.prompt_process("third"), process);
     assert_eq!(harness.prompt_process("fourth"), process);
+    assert_eq!(harness.prompt_folder("fourth"), moved);
     eprintln!(
-        "pi_reuse latency cold_ms={} warm_ms={} warm_again_ms={}",
-        cold.accepted_after.as_millis(),
+        "pi_reuse latency cold_ms={} renamed_ms={} warm_ms={} warm_again_ms={}",
+        first.accepted_after.as_millis(),
+        renamed.accepted_after.as_millis(),
         warm.accepted_after.as_millis(),
         again.accepted_after.as_millis()
     );
-    assert!(cold.accepted_after >= Duration::from_millis(START_DELAY_MS));
+    assert!(first.accepted_after >= Duration::from_millis(START_DELAY_MS));
+    assert!(renamed.accepted_after < Duration::from_millis(START_DELAY_MS));
     assert!(warm.accepted_after < Duration::from_millis(START_DELAY_MS));
 
     // A file Pi reads at start that changed starts a new process.
     std::fs::create_dir_all(harness.agent_directory()).unwrap();
     std::fs::write(harness.agent_directory().join("AGENTS.md"), "Be brief.").unwrap();
     assert_eq!(harness.reply(Some(&thread), "fifth").phase, "complete");
-    assert_eq!(harness.spawns().len(), 3);
+    assert_eq!(harness.spawns().len(), 2);
     assert_ne!(harness.prompt_process("fifth"), process);
 
     // A model change applies to the next reply in a new process.
@@ -196,11 +232,11 @@ fn a_threads_next_reply_takes_its_idle_process_until_its_launch_changes() {
     )
     .unwrap();
     assert_eq!(harness.reply(Some(&thread), "sixth").phase, "complete");
-    assert_eq!(harness.spawns().len(), 4);
+    assert_eq!(harness.spawns().len(), 3);
     let model_process = harness.prompt_process("sixth");
     assert_eq!(harness.reply(Some(&thread), "seventh").phase, "complete");
     assert_eq!(harness.prompt_process("seventh"), model_process);
-    assert_eq!(harness.spawns().len(), 4);
+    assert_eq!(harness.spawns().len(), 3);
 
     // An idle process that died is replaced, and the reply still answers.
     // The supervisor's restart of the dead process is a new generation the
@@ -231,12 +267,12 @@ fn a_stopped_reply_leaves_no_process_and_threads_never_share_one() {
     let thread_b = other.thread.clone();
     assert_ne!(thread_a, thread_b);
     harness.reply(Some(&thread_b), "b second");
-    assert_eq!(harness.spawns().len(), 4);
+    assert_eq!(harness.spawns().len(), 2);
 
     // Each thread's next reply takes its own idle process.
     harness.reply(Some(&thread_a), "a third");
     harness.reply(Some(&thread_b), "b third");
-    assert_eq!(harness.spawns().len(), 4);
+    assert_eq!(harness.spawns().len(), 2);
     let process_a = harness.prompt_process("a third");
     let process_b = harness.prompt_process("b third");
     assert_ne!(process_a, process_b);
@@ -267,5 +303,5 @@ fn a_stopped_reply_leaves_no_process_and_threads_never_share_one() {
     assert_eq!(harness.prompt_process("[hold the run] a held"), process_a);
     assert_eq!(harness.reply(Some(&thread_a), "a after").phase, "complete");
     assert_ne!(harness.prompt_process("a after"), process_a);
-    assert_eq!(harness.spawns().len(), 5);
+    assert_eq!(harness.spawns().len(), 3);
 }

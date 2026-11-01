@@ -1,4 +1,5 @@
 import { completeSimple } from '@mariozechner/pi-ai'
+import { existsSync } from 'node:fs'
 
 // Pi's bundled Bun can throw from native releaseLock after a completed HTTP
 // stream. Keep that cleanup fault from discarding a valid reply or tool call.
@@ -172,6 +173,19 @@ export async function nameFirstThread(context, complete) {
   }
 }
 
+// The launch facts name the working folder the process started in. When the
+// thread's folder takes its title, the idle process reopens the conversation
+// in the renamed folder and keeps its launch prompt, so the fact names the
+// folder the session works in once the named one is gone.
+const WORKING_FACT = /^- The working directory is (.+?)\. Create generated files inside this working directory\./m
+
+export function currentWorkingFolder(prompt, cwd, exists = existsSync) {
+  if (typeof prompt !== 'string' || typeof cwd !== 'string' || !cwd) return prompt
+  return prompt.replace(WORKING_FACT, (line, stated) => (
+    stated === cwd || exists(stated) ? line : line.replace(stated, () => cwd)
+  ))
+}
+
 export default function (pi) {
   installBunStreamReleaseFix()
   // Naming runs beside the reply, so the first turn starts at once. The run
@@ -184,7 +198,7 @@ export default function (pi) {
       naming = pending
       void pending.finally(() => { if (naming === pending) naming = null })
     }
-    return { systemPrompt: neutralSystemPrompt(event.systemPrompt) }
+    return { systemPrompt: neutralSystemPrompt(currentWorkingFolder(event.systemPrompt, context?.cwd)) }
   })
   pi.on('agent_end', async () => { await naming })
   pi.on('before_provider_request', (event) => neutralPayload(event.payload))

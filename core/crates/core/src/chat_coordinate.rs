@@ -880,7 +880,11 @@ fn coordinate_work(
         diagnostics.startup_stage("pi_spawn");
         if let Some((process, transport, launch)) = reused {
             diagnostics.reused(&process.supervisor);
-            eprintln!("muniment-runtime: run_id={run_id} pi_spawn reused");
+            if launch.moved() {
+                eprintln!("muniment-runtime: run_id={run_id} pi_spawn reused folder_moved=true");
+            } else {
+                eprintln!("muniment-runtime: run_id={run_id} pi_spawn reused");
+            }
             *runtime = Some(process);
             (
                 startup_timeout,
@@ -1892,14 +1896,6 @@ fn coordinate_work(
             }
         }
     }
-    // The thread's folder takes the thread's title once the run ends, never
-    // while Pi works in it. The next launch points the stored session at
-    // the renamed folder.
-    if compaction.is_none() {
-        if let Some(title) = run_thread_title(&journal, &run_id) {
-            app.name_thread_folder(&title);
-        }
-    }
     // A reply that ended cleanly leaves its process for the thread's next one.
     if let Some(launch) = launch.filter(|_| {
         compaction.is_none()
@@ -1911,6 +1907,14 @@ fn coordinate_work(
             )
     }) {
         engine.park(runtime, launch);
+    }
+    // The thread's folder takes the thread's title once the run ends, never
+    // while Pi runs a turn in it. The next launch points the stored session
+    // at the renamed folder, and an idle process follows it there.
+    if compaction.is_none() {
+        if let Some(title) = run_thread_title(&journal, &run_id) {
+            app.name_thread_folder(&title);
+        }
     }
     if compaction.is_none()
         && matches!(
