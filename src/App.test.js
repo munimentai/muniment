@@ -4633,6 +4633,64 @@ describe('sidebar collapse', () => {
     expect(screen.queryByText('Carry out your saved agent instructions', { selector: '#sidebar .thread-row-title' })).toBeNull()
   })
 
+  it.each([
+    ['names it as the agent\'s thread', { 'agent-1': 'agent-fresh' }],
+    ['does not name it yet', {}],
+  ])('moves off the new thread "Open agent" started to the newest thread when the agent is deleted from its profile, while the listing %s', async (_, mapping) => {
+    const original = invoke.getMockImplementation()
+    let deleted = false
+    let started = false
+    const scout = { id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null }
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args) ? agentListAnswer(deleted ? [] : [scout], deleted || !started ? {} : mapping)
+      : command === 'agent_request' && args?.operation === 'agent.delete' ? (deleted = true, {})
+      : command === 'chat_new_thread' ? (started = true, 'agent-fresh')
+      : command === 'chat_thread_open' ? []
+      : command === 'chat_select_thread' ? undefined : original(command, args))
+    threadSummaryResult = [
+      { threadId: 'plain-thread', title: 'Pass Ten Start Check', updatedAt: '2026-01-02T00:00:00Z' },
+      { threadId: 'older-thread', title: 'Lease renewal', updatedAt: '2026-01-01T00:00:00Z' },
+    ]
+    render(App)
+    await openSidebarPage('Agents')
+    await fireEvent.click(within(await within(await screen.findByRole('region', { name: 'Agents', exact: true })).findByRole('article', { name: 'Scout' })).getByRole('button', { name: 'Open chat' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_new_thread', { agentId: 'agent-1' }))
+    const profile = await screen.findByRole('complementary', { name: 'Agent profile' })
+    const opened = () => invoke.mock.calls.filter(([command, args]) => command === 'chat_thread_open' && args?.threadId === 'plain-thread').length
+    const before = opened()
+    await fireEvent.click(within(profile).getByRole('button', { name: 'Delete agent' }))
+    await fireEvent.click(within(await screen.findByRole('group', { name: 'Delete agent' })).getByRole('button', { name: 'Confirm delete' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', expect.objectContaining({ operation: 'agent.delete' })))
+    // The main pane opens the newest remaining thread, never a second new thread.
+    await waitFor(() => expect(opened()).toBe(before + 1))
+    expect(invoke.mock.calls.filter(([command]) => command === 'chat_new_thread')).toHaveLength(1)
+  })
+
+  it('opens the next remaining thread when the newest one fails to open after an agent delete', async () => {
+    const original = invoke.getMockImplementation()
+    let deleted = false
+    const scout = { id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null }
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args) ? agentListAnswer(deleted ? [] : [scout], deleted ? {} : { 'agent-1': 'agent-thread' })
+      : command === 'agent_request' && args?.operation === 'agent.delete' ? (deleted = true, {})
+      : command === 'chat_thread_open' && args?.threadId === 'plain-thread' ? Promise.reject(new Error('The thread was not found.'))
+      : command === 'chat_thread_open' ? []
+      : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
+    threadSummaryResult = [
+      { threadId: 'agent-thread', title: 'Carry out your saved agent instructions', updatedAt: '2026-01-03T00:00:00Z' },
+      { threadId: 'plain-thread', title: 'Pass Ten Start Check', updatedAt: '2026-01-02T00:00:00Z' },
+      { threadId: 'older-thread', title: 'Lease renewal', updatedAt: '2026-01-01T00:00:00Z' },
+    ]
+    render(App)
+    await openSidebarPage('Agents')
+    await fireEvent.click(within(await within(await screen.findByRole('region', { name: 'Agents', exact: true })).findByRole('article', { name: 'Scout' })).getByRole('button', { name: 'Open chat' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'agent-thread', limit: 100 }))
+    const profile = await screen.findByRole('complementary', { name: 'Agent profile' })
+    await fireEvent.click(within(profile).getByRole('button', { name: 'Delete agent' }))
+    await fireEvent.click(within(await screen.findByRole('group', { name: 'Delete agent' })).getByRole('button', { name: 'Confirm delete' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'older-thread', limit: 100 }))
+    await waitFor(() => expect(localStorage.getItem('muniment.open-thread')).toBe('older-thread'))
+    expect(invoke.mock.calls.filter(([command]) => command === 'chat_new_thread')).toHaveLength(0)
+  })
+
   it('lands an agent chat opened from its card at the newest message', async () => {
     const original = invoke.getMockImplementation()
     const history = Array.from({ length: 6 }, (_, index) => ({ role: index % 2 ? 'assistant' : 'user', content: `Message ${index}` }))

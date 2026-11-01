@@ -338,6 +338,7 @@
       for (const id of [...threadIds,...plans.map(plan=>plan.threadId)]) next[id] = {...next[id],archived:true}
       localStorage.setItem(THREAD_ORGANIZATION_KEY,JSON.stringify(next))
       threadOrganization = next
+      const ownsView = kind === 'agent' && (selectedAgent === item.id || threadIds.includes(currentThreadId))
       if (kind === 'agent') {
         showKeptFolder(item, await agentRequest(tauri, item.runtimeId, 'agent.delete', { id: item.id, remove_memory: false }))
         if (selectedAgent===item.id) { selectedAgent=null;agentProfileOpen=false }
@@ -347,21 +348,27 @@
       }
       for (const plan of plans) await tauri.invoke('creation_delete',{threadId:plan.threadId})
       await Promise.all([refreshCreations(),refreshAgents()])
-      await leaveThreads([...threadIds,...plans.map(plan=>plan.threadId)])
+      await leaveThreads([...threadIds,...plans.map(plan=>plan.threadId)], { ownsView })
     }
   }
   // A deleted thread, or an archived thread of a deleted agent or artifact,
   // never stays on screen: the newest other thread opens, else a new thread,
   // and launch and Back to threads never open it again.
+  // A deleted agent's own view leaves too, also the new thread "Open agent"
+  // starts for an agent with no thread yet. A thread that fails to open
+  // gives way to the next one.
   const leftThreads = new Set()
-  async function leaveThreads(threadIds) {
+  async function leaveThreads(threadIds, { ownsView = false } = {}) {
     const gone = threadIds.filter(Boolean)
-    if (!gone.length) return
+    if (ownsView && currentThreadId && !gone.includes(currentThreadId)) gone.push(currentThreadId)
     for (const id of gone) leftThreads.add(id)
     forgetOpenThread(gone)
-    if (freshThread || !gone.includes(currentThreadId)) return
-    const next = threadAfterDelete(regularThreads, gone, threadOrganization)
-    if (next && await chatController.openThread(next)) return
+    if (!ownsView && !gone.includes(currentThreadId)) return
+    const left = [...gone]
+    for (let next = threadAfterDelete(regularThreads, left, threadOrganization); next; next = threadAfterDelete(regularThreads, left, threadOrganization)) {
+      if (await chatController.openThread(next)) return
+      left.push(next)
+    }
     await chatController.newThread()
   }
   let creationsRevision = 0
@@ -739,11 +746,12 @@
     for (const id of threadIds) next[id] = { ...next[id], archived: true }
     localStorage.setItem(THREAD_ORGANIZATION_KEY, JSON.stringify(next))
     threadOrganization = next
+    const ownsView = selectedAgent === agent.id || [...threadIds, ...chats].includes(currentThreadId)
     if (selectedAgent === agent.id) selectedAgent = null
     if (profileOnlyAgent === agent.id) profileOnlyAgent = null
     agentProfileOpen = false
     await Promise.all([refreshCreations(), refreshAgents()])
-    await leaveThreads([...threadIds, ...chats])
+    await leaveThreads([...threadIds, ...chats], { ownsView })
   }
   // The agent whose thread is starting keeps its profile open until the
   // listing names that thread.
