@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { INPUT_MARK_THROTTLE_MS, inputMarkSettler, landFocus, settleTextFocusMoves, shown, takesText } from './focus-landing.js'
+import { INPUT_MARK_THROTTLE_MS, inputMarkSettler, landFocus, settleInputMark, shown, takesText } from './focus-landing.js'
 
 const SKIP = '#sidebar, .titlebar, [data-panel="workspace"]'
 afterEach(() => { document.body.innerHTML = '' })
@@ -145,33 +145,120 @@ it('asks the shell to watch for the input-source mark on each poke, at most once
   } finally { vi.useRealTimers() }
 })
 
+// A click inside a field: the pointer lands there, then the field takes focus.
+function click(field) {
+  field.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, composed: true }))
+  field.focus()
+}
+
 it('asks to hide the mark when focus moves from one text field to another, as into a picker search field', () => {
   document.body.innerHTML = `
     <textarea aria-label="Message"></textarea>
     <button>Model</button>
-    <div role="dialog"><input type="search" aria-label="Search models"><input type="checkbox" aria-label="Pin"></div>`
+    <div role="group"><input type="search" aria-label="Search models"><input type="checkbox" aria-label="Pin"></div>`
   const [composer, button, search, pin] = ['textarea', 'button', 'input[type=search]', 'input[type=checkbox]'].map((selector) => document.querySelector(selector))
   const settler = { poke: vi.fn() }
-  const stop = settleTextFocusMoves(document, settler)
+  const stop = settleInputMark(document, settler)
   try {
-    // The first text field to take focus leaves no mark behind.
-    composer.focus()
+    // A click into the first text field leaves no mark behind.
+    click(composer)
     expect(settler.poke).not.toHaveBeenCalled()
     // The composer's caret hands focus straight to the picker's search field.
     search.focus()
     expect(settler.poke).toHaveBeenCalledTimes(1)
     // Focus on a control that takes no text asks nothing here.
-    pin.focus()
+    click(pin)
     expect(settler.poke).toHaveBeenCalledTimes(1)
     // Back to the composer by way of a button: the last text field was the search field.
-    button.focus()
-    composer.focus()
+    click(button)
+    click(composer)
     expect(settler.poke).toHaveBeenCalledTimes(2)
-    // Focus that returns to the same field asks nothing.
+    // A click that returns to the same field asks nothing.
     composer.blur()
-    composer.focus()
+    click(composer)
     expect(settler.poke).toHaveBeenCalledTimes(2)
   } finally { stop() }
   search.focus()
   expect(settler.poke).toHaveBeenCalledTimes(2)
+})
+
+// Each trigger, through the real settler on fake timers: the count of watch
+// requests the shell receives.
+function markWatch() {
+  vi.useFakeTimers()
+  document.body.innerHTML = `
+    <aside><button aria-expanded="false" aria-haspopup="menu">This computer</button></aside>
+    <main><textarea aria-label="Message"></textarea></main>`
+  const invoke = vi.fn(async () => {})
+  const watches = () => invoke.mock.calls.filter(([command]) => command === 'input_mark_watch').length
+  const composer = document.querySelector('textarea')
+  const machines = document.querySelector('button')
+  return { invoke, watches, composer, machines, settler: inputMarkSettler(invoke) }
+}
+
+it('asks to hide the mark when code focuses the composer, as at launch, on Open agent and on a thread switch', () => {
+  const { watches, composer, settler } = markWatch()
+  // A relaunch focuses the composer before the listener starts.
+  composer.focus()
+  const stop = settleInputMark(document, settler)
+  try {
+    expect(watches()).toBe(1)
+    vi.advanceTimersByTime(INPUT_MARK_THROTTLE_MS)
+    // "Open agent" and a thread switch move focus off the field, then code focuses it again.
+    composer.blur()
+    composer.focus()
+    expect(watches()).toBe(2)
+    vi.advanceTimersByTime(INPUT_MARK_THROTTLE_MS)
+    // A plain click into the composer asks nothing.
+    composer.blur()
+    click(composer)
+    vi.advanceTimersByTime(5000)
+    expect(watches()).toBe(2)
+  } finally { stop(); vi.useRealTimers() }
+})
+
+it('asks to hide the mark when the window becomes active over a focused text field, and not over a button', () => {
+  const { watches, composer, machines, settler } = markWatch()
+  const stop = settleInputMark(document, settler)
+  try {
+    click(composer)
+    expect(watches()).toBe(0)
+    window.dispatchEvent(new FocusEvent('focus'))
+    expect(watches()).toBe(1)
+    vi.advanceTimersByTime(INPUT_MARK_THROTTLE_MS)
+    document.dispatchEvent(new Event('visibilitychange'))
+    expect(watches()).toBe(2)
+    vi.advanceTimersByTime(INPUT_MARK_THROTTLE_MS)
+    machines.focus()
+    window.dispatchEvent(new FocusEvent('focus'))
+    vi.advanceTimersByTime(5000)
+    expect(watches()).toBe(2)
+  } finally { stop(); vi.useRealTimers() }
+})
+
+it('asks to hide the mark when a menu opens over a focused text field', async () => {
+  const { watches, composer, machines, settler } = markWatch()
+  const stop = settleInputMark(document, settler)
+  try {
+    click(composer)
+    // WebKit gives a clicked button no focus, so the composer keeps it while the machine menu opens.
+    machines.setAttribute('aria-expanded', 'true')
+    await Promise.resolve()
+    expect(watches()).toBe(1)
+    vi.advanceTimersByTime(INPUT_MARK_THROTTLE_MS)
+    document.querySelector('aside').insertAdjacentHTML('beforeend', '<div><div role="menu" aria-label="Machines"></div></div>')
+    await Promise.resolve()
+    expect(watches()).toBe(2)
+    vi.advanceTimersByTime(INPUT_MARK_THROTTLE_MS)
+    // Plain content, such as a streamed reply, asks nothing.
+    document.querySelector('main').insertAdjacentHTML('beforeend', '<p>Reply</p>')
+    machines.setAttribute('aria-expanded', 'false')
+    await Promise.resolve()
+    // A menu that opens with focus off any text field asks nothing.
+    machines.focus()
+    document.querySelector('aside').insertAdjacentHTML('beforeend', '<div role="listbox"></div>')
+    await Promise.resolve()
+    vi.advanceTimersByTime(5000)
+    expect(watches()).toBe(2)
+  } finally { stop(); vi.useRealTimers() }
 })
