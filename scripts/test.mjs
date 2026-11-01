@@ -5,6 +5,10 @@ if (process.allowedNodeEnvironmentFlags.has('--no-experimental-webstorage')) {
   process.env.NODE_OPTIONS = `${process.env.NODE_OPTIONS ?? ''} --no-experimental-webstorage`.trim()
 }
 
+// Vitest turns on Node's compile cache, which lands in the system temporary
+// folder unless NODE_COMPILE_CACHE names a folder. It lives with the modules.
+process.env.NODE_COMPILE_CACHE ??= fileURLToPath(new URL('../node_modules/.cache/node-compile-cache', import.meta.url))
+
 // CI stops at the first suite that fails. A local run goes on to every suite
 // and exits with the first failure's status, so one failing suite never
 // hides the others.
