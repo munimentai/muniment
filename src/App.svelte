@@ -726,7 +726,8 @@
   // A deleted agent's threads leave the sidebar, and core removed its
   // creation chat, so an open creation chat gives way to a new thread.
   // Core keeps a deleted agent's folder that holds the user's files and says
-  // so. The notice names the folder, and on this computer it reveals it.
+  // so. The notice names the folder, and on this computer it reveals it. The
+  // path shows nowhere else, so the notice stays until the user dismisses it.
   const revealLabel = /Mac/.test(navigator.platform) ? 'Reveal in Finder' : /Win/.test(navigator.platform) ? 'Reveal in File Explorer' : 'Reveal in File Manager'
   let keptFolders = 0
   function showKeptFolder(agent, answer) {
@@ -735,7 +736,7 @@
     const local = (agent?.runtimeId ?? LOCAL_RUNTIME_ID) === LOCAL_RUNTIME_ID
     composerNotices.show({
       id: 'agent-folder-kept', cause: ++keptFolders, text: `${answer.message || "The agent's folder holds your files, so it stays."} ${folder}`,
-      label: 'Agent folder kept', testid: 'agent-folder-kept-notice', dismissLabel: 'Dismiss agent folder notice',
+      label: 'Agent folder kept', testid: 'agent-folder-kept-notice', dismissLabel: 'Dismiss agent folder notice', persistent: true,
       action: local ? { label: revealLabel, run: () => { tauri.invoke('workspace_reveal', { path: folder }).catch(error => { submitError = String(error) }) } } : undefined,
     })
   }

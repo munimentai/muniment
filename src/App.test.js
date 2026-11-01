@@ -9426,7 +9426,7 @@ describe('agent chat', () => {
     expect(within(rows()).queryByText('New agent', { selector: '.thread-row-title' })).toBeNull()
   })
 
-  it('names a deleted agent\'s kept folder in a composer notice that reveals it', async () => {
+  it('names a deleted agent\'s kept folder in a composer notice that stays past the notice timeout, reveals it and leaves on dismiss', async () => {
     const saved = []
     chatMock(saved)
     const original = invoke.getMockImplementation()
@@ -9452,11 +9452,20 @@ describe('agent chat', () => {
     const page = await screen.findByRole('region', { name: 'Agents' })
     await fireEvent.click(await within(page).findByRole('button', { name: 'Actions for Weekly recap' }))
     await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
-    await fireEvent.click(within(await screen.findByRole('group', { name: 'Delete agent' })).getByRole('button', { name: 'Confirm delete' }))
-    const notice = await screen.findByTestId('agent-folder-kept-notice')
-    expect(notice).toHaveTextContent(`The agent's folder holds your files, so it stays. ${folder}`)
-    await fireEvent.click(within(notice).getByRole('button', { name: /^Reveal in / }))
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith('workspace_reveal', { path: folder }))
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      await fireEvent.click(within(await screen.findByRole('group', { name: 'Delete agent' })).getByRole('button', { name: 'Confirm delete' }))
+      const notice = await screen.findByTestId('agent-folder-kept-notice')
+      expect(notice).toHaveTextContent(`The agent's folder holds your files, so it stays. ${folder}`)
+      // The path shows nowhere else, so the notice outlasts the composer notice timeout.
+      await vi.advanceTimersByTimeAsync(30000)
+      expect(screen.getByTestId('agent-folder-kept-notice')).toBe(notice)
+      await fireEvent.click(within(notice).getByRole('button', { name: /^Reveal in / }))
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith('workspace_reveal', { path: folder }))
+      expect(screen.getByTestId('agent-folder-kept-notice')).toBeInTheDocument()
+      await fireEvent.click(within(notice).getByRole('button', { name: 'Dismiss agent folder notice' }))
+      await waitFor(() => expect(screen.queryByTestId('agent-folder-kept-notice')).not.toBeInTheDocument())
+    } finally { vi.useRealTimers() }
   })
 
   it('revises the draft with the next message in the same chat', async () => {
