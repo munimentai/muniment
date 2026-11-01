@@ -4301,6 +4301,45 @@ describe('launch rows', () => {
     await waitFor(() => expect(rowMeta('Lease renewal')).toHaveTextContent('This computer'))
     await waitFor(() => expect(rowMeta('Lease renewal').querySelector('.status-chip')).toHaveTextContent('Offline'))
   })
+
+  it('never shows the hub as the restored thread\'s machine when the hub answers the launch list before this computer', async () => {
+    const hubMachines = { ...machines, runtimes: [machines.runtimes[0], { id: 'hub', name: 'Factory hub', kind: 'server', status: 'online', local: false, active: false, scopes: ['run.write'] }] }
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, args) => command === 'runtime_list' ? hubMachines
+      : command === 'attach_listener_status' ? { connected: true, supervisor_running: true }
+        : command === 'chat_select_thread' ? undefined
+          : command === 'chat_thread_open' ? [{ runId: 'run-1', phase: 'complete', prompt: 'Question', text: 'Answer', toolActivity: [] }]
+            : original(command, args))
+    // The hub connects first and lists its synced copy of this computer's
+    // thread. This computer's runtime answers on the third ask.
+    const hubCopy = { threadId: 'ours', title: 'Lease renewal', updatedAt: '2026-07-28T11:55:00Z', runtimeId: 'hub', replica: true, owner_runtime: 'core-laptop' }
+    const ownCopy = { ...hubCopy, runtimeId: 'local', replica: false }
+    const lists = [
+      { summaries: [hubCopy], nextCursor: null, runtimeIds: ['hub'] },
+      { summaries: [hubCopy], nextCursor: null, runtimeIds: ['hub'] },
+    ]
+    const shell = window.__TAURI__.core.invoke
+    window.__TAURI__.core.invoke = (command, ...args) => command === 'chat_thread_summaries'
+      ? Promise.resolve(lists.shift() ?? { summaries: [ownCopy], nextCursor: null, runtimeIds: ['local', 'hub'] })
+      : shell(command, ...args)
+    onTestFinished(() => { window.__TAURI__.core.invoke = shell })
+    const seen = []
+    const observer = new MutationObserver(() => {
+      const badge = document.querySelector('.titlebar-thread .machine-badge')
+      if (badge) seen.push(badge.textContent)
+    })
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true })
+    onTestFinished(() => observer.disconnect())
+    render(App)
+    expect(await screen.findByText('Answer', {}, { timeout: 3000 })).toBeInTheDocument()
+    // The title never named the hub, and launch selected this computer only.
+    expect(seen).toEqual([])
+    expect(lists).toEqual([])
+    expect(document.querySelector('.titlebar-thread .machine-badge')).toBeNull()
+    const selects = invoke.mock.calls.filter(([command]) => command === 'chat_select_thread').map(([, payload]) => payload)
+    expect(selects.length).toBeGreaterThan(0)
+    expect(selects.filter((payload) => payload.runtimeId === 'hub')).toEqual([])
+  })
 })
 
 describe('agent poll', () => {

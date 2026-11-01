@@ -95,6 +95,10 @@ export function createChatController({
   // Sends a message the runtime refused because another machine runs the
   // thread to that machine, and answers whether it went.
   postElsewhere = null,
+  // How long launch waits for this computer's runtime to answer the thread
+  // list, and the pause between asks.
+  localListWaitMs = 10_000,
+  localListRetryMs = 250,
 }) {
   const buffered = new Map()
   // How many calls wait for a run id right now: a submission, a resume, or a
@@ -137,6 +141,14 @@ export function createChatController({
   const signaledThreads = new Set()
   // The machine each select named, by thread id.
   const selectedRuntimes = new Map()
+  // Whether this computer's runtime answered the last thread list. A list it
+  // did not answer holds the paired machines' synced copies of its threads.
+  let localListed = true
+  // Whether a thread list published yet, and whether launch waits for this
+  // computer's list now. A refresh during that wait publishes nothing.
+  let launchListed = false
+  let launchWaiting = false
+  const listedLocally = (page) => !Array.isArray(page?.runtimeIds) || page.runtimeIds.includes(LOCAL_RUNTIME_ID)
   let signaledThreadRefreshInFlight = false
   let signaledThreadRefreshFollowUp = false
   // The signaled-run set marks each new run id once. A later event with the
@@ -299,14 +311,21 @@ export function createChatController({
         invoke('chat_thread_summaries', { limit: 20 }),
         invoke('chat_current_thread'),
       ])
-      if (destroyed || sequence !== threadRefreshSequence) return false
+      if (destroyed || sequence !== threadRefreshSequence || launchWaiting) return false
       onDeletedThreads(firstPage.deletedThreadIds ?? [])
+      localListed = listedLocally(firstPage)
       const refreshedThreadIds = new Set(firstPage.summaries.map((summary) => summary.threadId))
       // A machine that did not answer, such as one that revoked this device, leaves its threads out.
       const answered = Array.isArray(firstPage.runtimeIds) ? new Set(firstPage.runtimeIds) : null
-      const retainedSummaries = readThreadSummaries().filter((summary) => !refreshedThreadIds.has(summary.threadId)
+      const previous = readThreadSummaries()
+      const retainedSummaries = previous.filter((summary) => !refreshedThreadIds.has(summary.threadId)
         && (!answered || !summary.runtimeId || answered.has(summary.runtimeId)))
-      const summaries = [...firstPage.summaries, ...retainedSummaries]
+      // A synced copy never stands in for a thread its own machine listed
+      // before and did not answer for this time, so its row and the title's
+      // machine stay put while that machine is busy.
+      const held = new Map(answered ? previous.filter((summary) => summary.runtimeId && !answered.has(summary.runtimeId)).map((summary) => [summary.threadId, summary]) : [])
+      const listed = firstPage.summaries.map((summary) => summary.replica && held.has(summary.threadId) ? held.get(summary.threadId) : summary)
+      const summaries = [...listed, ...retainedSummaries]
       onThreadSummaries(summaries)
       const shownThreadId = currentThreadId ?? (freshThread ? null : readThreadId())
       onThreadSelected(shownThreadId)
@@ -456,8 +475,28 @@ export function createChatController({
     onHistoryStart()
     onAnnounce(null)
     try {
-      const { summaries, nextCursor, deletedThreadIds } = await invoke('chat_thread_summaries', { limit: 20 })
+      // At launch a paired machine can answer before this computer's
+      // runtime. Its list holds synced copies of this computer's threads,
+      // which would name the paired machine on each row, in the title and in
+      // the restored thread's select. Launch asks again until this computer
+      // answers or the wait ends, and the shell keeps its loading state.
+      launchWaiting = !launchListed
+      let page
+      try {
+        page = await invoke('chat_thread_summaries', { limit: 20 })
+        const deadline = Date.now() + localListWaitMs
+        while (launchWaiting && !listedLocally(page) && Date.now() < deadline && !destroyed) {
+          await new Promise((resolve) => setTimeout(resolve, localListRetryMs))
+          if (destroyed) return
+          try { page = await invoke('chat_thread_summaries', { limit: 20 }) } catch (_) { /* The list in hand stands. */ }
+        }
+      } finally {
+        launchWaiting = false
+      }
+      const { summaries, nextCursor, deletedThreadIds } = page
       if (destroyed) return
+      localListed = listedLocally(page)
+      launchListed = true
       onDeletedThreads(deletedThreadIds ?? [])
       historyLoadFailed = false
       threadPageCount = 1
@@ -895,8 +934,13 @@ export function createChatController({
   // The machine a select names. A thread the list no longer names keeps the
   // machine a select last named for it, so a select never falls back to
   // whichever machine is active.
+  // A synced copy listed while this computer's runtime did not answer names
+  // its holder, never the machine the thread lives on, so its select names
+  // no machine and selects no paired machine.
   function selection(threadId) {
-    const runtimeId = readThreadSummaries().find((summary) => summary.threadId === threadId)?.runtimeId
+    const summary = readThreadSummaries().find((entry) => entry.threadId === threadId)
+    if (summary?.replica && !localListed) return { threadId }
+    const runtimeId = summary?.runtimeId
       ?? selectedRuntimes.get(threadId)
     if (!runtimeId) return { threadId }
     selectedRuntimes.set(threadId, runtimeId)

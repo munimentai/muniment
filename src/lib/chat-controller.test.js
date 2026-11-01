@@ -12,7 +12,7 @@ function deferred() {
   return { promise, resolve, reject }
 }
 
-function setup(invoke = vi.fn(), { threadId = null, summaries = [], projectId = null, agentId = null, thinkingLevel = null, permissionMode = null, launchThreadId = null } = {}) {
+function setup(invoke = vi.fn(), { threadId = null, summaries = [], projectId = null, agentId = null, thinkingLevel = null, permissionMode = null, launchThreadId = null, options = {} } = {}) {
   let messages = []
   let active = null
   let announced = null
@@ -72,6 +72,7 @@ function setup(invoke = vi.fn(), { threadId = null, summaries = [], projectId = 
     onSignInLink,
     onSubmission,
     onBackgroundRun: (next) => { background = next },
+    ...options,
   })
   return {
     controller,
@@ -641,6 +642,53 @@ describe('chat controller', () => {
     ] })
     await context.controller.refreshThreads()
     expect(context.onThreadSummaries.mock.lastCall[0].map((summary) => summary.threadId)).toEqual(['new', 'mine', 'boxed'])
+  })
+
+  // This computer's runtime names itself `core-mac`. The hub holds a synced
+  // copy of its thread, which names the hub as the runtime that listed it.
+  const hubCopy = { threadId: 'ours', title: 'Lease renewal', runtimeId: 'hub', replica: true, owner_runtime: 'core-mac' }
+  const ownCopy = { threadId: 'ours', title: 'Lease renewal', runtimeId: 'local', owner_runtime: 'core-mac' }
+  const hubFirst = (lists) => vi.fn(async (command) => {
+    if (command === 'chat_thread_summaries') return lists.length > 1 ? lists.shift() : lists[0]
+    if (command === 'chat_thread_open') return { entries: [], nextCursor: null }
+    return undefined
+  })
+
+  it('holds the launch list until this computer answers when the hub connects first, and selects this computer', async () => {
+    const invoke = hubFirst([
+      { summaries: [hubCopy], nextCursor: null, runtimeIds: ['hub'] },
+      { summaries: [hubCopy], nextCursor: null, runtimeIds: ['hub'] },
+      { summaries: [ownCopy], nextCursor: null, runtimeIds: ['local', 'hub'] },
+    ])
+    const context = setup(invoke, { launchThreadId: 'ours', options: { localListRetryMs: 1 } })
+    // A refresh during the wait publishes nothing.
+    const refresh = context.controller.refreshThreads()
+    await context.controller.loadHistory()
+    await refresh
+    // The window never saw the hub's copy: one list, this computer's.
+    expect(context.onThreadSummaries.mock.calls.map(([list]) => list.map((summary) => summary.runtimeId))).toEqual([['local']])
+    expect(invoke.mock.calls.filter(([command]) => command === 'chat_thread_summaries').length).toBeGreaterThanOrEqual(3)
+    const selects = invoke.mock.calls.filter(([command]) => command === 'chat_select_thread').map(([, payload]) => payload)
+    expect(selects).toEqual([{ threadId: 'ours', runtimeId: 'local' }])
+    expect(context.onThreadSelected).toHaveBeenLastCalledWith('ours')
+  })
+
+  it('selects no paired machine for a synced copy when this computer does not answer before the wait ends', async () => {
+    const invoke = hubFirst([{ summaries: [hubCopy], nextCursor: null, runtimeIds: ['hub'] }])
+    const context = setup(invoke, { launchThreadId: 'ours', options: { localListWaitMs: 20, localListRetryMs: 1 } })
+    await context.controller.loadHistory()
+    const selects = invoke.mock.calls.filter(([command]) => command === 'chat_select_thread').map(([, payload]) => payload)
+    expect(selects.length).toBeGreaterThan(0)
+    for (const payload of selects) expect(payload).toEqual({ threadId: 'ours' })
+  })
+
+  it('keeps a thread on this computer when a refresh this computer does not answer lists only the hub copy', async () => {
+    const invoke = vi.fn(async (command) => command === 'chat_current_thread'
+      ? 'ours'
+      : { summaries: [hubCopy], nextCursor: null, runtimeIds: ['hub'] })
+    const context = setup(invoke, { threadId: 'ours', summaries: [ownCopy] })
+    await context.controller.refreshThreads()
+    expect(context.onThreadSummaries.mock.lastCall[0]).toEqual([ownCopy])
   })
 
   it('keeps the restored thread selected when the backend has no explicit selection', async () => {

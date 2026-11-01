@@ -372,13 +372,25 @@ fn record_thread_list(attach: &AttachCompanionState, pages: Vec<RuntimePage>) ->
     deleted.sort();
     merged["deletedThreadIds"] = deleted.into();
     if let Some(listed) = merged["summaries"].as_array() {
-        let runtimes = thread_runtimes(listed, attach.local_fleet_id().as_deref());
+        let fleet_id = attach.local_fleet_id();
         // A list without this computer's runtime moves none of its threads
-        // to the paired machine that holds a copy.
+        // to the paired machine that holds a copy. Until this computer's
+        // runtime names its fleet id, as at a launch where a paired machine
+        // answers first, any synced copy may be one of this computer's own
+        // threads, so such a list records only the threads a paired machine
+        // runs itself, and a select of a copy never selects its holder.
         if local_answered {
-            attach.remember_thread_runtimes(runtimes);
+            attach.remember_thread_runtimes(thread_runtimes(listed, fleet_id.as_deref()));
         } else {
-            attach.keep_thread_runtimes(runtimes);
+            let known: Vec<serde_json::Value> = listed
+                .iter()
+                .filter(|summary| {
+                    fleet_id.is_some()
+                        || summary.get("replica").and_then(serde_json::Value::as_bool) != Some(true)
+                })
+                .cloned()
+                .collect();
+            attach.keep_thread_runtimes(thread_runtimes(&known, fleet_id.as_deref()));
         }
     }
     merged
@@ -1637,6 +1649,38 @@ mod tests {
             DesktopClientSession::Disconnected
         ));
         assert_eq!(attach.remote_runtime_id(), None);
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    #[test]
+    fn a_launch_list_the_hub_answers_first_never_sends_this_computers_thread_to_the_hub() {
+        let attach = AttachCompanionState::default();
+        // At launch the hub connects first, and this computer's runtime has
+        // not named its fleet id yet. The hub lists its synced copy of this
+        // computer's thread and a thread it runs itself.
+        let hub_copy = serde_json::json!({"threadId": "ours", "updatedAt": "2026-10-31T11:00:00Z", "owner_runtime": "core-mac", "replica": true});
+        let hub_own = serde_json::json!({"threadId": "hub-own", "updatedAt": "2026-10-31T10:00:00Z", "owner_runtime": "core-hub"});
+        let merged = record_thread_list(&attach, vec![page("hub", serde_json::json!([hub_copy, hub_own]))]);
+        assert_eq!(merged["summaries"].as_array().map(Vec::len), Some(2));
+        assert_eq!(attach.thread_runtime("ours"), None);
+        assert_eq!(attach.thread_runtime("hub-own").as_deref(), Some("hub"));
+        // A select of the copy reaches this computer, the active runtime,
+        // and leaves the hub unselected.
+        let (runtime, session) = select_thread_session(&attach, "ours");
+        assert_eq!(runtime, "local");
+        assert!(matches!(session, ThreadSelectSession::NoSupervisor));
+        assert_eq!(attach.remote_runtime_id(), None);
+
+        // This computer's runtime answers and names itself, so the thread lives here.
+        let ours = serde_json::json!({"threadId": "ours", "updatedAt": "2026-10-31T10:00:00Z", "owner_runtime": "core-mac"});
+        record_thread_list(&attach, vec![page("local", serde_json::json!([ours])), page("hub", serde_json::json!([hub_copy]))]);
+        assert_eq!(attach.thread_runtime("ours").as_deref(), Some("local"));
+
+        // Once the fleet id is known, a later list the hub answers alone
+        // records the copies it names again, by owner.
+        let later = serde_json::json!({"threadId": "later", "updatedAt": "2026-10-31T12:00:00Z", "owner_runtime": "core-mac", "replica": true});
+        record_thread_list(&attach, vec![page("hub", serde_json::json!([later]))]);
+        assert_eq!(attach.thread_runtime("later").as_deref(), Some("local"));
     }
 
     #[cfg(any(unix, target_os = "windows"))]
