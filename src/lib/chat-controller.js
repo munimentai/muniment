@@ -962,6 +962,9 @@ export function createChatController({
       const model = preserveDraft ? null : readPendingModel()
       const mentions = preserveDraft ? [] : readMentions(prompt)
       const run = await submitWhenAvailable({ prompt, files, ...(thinkingLevel ? { thinkingLevel } : {}), ...(permissionMode ? { permissionMode } : {}), ...(model ? { model } : {}), ...(mentions.length ? { mentions } : {}) })
+      // The runtime times the reply from when it accepts the run, so the live
+      // time counts from then too, and its last value is the receipt's.
+      const acceptedAt = new Date().toISOString()
       if (destroyed || submissionId !== submissionSequence) return
       onSubmitted()
       if (run.mentions?.length) onMentions(run.mentions)
@@ -970,7 +973,7 @@ export function createChatController({
         onFiles([])
       }
       publishMessages(messages().map((message) => message.submissionId === submissionId ? { ...message, attachments: run.attachments ?? [] } : message))
-      const identified = { ...pending, id: run.runId }
+      const identified = { ...pending, id: run.runId, startedAt: acceptedAt }
       const projected = applyLiveEvents(identified, buffered.get(run.runId) ?? [])
       buffered.delete(run.runId)
       publishMessages(messages().map((message) => message.run?.submissionId === submissionId ? { ...message, run: projected } : message))

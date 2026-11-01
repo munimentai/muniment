@@ -2449,6 +2449,23 @@ describe('chat controller', () => {
     expect(context.onThreadSelected).toHaveBeenLastCalledWith('thread-2')
   })
 
+  it('times a live reply from when the runtime accepts the run, as its receipt does', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'))
+      const submit = deferred()
+      const context = setup(vi.fn(() => submit.promise))
+      await context.start()
+      const sending = context.controller.send()
+      expect(context.messages().at(-1).run.startedAt).toBe('2026-01-01T00:00:00.000Z')
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.700Z'))
+      submit.resolve({ runId: 'run-1' })
+      await sending
+      expect(context.messages().at(-1).run).toMatchObject({ id: 'run-1', startedAt: '2026-01-01T00:00:00.700Z' })
+      expect(context.active()).toMatchObject({ id: 'run-1', startedAt: '2026-01-01T00:00:00.700Z' })
+    } finally { vi.useRealTimers() }
+  })
+
   it('replays events buffered before a submitted run id is known', async () => {
     const submit = deferred()
     const context = setup(vi.fn(() => submit.promise))
