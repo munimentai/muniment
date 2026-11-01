@@ -61,7 +61,8 @@ stop_app() {
     pkill -"$signal" -x safaridriver 2>/dev/null || true
     launchctl kill "SIG$signal" "gui/$(id -u)/ai.muniment.runtime" 2>/dev/null || true
     pkill -"$signal" -f '(^|/)muniment-runtime( |$)' 2>/dev/null || true
-    for attempt in {1..20}; do
+    # Poll every 0.25 seconds for five seconds per signal by default.
+    for (( attempt=0; attempt<${MUNIMENT_E2E_STOP_POLLS:-20}; attempt++ )); do
       if harness_processes_gone && runtime_job_stopped; then return 0; fi
       sleep 0.25
     done

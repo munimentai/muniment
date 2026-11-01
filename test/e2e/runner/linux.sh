@@ -51,7 +51,8 @@ stop_app() {
     pkill -"$signal" -x muniment 2>/dev/null || true
     pkill -"$signal" -f '^/usr/lib/muniment/muniment-runtime( |$)' 2>/dev/null || true
     pkill -"$signal" -x WebKitWebDriver 2>/dev/null || true
-    for attempt in {1..20}; do
+    # Poll every 0.25 seconds for five seconds per signal by default.
+    for (( attempt=0; attempt<${MUNIMENT_E2E_STOP_POLLS:-20}; attempt++ )); do
       harness_processes_gone && return 0
       sleep 0.25
     done
@@ -186,7 +187,8 @@ run_cleanup_e2e() {
 
 emit_artifacts() {
   local source=$1 archive envelope
-  archive=$(mktemp /tmp/muniment-e2e-artifacts.XXXXXX.tar.gz) || return 1
+  # BSD mktemp randomizes only trailing X characters, so the name carries no suffix.
+  archive=$(mktemp /tmp/muniment-e2e-artifacts.XXXXXX) || return 1
   envelope=$(mktemp /tmp/muniment-e2e-envelope.XXXXXX) || { rm -f -- "$archive"; return 1; }
   if [[ ${MUNIMENT_E2E_FINALIZER_TEST_FAIL:-} == publish-envelope ]] ||
     ! tar -czf "$archive" -C "$source" . ||
