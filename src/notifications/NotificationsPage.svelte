@@ -16,7 +16,7 @@
   import NotificationRow from './NotificationRow.svelte'
   import MachineChip from '../runtimes/MachineChip.svelte'
   import { machineRefs } from '../usage/usage.js'
-  import { threadDeleted } from '../lib/deleted-threads.svelte.js'
+  import { deletedThreadIds, threadDeleted } from '../lib/deleted-threads.svelte.js'
   import { NOTIFICATION_VIEWS, dayLabel, markAllRead, readNotifications, runWithMachine, scheduleTime } from './notifications.js'
 
   let { tauri, runtimeList = null, agents = [], swarm = null, refreshKey = 0, read = null, onopen = () => {}, onapprovalopen = null, onread = () => {}, onmodels = null } = $props()
@@ -62,7 +62,7 @@
     }
   }
 
-  $effect(() => { void view; void machine; void agent; void refreshKey; void read; void machines.map((entry) => entry.id).join(); void refresh() })
+  $effect(() => { void view; void machine; void agent; void refreshKey; void read; void deletedThreadIds().length; void machines.map((entry) => entry.id).join(); void refresh() })
   onMount(() => {
     const poll = () => { if (!document.hidden) void refresh() }
     const timer = setInterval(poll, 30_000)

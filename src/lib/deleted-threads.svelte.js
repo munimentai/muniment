@@ -11,6 +11,11 @@ const NOT_FOUND = 'Muniment cannot find this thread. Open another thread.'
 
 const deleted = new SvelteSet()
 
+// Every known deleted thread, sorted, for a request that names them.
+export function deletedThreadIds() {
+  return [...deleted].sort()
+}
+
 export function threadDeleted(threadId) {
   return !!threadId && deleted.has(threadId)
 }

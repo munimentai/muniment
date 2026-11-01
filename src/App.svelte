@@ -123,7 +123,7 @@
   import { createDictationController } from './lib/dictation-controller.js'
   import { ariaKeyShortcut, holdToTalkShortcut, isDictationActive } from './lib/dictation-state.js'
   import { createEntitlementToast } from './lib/entitlement-toast.js'
-  import { DELETED_THREAD_NOTE, markThreadDeleted, rememberDeletedThreads, threadDeleted, threadMissing } from './lib/deleted-threads.svelte.js'
+  import { DELETED_THREAD_NOTE, deletedThreadIds, markThreadDeleted, rememberDeletedThreads, threadDeleted, threadMissing } from './lib/deleted-threads.svelte.js'
   import { createComposerNotices } from './lib/composer-notices.js'
   import { createChatTranscriptController, transcriptKeys } from './lib/chat-transcript-controller.js'
   import { createTranscriptWindow, tailWindow, windowItems } from './lib/transcript-window.js'
@@ -3273,7 +3273,8 @@
     })
   })
   const needsYouMachines = $derived(JSON.stringify(machineRefs(runtimeList)))
-  $effect(() => { void needsYouMachines; void auth.name; untrack(() => { void refreshNeedsYou() }) })
+  // A thread deleted since the last read takes its failed run out of the count.
+  $effect(() => { void needsYouMachines; void auth.name; void deletedThreadIds().length; untrack(() => { void refreshNeedsYou() }) })
   onMount(() => {
     void readNotifyPreferences(tauri).then((value) => { notifyChoice = value })
     const chosen = (event) => { notifyChoice = event.detail }

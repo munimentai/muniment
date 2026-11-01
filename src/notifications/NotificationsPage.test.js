@@ -5,7 +5,7 @@ import NotificationsPage from './NotificationsPage.svelte'
 import SidebarActions from '../lib/SidebarActions.svelte'
 import { DEFAULT_NOTIFY, isNotificationsShortcut, notifyAllowed, notifyPreferences, pointsToModels, resultLine, triggerIcon, triggerLabel } from './notifications.js'
 import { machineLight } from '../lib/status-tone.js'
-import { forgetDeletedThreads, rememberDeletedThreads } from '../lib/deleted-threads.svelte.js'
+import { forgetDeletedThreads, markThreadDeleted, rememberDeletedThreads } from '../lib/deleted-threads.svelte.js'
 
 afterEach(cleanup)
 afterEach(forgetDeletedThreads)
@@ -203,6 +203,23 @@ describe('Notifications page', () => {
     expect(row.querySelector('.gone')).toHaveTextContent("This run's thread was deleted.")
     // A run whose thread stays opens as before.
     expect(screen.getByRole('button', { name: 'Lead scout, Done, unread: Found 4 leads.' })).not.toBeDisabled()
+  })
+
+  it('names the deleted threads to core, and asks again when another thread turns out deleted', async () => {
+    rememberDeletedThreads(['thread-r6', 'thread-r5'])
+    const invoke = vi.fn(async () => page())
+    render(NotificationsPage, { tauri: { invoke }, runtimeList: null })
+    await screen.findByRole('region', { name: /^Needs you/ })
+    expect(invoke).toHaveBeenLastCalledWith('notifications_list', expect.objectContaining({ filter: expect.objectContaining({ deleted: ['thread-r5', 'thread-r6'] }) }))
+    markThreadDeleted('thread-r4')
+    await vi.waitFor(() => expect(invoke).toHaveBeenLastCalledWith('notifications_list', expect.objectContaining({ filter: expect.objectContaining({ deleted: ['thread-r4', 'thread-r5', 'thread-r6'] }) })))
+  })
+
+  it('names no deleted threads while none are known', async () => {
+    const invoke = vi.fn(async () => page())
+    render(NotificationsPage, { tauri: { invoke }, runtimeList: null })
+    await screen.findByRole('region', { name: /^Needs you/ })
+    expect(invoke.mock.calls[0][1].filter).not.toHaveProperty('deleted')
   })
 
   it('asks again for the failed view', async () => {

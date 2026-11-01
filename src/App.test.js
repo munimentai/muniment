@@ -10215,6 +10215,10 @@ it('names a run whose thread was deleted in its Notifications row instead of ope
   expect(gone).toHaveTextContent("This run's thread was deleted.")
   expect(document.querySelector('.catalog-title')).toHaveTextContent('Notifications')
   expect(screen.queryByRole('button', { name: 'Restore history' })).toBeNull()
+  // Core reads both runs as read from now on, so neither waits in Needs you or the badge.
+  const asked = () => invoke.mock.calls.filter(([command]) => command === 'notifications_list').map(([, args]) => args.filter)
+  await waitFor(() => expect(asked().filter((filter) => filter.view === 'needs_you').at(-1)?.deleted).toEqual(['thread-gone', 'thread-listed']))
+  expect(asked().at(-1).deleted).toEqual(['thread-gone', 'thread-listed'])
 })
 
 it('keeps the foot row on the Settings side, where Settings is the current page', async () => {

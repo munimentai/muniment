@@ -7,6 +7,7 @@ import { LOCAL_RUNTIME_ID } from '../runtimes/runtimes.js'
 import { routineIcon } from '../agents/routine-labels.js'
 import { markdownPlainText } from '../lib/assistant-markdown.js'
 import { runFailureText } from '../lib/run-failure.js'
+import { deletedThreadIds } from '../lib/deleted-threads.svelte.js'
 import { displayZone, formatClock, formatDate, sameDay, zoneOffsetMinutes } from '../lib/time-format.svelte.js'
 
 export const NOTIFICATION_VIEWS = [
@@ -22,11 +23,15 @@ export const NOTIFY_KEY = 'notify'
 export const DEFAULT_NOTIFY = Object.freeze({ needs_you: true, finished: false })
 
 // `read` maps each thread id to when this device last read it, so a failed
-// run leaves Needs you once its thread is open. Core starts each day at the
+// run leaves Needs you once its thread is open. A run whose thread was
+// deleted can never be opened, so `deleted` names those threads and core
+// reads their runs as read. Core starts each day at the
 // shown zone's own midnight, so a daylight saving change moves no run.
 export function readNotifications(tauri, machines, { view = 'all', machine = null, agent = null, read = null } = {}) {
   const filter = { view, utc_offset_minutes: zoneOffsetMinutes(), time_zone: displayZone() }
   if (read && Object.keys(read).length) filter.read = read
+  const deleted = deletedThreadIds()
+  if (deleted.length) filter.deleted = deleted
   if (machine) filter.machine = machine
   if (agent) filter.agent = agent
   return tauri.invoke('notifications_list', { machines, filter })
