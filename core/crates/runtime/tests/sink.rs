@@ -21,6 +21,7 @@ fn event() -> ChatEvent {
     ChatEvent {
         run_id: "run-1".into(),
         thread_id: None,
+        started_at: None,
         phase: "running".into(),
         text: "hello".into(),
         prompt_accepted: false,

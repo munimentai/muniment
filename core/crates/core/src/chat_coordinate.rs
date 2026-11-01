@@ -291,6 +291,20 @@ impl LocalRunLedger {
     }
 }
 
+/// How long the run took: from its `run.started` event's `recorded_at`, the
+/// start the live reply time counts from, to now. A run whose start is not
+/// projected counts from when this coordinator took it.
+fn run_time(started_at: Option<&str>, fallback: Instant) -> Duration {
+    started_at
+        .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+        .map(|at| {
+            (chrono::Utc::now() - at.with_timezone(&chrono::Utc))
+                .to_std()
+                .unwrap_or_default()
+        })
+        .unwrap_or_else(|| fallback.elapsed())
+}
+
 /// A local receipt preserves the model, routing evidence, usage and tools
 /// recorded by the run. The cost is a catalog estimate, never a bill.
 fn local_receipt(elapsed: Duration, ledger: &LocalRunLedger) -> crate::sidecar::pi_chat::Receipt {
@@ -304,7 +318,8 @@ fn local_receipt(elapsed: Duration, ledger: &LocalRunLedger) -> crate::sidecar::
             .filter(|_| !ledger.cost_incomplete)
             .map(|cost| format!("${cost:.3} est.")),
         cost_usd: ledger.cost.filter(|_| !ledger.cost_incomplete),
-        time: Some(format!("{:.1}s", elapsed.as_secs_f64())),
+        // Milliseconds, so the receipt rounds as the live time does.
+        time: Some(format!("{:.3}s", elapsed.as_secs_f64())),
         tokens: ledger.tokens,
         turns: (ledger.turns > 0).then_some(ledger.turns),
         tools: ledger
@@ -1542,6 +1557,8 @@ fn coordinate_work(
                 match result {
                     Ok(outcome) => {
                         diagnostics.outcome = "completed";
+                        let receipt =
+                            local_receipt(run_time(projector.started_at(), run_started), &ledger);
                         diagnostics.failed = append_terminal(
                             &app,
                             &journal,
@@ -1550,7 +1567,7 @@ fn coordinate_work(
                             &mut seq,
                             &mut open_effects,
                             "run.completed",
-                            json!({"receipt": local_receipt(run_started.elapsed(), &ledger)}),
+                            json!({ "receipt": receipt }),
                             subject.as_deref(),
                         )
                         .is_err();
@@ -1580,7 +1597,10 @@ fn coordinate_work(
             Ok(PiChatEvent::Completed) => {
                 diagnostics.outcome = "completed";
                 let receipt = if grant.is_local() {
-                    Ok(local_receipt(run_started.elapsed(), &ledger))
+                    Ok(local_receipt(
+                        run_time(projector.started_at(), run_started),
+                        &ledger,
+                    ))
                 } else {
                     app.fetch_receipt(&grant, &access_token, &run_id)
                 }
@@ -2934,7 +2954,7 @@ mod tests {
             .split_once('.')
             .expect("local receipt time has a decimal point");
         assert!(!whole.is_empty() && whole.chars().all(|character| character.is_ascii_digit()));
-        assert_eq!(tenths.len(), 1);
+        assert_eq!(tenths.len(), 3);
         assert!(tenths.chars().all(|character| character.is_ascii_digit()));
         assert!(expected_range.contains(&seconds.parse::<f64>().unwrap()));
         assert_eq!(receipt.route, None);
@@ -2978,6 +2998,24 @@ mod tests {
     #[test]
     fn local_receipt_records_multi_second_time_without_a_route() {
         assert_local_receipt(Duration::from_millis(6_200), 6.0..7.0);
+        let receipt = local_receipt(Duration::from_millis(5_499), &LocalRunLedger::default());
+        assert_eq!(receipt.time.as_deref(), Some("5.499s"));
+    }
+
+    #[test]
+    fn run_time_counts_from_the_run_started_event() {
+        let fallback = Instant::now();
+        let started = (chrono::Utc::now() - chrono::Duration::milliseconds(5_600))
+            .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true);
+        let time = run_time(Some(&started), fallback);
+        assert!(time >= Duration::from_millis(5_600) && time < Duration::from_millis(6_600));
+        // A start in the future counts as no time, and a missing or unreadable
+        // start counts from the coordinator's own clock.
+        let later = (chrono::Utc::now() + chrono::Duration::seconds(5))
+            .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true);
+        assert_eq!(run_time(Some(&later), fallback), Duration::ZERO);
+        assert!(run_time(None, fallback) < Duration::from_secs(1));
+        assert!(run_time(Some("not a time"), fallback) < Duration::from_secs(1));
     }
 
     #[derive(Default)]
@@ -3401,6 +3439,29 @@ mod tests {
             serde_json::to_value(event).unwrap()["recalls"],
             json!([{"query": "lease terms", "files": ["memory/lease.md"]}])
         );
+    }
+
+    #[test]
+    fn live_chat_event_carries_the_run_start() {
+        let event = crate::run_events::chat_event(
+            "run-1",
+            ChatProjection {
+                started_at: Some("2026-08-05T00:00:00.123Z".into()),
+                ..ChatProjection::default()
+            },
+            None,
+            Vec::new(),
+        );
+        assert_eq!(
+            serde_json::to_value(event).unwrap()["startedAt"],
+            "2026-08-05T00:00:00.123Z"
+        );
+        let unstarted =
+            crate::run_events::chat_event("run-1", ChatProjection::default(), None, Vec::new());
+        assert!(serde_json::to_value(unstarted)
+            .unwrap()
+            .get("startedAt")
+            .is_none());
     }
 
     #[test]

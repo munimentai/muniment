@@ -585,6 +585,9 @@ pub struct PiSessionBinding {
 /// The webview-facing chat projection derived from journal events.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ChatProjection {
+    /// When the run started: its `run.started` event's `recorded_at`. The
+    /// live reply time counts from it, and the local receipt times from it.
+    pub started_at: Option<String>,
     pub prompt_accepted: bool,
     pub turn_started: bool,
     pub routing_stage: Option<String>,
@@ -788,6 +791,11 @@ impl ChatProjector {
             .map(|activity| activity.display_name.as_deref().unwrap_or_default())
     }
 
+    /// When the run started, its `run.started` event's `recorded_at`.
+    pub fn started_at(&self) -> Option<&str> {
+        self.chat.started_at.as_deref()
+    }
+
     /// The run status after the last applied event.
     pub fn status(&self) -> Option<&RunStatus> {
         self.reducer.state.as_ref().map(|state| &state.status)
@@ -858,6 +866,7 @@ impl ChatProjector {
         self.reducer.apply(event)?;
         match event.event_type.as_str() {
             "run.started" => {
+                self.chat.started_at = Some(event.recorded_at.clone());
                 self.chat.prompt_storage_notice = optional_field(event, "prompt_storage_notice")?;
             }
             "chat.prompt.storage_notice" => {
@@ -1428,6 +1437,21 @@ mod tests {
             },
             extra: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn the_chat_projection_names_when_the_run_started() {
+        let run_id = Uuid::now_v7().to_string();
+        let mut projector = crate::journal::reducer::ChatProjector::new();
+        assert_eq!(projector.started_at(), None);
+        projector
+            .apply(&envelope(&run_id, 1, "run.started", json!({})))
+            .unwrap();
+        assert_eq!(projector.started_at(), Some("2026-08-05T00:00:00Z"));
+        assert_eq!(
+            projector.projection().unwrap().started_at.as_deref(),
+            Some("2026-08-05T00:00:00Z")
+        );
     }
 
     #[test]

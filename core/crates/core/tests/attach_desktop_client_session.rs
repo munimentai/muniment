@@ -1751,6 +1751,7 @@ fn desktop_chat_subscription_delivers_events_and_owns_the_session() {
             .send(ChatEvent {
                 run_id: "018f0000-0000-7000-8000-000000000211".into(),
                 thread_id: None,
+                started_at: None,
                 phase: phase.into(),
                 text: text.into(),
                 prompt_accepted: false,
@@ -1841,6 +1842,7 @@ fn desktop_chat_subscription_stays_responsive_under_sustained_events() {
                 .send(ChatEvent {
                     run_id: "018f0000-0000-7000-8000-000000000214".into(),
                     thread_id: None,
+                    started_at: None,
                     phase: "running".into(),
                     text: "event".into(),
                     prompt_accepted: false,

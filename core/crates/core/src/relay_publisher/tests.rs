@@ -116,6 +116,7 @@ fn run_event(phase: &str, text: &str) -> ChatEvent {
     ChatEvent {
         run_id: RUN.into(),
         thread_id: Some("thread_local_0001".into()),
+        started_at: None,
         phase: phase.into(),
         text: text.into(),
         prompt_accepted: true,

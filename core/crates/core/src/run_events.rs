@@ -34,6 +34,8 @@ use muniment_code_diff::CodeDiff;
 pub struct ChatEvent {
     pub run_id: String,
     pub thread_id: Option<String>,
+    /// When the run started, which the live reply time counts from.
+    pub started_at: Option<String>,
     pub phase: String,
     pub text: String,
     /// The shell's in-flight word: `Routing` before the accepted prompt, `Thinking` from the started turn.
@@ -81,6 +83,8 @@ struct ChatEventWire<'a> {
     run_id: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     thread_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    started_at: Option<&'a str>,
     phase: &'a str,
     text: &'a str,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -137,6 +141,7 @@ impl Serialize for ChatEvent {
             seq: self.seq,
             run_id: &self.run_id,
             thread_id: self.thread_id.as_deref(),
+            started_at: self.started_at.as_deref(),
             phase: &self.phase,
             text: &self.text,
             prompt_accepted: self.prompt_accepted,
@@ -242,6 +247,7 @@ pub fn chat_event(
     ChatEvent {
         run_id: run_id.into(),
         thread_id: None,
+        started_at: projection.started_at,
         phase: projection_phase(&projection.status).into(),
         text: projection.text,
         prompt_accepted: projection.prompt_accepted,
@@ -350,6 +356,7 @@ pub(crate) fn text_delta(
     Some(ChatEvent {
         run_id: envelope.run_id.clone(),
         thread_id: None,
+        started_at: None,
         phase: projection_phase(&projector.status().cloned()).into(),
         text: text.to_owned(),
         prompt_accepted: false,
