@@ -949,10 +949,18 @@
       if (request === threadModelRequest) threadModel = answer?.thread_id === threadId ? answer : null
     } catch (_) { if (request === threadModelRequest) threadModel = null }
   }
-  // The thread's model reads again when the thread or the default changes,
-  // and once its first message gives a new thread an id.
+  // The open thread's agent's model, as `provider/id`. A thread with no
+  // model of its own runs its agent's, so a save in the agent's profile, or
+  // an agent change another window or machine makes, moves the chip.
+  const threadAgentModel = $derived.by(() => {
+    const agentId = currentThreadId ? agentThreadMap[currentThreadId] : null
+    const model = agentId ? roster.find((agent) => agent.id === agentId)?.model : null
+    return model ? `${model.provider}/${model.id}` : ''
+  })
+  // The thread's model reads again when the thread, its agent's model or the
+  // default changes, and once its first message gives a new thread an id.
   $effect(() => {
-    void currentThreadId; void inventory?.default_provider; void inventory?.default_model; void remoteRuntimeId; void auth.name
+    void currentThreadId; void threadAgentModel; void inventory?.default_provider; void inventory?.default_model; void remoteRuntimeId; void auth.name
     untrack(() => {
       if (currentThreadId) pendingModel = null
       void refreshThreadModel()
@@ -966,7 +974,7 @@
   const modelActions = $derived.by(() => {
     if (!currentThreadId || !threadModel) return []
     const actions = []
-    if (threadModel.layer === 'thread') actions.push({ id: 'reset', label: threadModel.seed?.model ? 'Use the project model' : 'Use the default model' })
+    if (threadModel.layer === 'thread') actions.push({ id: 'reset', label: threadModel.seed?.model ? 'Use the project model' : threadAgentModel ? 'Use the agent model' : 'Use the default model' })
     if (modelProject && threadModel.layer !== 'project' && threadModel.model) actions.push({ id: 'project-default', label: 'Make project default' })
     // The machine's default changes only on this explicit choice.
     const model = threadModel.model

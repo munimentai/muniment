@@ -11220,6 +11220,44 @@ describe('per-thread model', () => {
     expect(invoke).not.toHaveBeenCalledWith('local_mode_set_default_model', expect.anything())
   })
 
+  it("follows its agent's model when the agent changes, and keeps a model picked in the thread", async () => {
+    // Core answers the thread's model from its own pick, else its agent's.
+    let agentModel = { provider: 'ollama', id: 'llama3.2:3b' }
+    let picked = null
+    const original = invoke.getMockImplementation()
+    localModeStatus = true
+    invoke.mockImplementation(async (command, args) => {
+      if (command === 'auth_status') return { signed_in: false, subject: null }
+      if (command === 'local_mode_provider_inventory') return twoModels
+      if (isAgentList(command, args)) return agentListAnswer([{ id: 'agent-1', name: 'Morning', instructions: '', projectId: null, schedule: null, routines: [], model: agentModel }], { 'agent-1': 'thread-1' })
+      if (command === 'thread_settings') return picked ? { thread_id: 'thread-1', model: picked, layer: 'thread' } : { thread_id: 'thread-1', model: { provider: agentModel.provider, model: agentModel.id }, layer: 'agent' }
+      if (command === 'thread_settings_set') { picked = args.model; return { thread_id: 'thread-1', model: picked, layer: 'thread' } }
+      return original(command, args)
+    })
+    // The composer's chip, not the agent profile's Model row.
+    const chip = async (name) => (await screen.findAllByRole('button', { name })).find((button) => !button.closest('[data-profile-menu]'))
+    render(App)
+    await findReadyWorkspaceComposer()
+    expect(await chip('Model: llama3.2:3b')).toBeTruthy()
+    const agentsChanged = () => { for (const [name, handle] of window.__TAURI__.event.listen.mock.calls) if (name === 'swarm-changed') handle({ payload: { runtimeId: 'local', change: { kind: 'agents' } } }) }
+    // A save in the agent's profile, here or on another machine, moves the chip with no reopen.
+    agentModel = { provider: 'ollama', id: 'qwen3:8b' }
+    agentsChanged()
+    await waitFor(async () => expect(await chip('Model: qwen3:8b')).toBeTruthy())
+    // A model the user picks in the thread stays through later agent changes.
+    await waitFor(() => expect(invoke.mock.calls.filter(([command, args]) => isAgentList(command, args)).length).toBeGreaterThan(1))
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    await fireEvent.click(await chip('Model: qwen3:8b'))
+    const picker = await screen.findByRole('dialog', { name: 'Model' })
+    await fireEvent.click(within(picker).getByRole('button', { name: 'llama3.2:3b' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('thread_settings_set', { threadId: 'thread-1', model: { provider: 'ollama', model: 'llama3.2:3b' } }))
+    agentModel = { provider: 'ollama', id: 'gemma3:1b' }
+    agentsChanged()
+    await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'thread_settings').length).toBeGreaterThan(2))
+    await fireEvent.click(await chip('Model: llama3.2:3b'))
+    expect(within(await screen.findByRole('dialog', { name: 'Model' })).getByRole('button', { name: 'Use the agent model' })).toBeTruthy()
+  })
+
   it('names the model the open thread runs on in the chip, even one the picker hides', async () => {
     modelRuntime({ thread_id: 'thread-1', model: { provider: 'ollama', model: 'qwen3:8b' }, layer: 'thread' }, { ...twoModels, hidden: ['ollama/qwen3:8b'] })
     render(App)
