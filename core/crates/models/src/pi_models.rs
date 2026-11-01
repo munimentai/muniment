@@ -84,6 +84,9 @@ pub fn read_json(path: &Path) -> io::Result<Map<String, Value>> {
 /// Replaces a JSON object file atomically, readable by its owner alone.
 pub fn write_json(path: &Path, root: &Map<String, Value>) -> io::Result<()> {
     let bytes = serde_json::to_vec_pretty(root)?;
+    if muniment_atomic_file::holds_private(path, &bytes) {
+        return Ok(());
+    }
     let temporary = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
     let result = (|| {
         let mut options = OpenOptions::new();
@@ -624,6 +627,25 @@ mod tests {
             std::env::temp_dir().join(format!("muniment-pi-models-{}", uuid::Uuid::now_v7()));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_json_leaves_an_unchanged_file_alone() {
+        use std::os::unix::fs::MetadataExt;
+        let directory = temporary_directory();
+        let path = directory.join("auth.json");
+        let mut root = Map::new();
+        root.insert("provider".into(), json!({"key": "value"}));
+        write_json(&path, &root).unwrap();
+        let first = fs::metadata(&path).unwrap().ino();
+        write_json(&path, &root).unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().ino(), first);
+        root.insert("other".into(), json!({}));
+        write_json(&path, &root).unwrap();
+        assert_ne!(fs::metadata(&path).unwrap().ino(), first);
+        assert_eq!(read_json(&path).unwrap(), root);
+        fs::remove_dir_all(directory).unwrap();
     }
 
     fn models(agent: &Path) -> Value {

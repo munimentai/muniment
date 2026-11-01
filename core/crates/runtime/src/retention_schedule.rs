@@ -61,9 +61,7 @@ pub fn start_retention_schedule(
         apply_recorded_retention(&state, checked.as_ref());
         let mut retention_checked_at = std::time::Instant::now();
         loop {
-            if let Err(error) = state.check_agent_schedules() {
-                eprintln!("agent_schedule: {error}");
-            }
+            state.check_agent_schedules();
             match commands.recv_timeout(interval.min(Duration::from_secs(15))) {
                 Ok(RetentionScheduleCommand::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => {
                     state.models().stop();

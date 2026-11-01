@@ -55,6 +55,8 @@ pub struct RuntimeAttachState {
     pi_artifact: Mutex<Option<muniment_core::sidecar::pi_install::PiArtifactDescriptor>>,
     /// Set while an MCP poll pass runs.
     mcp_polling: Arc<AtomicBool>,
+    /// The schedule pass failures already logged.
+    schedule_failures: Arc<crate::agent_schedule::ScheduleFailures>,
     /// The pass that names session folders from older versions.
     session_names: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
@@ -164,6 +166,7 @@ impl RuntimeAttachState {
             schedule_pass: Mutex::new(()),
             pi_artifact: Mutex::new(None),
             mcp_polling: Arc::new(AtomicBool::new(false)),
+            schedule_failures: Arc::default(),
             session_names: Mutex::new(Some(session_names)),
         })
     }
@@ -518,6 +521,10 @@ impl RuntimeAttachState {
 
     pub(crate) fn mcp_polling(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.mcp_polling)
+    }
+
+    pub(crate) fn schedule_failures(&self) -> Arc<crate::agent_schedule::ScheduleFailures> {
+        Arc::clone(&self.schedule_failures)
     }
 
     pub(crate) fn agent_profile(&self) -> &Path {

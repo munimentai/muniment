@@ -45,9 +45,54 @@ enum JournalOutcome {
     },
 }
 
+/// Logs a failure that repeats on each pass once: the first failure logs,
+/// later failures stay quiet, and the next success logs that it cleared. A
+/// full disk then fills no log every 15 seconds.
+#[derive(Default)]
+pub(crate) struct FailureLog(std::sync::atomic::AtomicBool);
+
+impl FailureLog {
+    /// Logs `error` unless a failure is already logged and not yet cleared.
+    /// Answers whether it logged.
+    fn failed(&self, step: &str, error: &str) -> bool {
+        let first = !self.0.swap(true, Ordering::AcqRel);
+        if first {
+            muniment_core::runtime_eprintln!("agent_schedule: {step} failed error={error}");
+        }
+        first
+    }
+
+    /// Logs that a logged failure cleared. Answers whether it logged.
+    fn succeeded(&self, step: &str) -> bool {
+        let cleared = self.0.swap(false, Ordering::AcqRel);
+        if cleared {
+            muniment_core::runtime_eprintln!("agent_schedule: {step} recovered");
+        }
+        cleared
+    }
+
+    fn record<T>(&self, step: &str, result: &Result<T, String>) {
+        match result {
+            Ok(_) => self.succeeded(step),
+            Err(error) => self.failed(step, error),
+        };
+    }
+}
+
+/// The schedule pass steps whose failures log once until they clear.
+#[derive(Default)]
+pub(crate) struct ScheduleFailures {
+    pass: FailureLog,
+    repair: FailureLog,
+    poll: FailureLog,
+}
+
 impl RuntimeAttachState {
-    pub(crate) fn check_agent_schedules(&self) -> Result<(), String> {
-        self.check_agent_schedules_with(self.boundaries())
+    /// One pass of the agent run queue. A failure logs once until a pass
+    /// succeeds again.
+    pub(crate) fn check_agent_schedules(&self) {
+        let result = self.check_agent_schedules_with(self.boundaries());
+        self.schedule_failures().pass.record("pass", &result);
     }
 
     /// One pass of the agent run queue through a caller-selected boundary.
@@ -66,9 +111,9 @@ impl RuntimeAttachState {
         }
         // The repairs a list leaves undone. A failure, such as a full disk,
         // waits for a later pass and stops no schedule.
-        if let Err(error) = agents::mend(profile) {
-            muniment_core::runtime_eprintln!("agent_schedule: agent repair failed error={error}");
-        }
+        self.schedule_failures()
+            .repair
+            .record("agent repair", &agents::mend(profile));
         let store = RunStore::open(profile)?;
         let listing = agents::list(profile)?;
         for error in &listing.errors {
@@ -112,17 +157,17 @@ impl RuntimeAttachState {
         let runtime_id = self
             .remote_access()
             .map(|access| access.runtime_info().runtime_id);
+        let failures = self.schedule_failures();
         std::thread::spawn(move || {
             let here = |agent: &Agent| agents::runs_routines_here(agent, runtime_id.as_deref());
-            if let Err(error) = muniment_core::agent_poll::poll_due(
+            let result = muniment_core::agent_poll::poll_due(
                 &profile,
                 &agents,
                 &here,
                 agent_runs::now(),
                 &muniment_core::agent_poll::installed_call,
-            ) {
-                muniment_core::runtime_eprintln!("agent_schedule: mcp poll failed error={error}");
-            }
+            );
+            failures.poll.record("mcp poll", &result);
             polling.store(false, Ordering::Release);
         });
     }
@@ -613,4 +658,22 @@ pub(crate) fn refine_proposals(profile: &std::path::Path, agent_id: &str) {
             muniment_core::runtime_eprintln!("agent_schedule: proposals not refined error={error}");
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FailureLog;
+
+    #[test]
+    fn a_repeated_failure_logs_once_until_it_clears() {
+        let log = FailureLog::default();
+        assert!(!log.succeeded("pass"));
+        assert!(log.failed("pass", "The disk is full."));
+        for _ in 0..3 {
+            assert!(!log.failed("pass", "The disk is full."));
+        }
+        assert!(log.succeeded("pass"));
+        assert!(!log.succeeded("pass"));
+        assert!(log.failed("pass", "The disk is full."));
+    }
 }

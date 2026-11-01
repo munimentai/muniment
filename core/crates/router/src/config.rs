@@ -576,7 +576,11 @@ pub fn save_assist(agent: &Path, assist: &Assist) -> io::Result<()> {
 }
 
 /// Writes `bytes` to `path` through a `0600` temporary and one atomic replace.
+/// A private file that already holds `bytes` stays as it is.
 pub fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    if muniment_atomic_file::holds_private(path, bytes) {
+        return Ok(());
+    }
     let temporary = path.with_extension(format!("tmp-{}", uuid::Uuid::now_v7()));
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);

@@ -1033,12 +1033,15 @@ pub fn forget_thread(state: &mut State, thread: &str) -> Vec<String> {
     }
     agents
 }
+/// Runs `action` on the agent state under the agents lock and saves the
+/// state only when its bytes changed.
 pub fn with_state<T>(
     profile: &Path,
     action: impl FnOnce(&mut State) -> Result<T, String>,
 ) -> Result<T, String> {
     let _lock = lock(profile)?;
     let mut current = state(profile)?;
+    let before = serde_json::to_vec(&current).map_err(|_| "Agent state cannot be saved.")?;
     let result = action(&mut current)?;
     for (id, run) in &current.runs {
         if let Some(run_id) = &run.run_id {
@@ -1057,7 +1060,12 @@ pub fn with_state<T>(
         let excess = history.len().saturating_sub(MAX_STATE_HISTORY);
         history.drain(..excess);
     }
-    persist_state(profile, &current)?;
+    // A pass that changes nothing writes nothing, so an idle schedule pass
+    // leaves the file and a full disk alone.
+    let after = serde_json::to_vec(&current).map_err(|_| "Agent state cannot be saved.")?;
+    if after != before {
+        write(&profile.join("agent-state.json"), &after)?;
+    }
     Ok(result)
 }
 /// Queues a manual run of an agent: a person asked it to run now. An agent
@@ -1760,6 +1768,37 @@ mod tests {
                 fs::remove_dir_all(root).unwrap();
             }
         }
+    }
+
+    #[test]
+    fn with_state_saves_only_a_changed_state() {
+        let profile = crate::state_root::test_root().join(uuid::Uuid::new_v4().to_string());
+        fs::create_dir_all(&profile).unwrap();
+        let path = profile.join("agent-state.json");
+        // No state and no change: no file.
+        with_state(&profile, |_| Ok(())).unwrap();
+        assert!(!path.exists());
+        // A state the action leaves alone keeps its bytes. The pretty
+        // form differs from a save, so a save would show.
+        let mut saved = State::default();
+        saved.threads.insert("thread".into(), "agent".into());
+        let pretty = serde_json::to_vec_pretty(&saved).unwrap();
+        fs::write(&path, &pretty).unwrap();
+        with_state(&profile, |state| {
+            state.threads.insert("thread".into(), "agent".into());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(fs::read(&path).unwrap(), pretty);
+        // A change saves.
+        with_state(&profile, |state| {
+            state.threads.insert("other".into(), "agent".into());
+            Ok(())
+        })
+        .unwrap();
+        assert_ne!(fs::read(&path).unwrap(), pretty);
+        assert_eq!(state(&profile).unwrap().threads.len(), 2);
+        fs::remove_dir_all(profile).unwrap();
     }
 
     #[test]

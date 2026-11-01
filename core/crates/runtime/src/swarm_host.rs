@@ -256,9 +256,7 @@ impl SwarmHost for RuntimeSwarmHost {
         let host = Arc::clone(&state.swarm_host);
         std::thread::spawn(move || {
             host.kicking.store(false, Ordering::SeqCst);
-            if let Err(error) = state.check_agent_schedules() {
-                muniment_core::runtime_eprintln!("agent_schedule: {error}");
-            }
+            state.check_agent_schedules();
         });
     }
 }
