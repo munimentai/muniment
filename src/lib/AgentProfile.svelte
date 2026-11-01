@@ -87,10 +87,19 @@
     return threads.filter((thread) => !thread.primary && !reached.has(thread.thread_id))
   })
   let instructionsOpen = $state(false)
-  // About three lines of the state line at the profile's width.
-  const STATE_FITS = 120
+  // Whether the state line's three lines hide part of it at the profile's
+  // width. Measured while it is clamped, and again on each resize.
   let stateOpen = $state(false)
-  // A card's Delete opens the profile at this confirmation. The confirmation
+  let stateClamped = $state(false)
+  function measureClamp(node) {
+    const measure = () => { if (!node.classList.contains('open')) stateClamped = node.scrollHeight > node.clientHeight + 1 }
+    const sizes = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : null
+    sizes?.observe(node)
+    measure()
+    return { update: measure, destroy: () => sizes?.disconnect() }
+  }
+  // A card's Delete opens the profile at this confirmation, and the
+  // profile's own Delete agent shows it in its place. The confirmation
   // scrolls into view and its safe choice takes focus once it shows. History,
   // Memory and other sections draw after the ask and push it down, so for
   // SETTLE_MS each change of the body's content scrolls it back into view,
@@ -349,7 +358,7 @@
           <label class="check"><input type="checkbox" bind:checked={removeMemory} disabled={busy} />Also delete its memory</label>
           <div class="actions"><Button variant="danger" disabled={busy} onclick={() => action(async () => { const answer = await agentRequest(tauri, agent.runtimeId, 'agent.delete', { id: agent.id, remove_memory: removeMemory }); ondelete(answer) })}>Confirm delete</Button><Button data-safe disabled={busy} onclick={() => { deleting = false; removeMemory = false }}>Cancel</Button></div>
         </div>
-      {:else}<div class="delete-row"><Button variant="danger" icon="trash-2" disabled={busy || runActive(run?.status)} onclick={() => { deleting = true }}>Delete agent</Button></div>{/if}
+      {:else}<div class="delete-row"><Button variant="danger" icon="trash-2" disabled={busy || runActive(run?.status)} onclick={() => { deleting = true; revealDelete = -1 }}>Delete agent</Button></div>{/if}
     </div>
     {/if}
     {#if notice}<p class="muted" role="status">{notice}</p>{/if}
@@ -358,13 +367,13 @@
 </aside>
 
 <!-- The primary machine shows once the fleet has another machine to move to. A pick there starts the move. -->
-<!-- The state line wraps to three lines. A longer failure reason shows whole
-     behind Show all, so no reason ends unread in an ellipsis. -->
+<!-- The state line wraps to three lines. A reason those lines clip shows
+     whole behind Show all, so no reason ends unread in an ellipsis. -->
 {#snippet stateLine()}
   {#if activity !== undefined}
     {@const label = activityLabel(activity)}
-    <p class="state record" class:open={stateOpen} data-state={activityState(activity)}>{label}</p>
-    {#if label.length > STATE_FITS}<button class="more state-more" aria-expanded={stateOpen} onclick={() => { stateOpen = !stateOpen }}>{stateOpen ? 'Show less' : 'Show all'}</button>{/if}
+    <p class="state record" class:open={stateOpen} data-state={activityState(activity)} use:measureClamp={[label, stateOpen]}>{label}</p>
+    {#if stateOpen || stateClamped}<button class="more state-more" aria-expanded={stateOpen} onclick={() => { stateOpen = !stateOpen }}>{stateOpen ? 'Show less' : 'Show all'}</button>{/if}
   {/if}
 {/snippet}
 {#snippet primaryMachine()}
@@ -402,7 +411,8 @@
   .field-heading { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-height: 24px; }
   h3 { flex: none; margin: 0; color: var(--muted); font-size: var(--text-12); font-weight: 500; }
   /* One heading and its select per row, as the composer draws its menus. Each menu opens under its row. */
-  .settings { display: grid; gap: 2px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+  /* The column holds the profile's width, so a long name ends in its ellipsis, never past the edge. */
+  .settings { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; padding: 8px 0; border-bottom: 1px solid var(--border); }
   .setting { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 28px; }
   .control { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px; min-width: 0; }
   .control > :global(button) { flex: 0 1 auto; min-width: 0; }
