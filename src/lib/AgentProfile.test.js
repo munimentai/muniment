@@ -564,12 +564,43 @@ it('scrolls a card\'s delete confirmation into view and focuses its safe choice'
     const view = render(AgentProfile, { agent, tauri: { invoke }, onchange: vi.fn(), ondelete: vi.fn() })
     await view.rerender({ deleteAsked: 1 })
     const confirm = await screen.findByRole('group', { name: 'Delete agent' })
-    await waitFor(() => expect(scrolled).toEqual([['Delete agent', { block: 'center' }]]))
+    await waitFor(() => expect(scrolled).toContainEqual(['Delete agent', { block: 'center' }]))
+    expect(scrolled.every(([label, options]) => label === 'Delete agent' && options.block === 'center')).toBe(true)
     expect(document.activeElement).toBe(within(confirm).getByRole('button', { name: 'Cancel' }))
     // A second ask while the confirmation shows scrolls to it again.
     document.activeElement.blur()
+    const before = scrolled.length
     await view.rerender({ deleteAsked: 2 })
-    await waitFor(() => expect(scrolled).toHaveLength(2))
+    await waitFor(() => expect(scrolled.length).toBeGreaterThan(before))
     expect(document.activeElement).toBe(within(confirm).getByRole('button', { name: 'Cancel' }))
   } finally { delete Element.prototype.scrollIntoView }
+})
+
+it('keeps a card\'s delete confirmation in view with Cancel focused while History draws after the ask, until the user acts', async () => {
+  const { invoke } = machine()
+  let scrolls = 0
+  Element.prototype.scrollIntoView = vi.fn(function () { if (this.getAttribute('aria-label') === 'Delete agent') scrolls += 1 })
+  const outside = document.body.appendChild(document.createElement('input'))
+  try {
+    const view = render(AgentProfile, { agent, tauri: { invoke }, onchange: vi.fn(), ondelete: vi.fn() })
+    await view.rerender({ deleteAsked: 1 })
+    const confirm = await screen.findByRole('group', { name: 'Delete agent' })
+    const cancel = within(confirm).getByRole('button', { name: 'Cancel' })
+    await waitFor(() => expect(document.activeElement).toBe(cancel))
+    const first = scrolls
+    // Code moves focus away, as a closing page does, and History draws above the confirmation.
+    outside.focus()
+    const done = { id: 'r-late', agent_id: 'scout', thread_id: 't-late', status: 'completed', trigger: { kind: 'manual' }, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+    await view.rerender({ runs: [done] })
+    await waitFor(() => expect(scrolls).toBeGreaterThan(first))
+    await waitFor(() => expect(document.activeElement).toBe(cancel))
+    // Once the user acts in the profile, later drawing leaves the scroll and focus alone.
+    await fireEvent.keyDown(cancel, { key: 'Tab' })
+    outside.focus()
+    const settled = scrolls
+    await view.rerender({ runs: [{ ...done, id: 'r-later' }, done] })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(scrolls).toBe(settled)
+    expect(document.activeElement).toBe(outside)
+  } finally { delete Element.prototype.scrollIntoView; outside.remove() }
 })

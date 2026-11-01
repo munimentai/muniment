@@ -87,21 +87,55 @@
     return threads.filter((thread) => !thread.primary && !reached.has(thread.thread_id))
   })
   let instructionsOpen = $state(false)
-  // A card's Delete opens the profile at this confirmation. The profile can
-  // draw its body after the ask, so the confirmation scrolls into view and
-  // its safe choice takes focus once it shows.
+  // A card's Delete opens the profile at this confirmation. The confirmation
+  // scrolls into view and its safe choice takes focus once it shows. History,
+  // Memory and other sections draw after the ask and push it down, so for
+  // SETTLE_MS each change of the body's content scrolls it back into view,
+  // and focus that code moved off it returns to Cancel. A pointer, key or
+  // wheel in the profile ends the window, so the user's own moves stand.
+  const SETTLE_MS = 2000
   let confirmBox = $state()
+  let body
   let revealDelete = $state(0)
+  let stopSettle = null
+  let askAnswered = 0
   $effect(() => {
-    if (!deleteAsked) return
-    untrack(() => { deleting = true; revealDelete = deleteAsked })
+    if (!deleteAsked || deleteAsked === askAnswered) return
+    untrack(() => { askAnswered = deleteAsked; deleting = true; revealDelete = deleteAsked })
   })
   $effect(() => {
     if (!confirmBox || !revealDelete) return
-    untrack(() => { revealDelete = 0 })
-    confirmBox.scrollIntoView?.({ block: 'center' })
-    confirmBox.querySelector('[data-safe]')?.focus({ preventScroll: true })
+    const box = confirmBox
+    untrack(() => { revealDelete = 0; stopSettle?.(); stopSettle = settleDelete(box) })
   })
+  $effect(() => () => stopSettle?.())
+  function settleDelete(box) {
+    const reveal = () => {
+      if (!box.isConnected) return stop()
+      box.scrollIntoView?.({ block: 'center' })
+      if (!box.contains(document.activeElement)) box.querySelector('[data-safe]')?.focus({ preventScroll: true })
+    }
+    let frame = 0
+    const later = () => { if (!frame) frame = requestAnimationFrame(() => { frame = 0; reveal() }) }
+    const sizes = typeof ResizeObserver === 'function' ? new ResizeObserver(later) : null
+    const watch = () => { for (const child of body?.children ?? []) sizes?.observe(child) }
+    const mutations = typeof MutationObserver === 'function' && body ? new MutationObserver(() => { watch(); later() }) : null
+    mutations?.observe(body, { childList: true, subtree: true, characterData: true })
+    watch()
+    const timer = setTimeout(() => stop(), SETTLE_MS)
+    const events = ['pointerdown', 'keydown', 'wheel']
+    for (const name of events) panel?.addEventListener(name, stop, true)
+    function stop() {
+      clearTimeout(timer)
+      if (frame) cancelAnimationFrame(frame)
+      mutations?.disconnect()
+      sizes?.disconnect()
+      for (const name of events) panel?.removeEventListener(name, stop, true)
+      if (stopSettle === stop) stopSettle = null
+    }
+    reveal()
+    return stop
+  }
   const fieldLabel = (field) => field === 'label' ? 'job title' : field
 
   // A click outside the open menu's row closes it.
@@ -204,7 +238,7 @@
 <aside data-panel="agent" class="profile" aria-label="Agent profile" bind:this={panel}>
   <!-- The header carries the accent edge in the agent's color, as the title pill does. -->
   <header data-panel-header data-accent-edge="top" style:--edge-color={agentColor(agent)}><h2>Agent profile</h2><button data-panel-control class="quiet" aria-label="Collapse agent profile" onclick={onclose}><LucideIcon name="panel-right-close" size={16} /></button></header>
-  <div class="body" use:panelScroll>
+  <div class="body" use:panelScroll bind:this={body}>
     {#if agent.replica}
       <div class="avatar"><AgentAvatar {agent} {activity} size={92} /></div>
       {#if activity !== undefined}<p class="state record" data-state={activityState(activity)}>{activityLabel(activity)}</p>{/if}
