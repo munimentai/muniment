@@ -27,7 +27,9 @@
   let error = $state('')
   let now = $state(Date.now())
   const machines = $derived(machineRefs(runtimeList))
-  const showMachine = $derived(machines.length > 1)
+  // Rows name their machine whenever another machine is paired, online or
+  // not, so a machine that drops offline between two filters changes no row.
+  const showMachine = $derived(machines.length > 1 || (runtimeList?.runtimes?.length ?? 0) > 1)
   const machineOptions = $derived([{ value: '', label: 'All machines' }, ...machines.map((entry) => ({ value: entry.id, label: entry.name }))])
   const agentOptions = $derived([{ value: '', label: 'All agents' }, ...(page?.agents ?? []).map((entry) => ({ value: entry.id, label: entry.name || 'Agent' }))])
   const quiet = $derived(page && !page.needs_you.length)
@@ -73,7 +75,7 @@
     <div class="head">
       <div class="crumbs">
         <h2>Notifications</h2>
-        {#if showMachine}<span class="sep" aria-hidden="true">›</span><span class="filter"><ChoiceField label="Machine" hideLabel inline={false} value={machine} options={machineOptions} onchange={(value) => { machine = value }} /></span>{/if}
+        {#if machines.length > 1}<span class="sep" aria-hidden="true">›</span><span class="filter"><ChoiceField label="Machine" hideLabel inline={false} value={machine} options={machineOptions} onchange={(value) => { machine = value }} /></span>{/if}
         <span class="sep" aria-hidden="true">›</span>
         <span class="filter"><ChoiceField label="Agent" hideLabel inline={false} value={agent} options={agentOptions} onchange={(value) => { agent = value }} /></span>
       </div>

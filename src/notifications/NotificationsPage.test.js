@@ -172,6 +172,23 @@ describe('Notifications page', () => {
     expect(row).not.toHaveTextContent('{')
   })
 
+  it('draws each row the same under All and Failed, machine chip included, while a paired machine is offline', async () => {
+    const runtimeList = { runtimes: [{ id: 'local', local: true, kind: 'local', formFactor: 'laptop', status: 'online' }, { id: 'box', kind: 'container', status: 'offline' }] }
+    const [done, failure] = page().days[0].entries
+    const invoke = vi.fn(async (_, { filter }) => page({ needs_you: [], running: [], days: [{ day: 'today', entries: filter.view === 'failed' ? [failure] : [done, failure] }] }))
+    render(NotificationsPage, { tauri: { invoke }, runtimeList })
+    const name = 'Lead scout, Failed, on This computer, Online: The log was missing.'
+    const all = await screen.findByRole('button', { name })
+    const markup = (row) => row.innerHTML.replace(/<!--.*?-->/g, '')
+    const drawn = markup(all)
+    expect(all.querySelector('.machine-chip')).toHaveTextContent('This computer')
+    await fireEvent.click(screen.getByRole('radio', { name: 'Failed' }))
+    await vi.waitFor(() => expect(screen.queryByRole('button', { name: /^Lead scout, Done/ })).toBeNull())
+    const failed = screen.getByRole('button', { name })
+    expect(failed.querySelector('.machine-chip')).toHaveTextContent('This computer')
+    expect(markup(failed)).toBe(drawn)
+  })
+
   it('asks again for the failed view', async () => {
     const invoke = vi.fn(async () => page())
     render(NotificationsPage, { tauri: { invoke }, runtimeList: null })
