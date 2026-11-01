@@ -164,9 +164,24 @@ const scan = async (dir) => {
   }
 };
 await scan(app);
-for (const path of [...binaries, ...bundles, app]) {
-  mustRun("sign CEF component", "codesign", [...codesignArguments(identity[1], path), "--entitlements", "src-tauri/packaging/entitlements.plist"]);
-}
+// The timestamp server can fail a signature with a transient internal error.
+// --force makes a second signature of the same file safe, so retry twice.
+const signWithRetry = (path) => {
+  const args = [...codesignArguments(identity[1], path), "--entitlements", "src-tauri/packaging/entitlements.plist"];
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const result = spawnSync("codesign", args, { stdio: "inherit" });
+    if (result.error) throw result.error;
+    if (result.status === 0) return;
+    if (attempt < 3) {
+      console.error(`sign CEF component retry ${attempt} of 2 (codesign rc=${result.status})`);
+      spawnSync("sleep", ["5"]);
+    } else {
+      console.error(`sign CEF component FAILED (codesign rc=${result.status})`);
+      process.exit(result.status ?? 1);
+    }
+  }
+};
+for (const path of [...binaries, ...bundles, app]) signWithRetry(path);
 mustRun("verify signature", "codesign", ["--verify", "--deep", "--strict", "--verbose=2", app]);
 
 // A running service holds the old executable after a bundle replacement.
