@@ -24,6 +24,9 @@ struct CodeCheck {
     audit_token: bool,
     bundle: bool,
     plist_read: bool,
+    /// The static checks came from an earlier connection, and no file of the
+    /// expected code changed since.
+    static_check_cached: bool,
     sec_static_code_create_with_path: Option<OSStatus>,
     sec_static_code_create_with_path_and_attributes: Option<OSStatus>,
     sec_static_code_check_validity: Option<OSStatus>,
@@ -241,7 +244,8 @@ extern "C" {
     fn CFDictionaryGetValue(dictionary: CFTypeRef, key: CFTypeRef) -> CFTypeRef;
     fn CFArrayGetCount(array: CFTypeRef) -> isize;
     fn CFArrayGetValueAtIndex(array: CFTypeRef, index: isize) -> CFTypeRef;
-    fn CFEqual(left: CFTypeRef, right: CFTypeRef) -> u8;
+    fn CFDataGetLength(data: CFTypeRef) -> isize;
+    fn CFDataGetBytePtr(data: CFTypeRef) -> *const u8;
     fn CFRelease(value: CFTypeRef);
 }
 
@@ -273,6 +277,13 @@ extern "C" {
         requirement: *mut CFTypeRef,
     ) -> OSStatus;
     fn SecCodeCheckValidity(code: CFTypeRef, flags: u32, requirement: CFTypeRef) -> OSStatus;
+    fn SecRequirementCopyData(requirement: CFTypeRef, flags: u32, data: *mut CFTypeRef)
+        -> OSStatus;
+    fn SecRequirementCreateWithData(
+        data: CFTypeRef,
+        flags: u32,
+        requirement: *mut CFTypeRef,
+    ) -> OSStatus;
     fn SecCodeCopySigningInformation(
         code: CFTypeRef,
         flags: u32,
@@ -295,9 +306,282 @@ impl Drop for Owned {
     }
 }
 
+/// What the code check reads from the expected desktop on disk: the static
+/// checks a connection would otherwise repeat. The bundle seal check hashes
+/// every file of the bundle, hundreds of megabytes for the desktop.
+#[derive(Clone, Debug)]
+struct ExpectedCode {
+    /// The designated requirement, as `SecRequirementCopyData` writes it.
+    requirement: Vec<u8>,
+    /// The bundle's signed Info.plist, which the guest lookup binds.
+    plist: Option<Vec<u8>>,
+    /// The code directory hashes of each architecture slice of a bundle that
+    /// passed its seal check.
+    code_hashes: Vec<Vec<u8>>,
+    /// The Security statuses of the static checks, for the diagnostic.
+    statuses: StaticStatuses,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct StaticStatuses {
+    sec_static_code_create_with_path: Option<OSStatus>,
+    sec_static_code_create_with_path_and_attributes: Option<OSStatus>,
+    sec_static_code_check_validity: Option<OSStatus>,
+    sec_code_copy_designated_requirement: Option<OSStatus>,
+    sec_code_copy_signing_information_disk: Option<OSStatus>,
+}
+
+impl StaticStatuses {
+    fn record(&self, check: &mut CodeCheck) {
+        check.sec_static_code_create_with_path = self.sec_static_code_create_with_path;
+        check.sec_static_code_create_with_path_and_attributes =
+            self.sec_static_code_create_with_path_and_attributes;
+        check.sec_static_code_check_validity = self.sec_static_code_check_validity;
+        check.sec_code_copy_designated_requirement = self.sec_code_copy_designated_requirement;
+        check.sec_code_copy_signing_information_disk = self.sec_code_copy_signing_information_disk;
+    }
+}
+
+/// One file of the expected code as `lstat` reads it. Any write, rename,
+/// replacement, or permission change alters the inode or one of these times.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FileStamp {
+    path: PathBuf,
+    device: u64,
+    inode: u64,
+    mode: u32,
+    size: u64,
+    modified: (i64, i64),
+    changed: (i64, i64),
+}
+
+/// Stamps every file under `root`, or `root` alone when it is a file, in path
+/// order. Symbolic links are stamped, never followed.
+fn code_fingerprint(root: &Path) -> Option<Vec<FileStamp>> {
+    use std::os::unix::fs::MetadataExt;
+    let mut stamps = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(path) = pending.pop() {
+        let metadata = std::fs::symlink_metadata(&path).ok()?;
+        if metadata.is_dir() {
+            for entry in std::fs::read_dir(&path).ok()? {
+                pending.push(entry.ok()?.path());
+            }
+        }
+        stamps.push(FileStamp {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            mode: metadata.mode(),
+            size: metadata.size(),
+            modified: (metadata.mtime(), metadata.mtime_nsec()),
+            changed: (metadata.ctime(), metadata.ctime_nsec()),
+            path,
+        });
+    }
+    stamps.sort_by(|left, right| left.path.cmp(&right.path));
+    Some(stamps)
+}
+
+/// The expected code of one executable path, kept while its files keep
+/// their fingerprint.
+struct CachedCode {
+    fingerprint: Vec<FileStamp>,
+    code: ExpectedCode,
+}
+
+/// The runtime checks one desktop executable for its whole life, so the map
+/// holds one entry outside tests.
+static EXPECTED_CODE: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<PathBuf, CachedCode>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// Returns the static checks of the expected code, from the cache while no file
+/// under `root` changed. A fresh read counts only when the fingerprint is the
+/// same before and after it, so a bundle that changes during the read is read
+/// again on the next connection. A failed read is never kept.
+fn expected_code(
+    executable: &Path,
+    root: &Path,
+    read: impl FnOnce() -> Result<ExpectedCode, StaticStatuses>,
+    check: &mut CodeCheck,
+) -> Option<ExpectedCode> {
+    let before = code_fingerprint(root);
+    let mut cache = EXPECTED_CODE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    match (&before, cache.get(executable)) {
+        (Some(before), Some(cached)) if &cached.fingerprint == before => {
+            check.static_check_cached = true;
+            cached.code.statuses.record(check);
+            return Some(cached.code.clone());
+        }
+        _ => {
+            cache.remove(executable);
+        }
+    }
+    drop(cache);
+    let code = read();
+    let statuses = match &code {
+        Ok(code) => code.statuses,
+        Err(statuses) => *statuses,
+    };
+    statuses.record(check);
+    let code = code.ok()?;
+    if let Some(before) = before.filter(|before| code_fingerprint(root).as_ref() == Some(before)) {
+        EXPECTED_CODE
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(
+                executable.to_path_buf(),
+                CachedCode {
+                    fingerprint: before,
+                    code: code.clone(),
+                },
+            );
+    }
+    Some(code)
+}
+
+/// Copies the bytes of a `CFData`.
+///
+/// # Safety
+///
+/// `data` must be a valid `CFData` reference.
+unsafe fn data_bytes(data: CFTypeRef) -> Vec<u8> {
+    let length = CFDataGetLength(data);
+    let pointer = CFDataGetBytePtr(data);
+    if pointer.is_null() || length <= 0 {
+        return Vec::new();
+    }
+    std::slice::from_raw_parts(pointer, length as usize).to_vec()
+}
+
+/// Runs the static checks on the installed desktop: the bundle seal over every
+/// architecture, the designated requirement, and the code directory hashes of
+/// each architecture slice, each slice's seal checked first.
+fn read_expected_code(
+    executable: &Path,
+    contents: Option<&Path>,
+    bundle: Option<&Path>,
+) -> Result<ExpectedCode, StaticStatuses> {
+    const DEFAULT_FLAGS: u32 = 0;
+    let mut statuses = StaticStatuses::default();
+    let plist = match contents {
+        Some(contents) => Some(std::fs::read(contents.join("Info.plist")).map_err(|_| statuses)?),
+        None => None,
+    };
+    let path = bundle.unwrap_or(executable).as_os_str().as_bytes();
+    unsafe {
+        let url = Owned::new(CFURLCreateFromFileSystemRepresentation(
+            kCFAllocatorDefault,
+            path.as_ptr(),
+            path.len() as isize,
+            u8::from(bundle.is_some()),
+        ))
+        .ok_or(statuses)?;
+        let mut static_code = std::ptr::null();
+        let status = SecStaticCodeCreateWithPath(url.0, DEFAULT_FLAGS, &mut static_code);
+        statuses.sec_static_code_create_with_path = Some(status);
+        if status != 0 {
+            return Err(statuses);
+        }
+        let static_code = Owned::new(static_code).ok_or(statuses)?;
+        if bundle.is_some() {
+            // Validate the bundle seal before binding its plist to the live code.
+            const CHECK_ALL_ARCHITECTURES: u32 = 1 << 0;
+            let status = SecStaticCodeCheckValidity(
+                static_code.0,
+                CHECK_ALL_ARCHITECTURES,
+                std::ptr::null(),
+            );
+            statuses.sec_static_code_check_validity = Some(status);
+            if status != 0 {
+                return Err(statuses);
+            }
+        }
+        let mut requirement = std::ptr::null();
+        let status =
+            SecCodeCopyDesignatedRequirement(static_code.0, DEFAULT_FLAGS, &mut requirement);
+        statuses.sec_code_copy_designated_requirement = Some(status);
+        if status != 0 {
+            return Err(statuses);
+        }
+        let requirement = Owned::new(requirement).ok_or(statuses)?;
+        let mut requirement_data = std::ptr::null();
+        if SecRequirementCopyData(requirement.0, DEFAULT_FLAGS, &mut requirement_data) != 0 {
+            return Err(statuses);
+        }
+        let requirement_data = Owned::new(requirement_data).ok_or(statuses)?;
+        let mut code = ExpectedCode {
+            requirement: data_bytes(requirement_data.0),
+            plist,
+            code_hashes: Vec::new(),
+            statuses,
+        };
+        if bundle.is_none() {
+            return Ok(code);
+        }
+        // CdHashes covers digest algorithms, not architectures. Keep both desktop slices for Rosetta.
+        for architecture in [c"arm64", c"x86_64"] {
+            const UTF8: u32 = 0x08000100;
+            let architecture = Owned::new(CFStringCreateWithCString(
+                kCFAllocatorDefault,
+                architecture.as_ptr(),
+                UTF8,
+            ))
+            .ok_or(code.statuses)?;
+            let attributes = Owned::new(CFDictionaryCreate(
+                kCFAllocatorDefault,
+                &kSecCodeAttributeArchitecture,
+                &architecture.0,
+                1,
+                std::ptr::addr_of!(kCFTypeDictionaryKeyCallBacks).cast(),
+                std::ptr::addr_of!(kCFTypeDictionaryValueCallBacks).cast(),
+            ))
+            .ok_or(code.statuses)?;
+            let mut slice = std::ptr::null();
+            let status = SecStaticCodeCreateWithPathAndAttributes(
+                url.0,
+                DEFAULT_FLAGS,
+                attributes.0,
+                &mut slice,
+            );
+            code.statuses
+                .sec_static_code_create_with_path_and_attributes = Some(status);
+            if status != 0 {
+                continue;
+            }
+            let slice = Owned::new(slice).ok_or(code.statuses)?;
+            let status = SecStaticCodeCheckValidity(slice.0, DEFAULT_FLAGS, std::ptr::null());
+            code.statuses.sec_static_code_check_validity = Some(status);
+            if status != 0 {
+                return Err(code.statuses);
+            }
+            let mut disk_information = std::ptr::null();
+            let status =
+                SecCodeCopySigningInformation(slice.0, DEFAULT_FLAGS, &mut disk_information);
+            code.statuses.sec_code_copy_signing_information_disk = Some(status);
+            if status != 0 {
+                return Err(code.statuses);
+            }
+            let disk_information = Owned::new(disk_information).ok_or(code.statuses)?;
+            let disk_hashes = CFDictionaryGetValue(disk_information.0, kSecCodeInfoCdHashes);
+            if !disk_hashes.is_null() {
+                for index in 0..CFArrayGetCount(disk_hashes) {
+                    code.code_hashes
+                        .push(data_bytes(CFArrayGetValueAtIndex(disk_hashes, index)));
+                }
+            }
+        }
+        Ok(code)
+    }
+}
+
 /// Checks the process named by `token` against the designated requirement of the
 /// installed desktop executable. The lookup by audit token fails for a process whose
-/// pid version changed, so an exec after connect never passes.
+/// pid version changed, so an exec after connect never passes. The static checks of
+/// the installed desktop run once while its files keep their fingerprint, and every
+/// connection checks its live code against their result.
 fn audit_token_satisfies(
     token: &AuditToken,
     expected_desktop_executable: &Path,
@@ -311,55 +595,25 @@ fn audit_token_satisfies(
         .filter(|parent| parent.file_name() == Some(std::ffi::OsStr::new("Contents")));
     let bundle = contents.and_then(Path::parent);
     check.bundle = bundle.is_some();
-    let plist = if let Some(contents) = contents {
-        let Ok(bytes) = std::fs::read(contents.join("Info.plist")) else {
-            return false;
-        };
-        check.plist_read = true;
-        Some(bytes)
-    } else {
-        None
+    let Some(code) = expected_code(
+        expected_desktop_executable,
+        bundle.unwrap_or(expected_desktop_executable),
+        || read_expected_code(expected_desktop_executable, contents, bundle),
+        check,
+    ) else {
+        return false;
     };
-    let path = bundle
-        .unwrap_or(expected_desktop_executable)
-        .as_os_str()
-        .as_bytes();
+    check.plist_read = code.plist.is_some();
     unsafe {
-        let Some(url) = Owned::new(CFURLCreateFromFileSystemRepresentation(
+        let Some(requirement_data) = Owned::new(CFDataCreate(
             kCFAllocatorDefault,
-            path.as_ptr(),
-            path.len() as isize,
-            u8::from(bundle.is_some()),
+            code.requirement.as_ptr(),
+            code.requirement.len() as isize,
         )) else {
             return false;
         };
-        let mut static_code = std::ptr::null();
-        let status = SecStaticCodeCreateWithPath(url.0, DEFAULT_FLAGS, &mut static_code);
-        check.sec_static_code_create_with_path = Some(status);
-        if status != 0 {
-            return false;
-        }
-        let Some(static_code) = Owned::new(static_code) else {
-            return false;
-        };
-        if bundle.is_some() {
-            // Validate the bundle seal before binding its plist to the live code.
-            const CHECK_ALL_ARCHITECTURES: u32 = 1 << 0;
-            let status = SecStaticCodeCheckValidity(
-                static_code.0,
-                CHECK_ALL_ARCHITECTURES,
-                std::ptr::null(),
-            );
-            check.sec_static_code_check_validity = Some(status);
-            if status != 0 {
-                return false;
-            }
-        }
         let mut requirement = std::ptr::null();
-        let status =
-            SecCodeCopyDesignatedRequirement(static_code.0, DEFAULT_FLAGS, &mut requirement);
-        check.sec_code_copy_designated_requirement = Some(status);
-        if status != 0 {
+        if SecRequirementCreateWithData(requirement_data.0, DEFAULT_FLAGS, &mut requirement) != 0 {
             return false;
         }
         let Some(requirement) = Owned::new(requirement) else {
@@ -375,7 +629,7 @@ fn audit_token_satisfies(
         // Executable-path bundle discovery can lose the signed Info.plist binding.
         // Supply the raw plist with the audit token. Security checks its signed hash.
         // Keep both the bundle seal check and the live designated requirement check.
-        let plist_data = match plist {
+        let plist_data = match &code.plist {
             Some(bytes) => {
                 let Some(data) = Owned::new(CFDataCreate(
                     kCFAllocatorDefault,
@@ -446,66 +700,9 @@ fn audit_token_satisfies(
         if peer_hash.is_null() {
             return false;
         }
-        // CdHashes covers digest algorithms, not architectures. Check both desktop slices for Rosetta.
-        for architecture in [c"arm64", c"x86_64"] {
-            const UTF8: u32 = 0x08000100;
-            let Some(architecture) = Owned::new(CFStringCreateWithCString(
-                kCFAllocatorDefault,
-                architecture.as_ptr(),
-                UTF8,
-            )) else {
-                return false;
-            };
-            let Some(attributes) = Owned::new(CFDictionaryCreate(
-                kCFAllocatorDefault,
-                &kSecCodeAttributeArchitecture,
-                &architecture.0,
-                1,
-                std::ptr::addr_of!(kCFTypeDictionaryKeyCallBacks).cast(),
-                std::ptr::addr_of!(kCFTypeDictionaryValueCallBacks).cast(),
-            )) else {
-                return false;
-            };
-            let mut slice = std::ptr::null();
-            let status = SecStaticCodeCreateWithPathAndAttributes(
-                url.0,
-                DEFAULT_FLAGS,
-                attributes.0,
-                &mut slice,
-            );
-            check.sec_static_code_create_with_path_and_attributes = Some(status);
-            if status != 0 {
-                continue;
-            }
-            let Some(slice) = Owned::new(slice) else {
-                return false;
-            };
-            let status = SecStaticCodeCheckValidity(slice.0, DEFAULT_FLAGS, std::ptr::null());
-            check.sec_static_code_check_validity = Some(status);
-            if status != 0 {
-                return false;
-            }
-            let mut disk_information = std::ptr::null();
-            let status =
-                SecCodeCopySigningInformation(slice.0, DEFAULT_FLAGS, &mut disk_information);
-            check.sec_code_copy_signing_information_disk = Some(status);
-            if status != 0 {
-                return false;
-            }
-            let Some(disk_information) = Owned::new(disk_information) else {
-                return false;
-            };
-            let disk_hashes = CFDictionaryGetValue(disk_information.0, kSecCodeInfoCdHashes);
-            if !disk_hashes.is_null()
-                && (0..CFArrayGetCount(disk_hashes)).any(|index| {
-                    CFEqual(CFArrayGetValueAtIndex(disk_hashes, index), peer_hash) != 0
-                })
-            {
-                check.code_hash_match = true;
-                return true;
-            }
-        }
-        false
+        let peer_hash = data_bytes(peer_hash);
+        check.code_hash_match = !peer_hash.is_empty() && code.code_hashes.contains(&peer_hash);
+        check.code_hash_match
     }
 }
 
@@ -687,6 +884,12 @@ int main(int argc, char **argv) {
         assert!(reader.code_check.borrow().code_hash_match);
         assert_eq!(reader.code_check_diagnostic()["matched"], true);
         assert!(reader.code_check_diagnostic()["elapsed_ms"].is_number());
+        assert_eq!(reader.code_check_diagnostic()["static_check_cached"], false);
+        // The next connection reuses the static checks and still checks the live code.
+        assert!(reader.peer_code_matches(&expected));
+        assert_eq!(reader.code_check_diagnostic()["static_check_cached"], true);
+        assert_eq!(reader.code_check.borrow().sec_code_check_validity, Some(0));
+        assert!(reader.code_check.borrow().code_hash_match);
         assert_eq!(
             name_macos_attach_connection_route(&reader, &clone_executable),
             MacosAttachConnectionRoute::DesktopClient { peer_pid },
@@ -699,7 +902,13 @@ int main(int argc, char **argv) {
             name_macos_attach_connection_route(&reader, &expected),
             MacosAttachConnectionRoute::Companion { peer_pid }
         );
+        assert_eq!(reader.code_check_diagnostic()["static_check_cached"], false);
         std::fs::write(&plist, plist_bytes).unwrap();
+        // The restored bundle is checked again before the cache serves it.
+        assert!(reader.peer_code_matches(&expected));
+        assert_eq!(reader.code_check_diagnostic()["static_check_cached"], false);
+        assert!(reader.peer_code_matches(&expected));
+        assert_eq!(reader.code_check_diagnostic()["static_check_cached"], true);
 
         // Replace the file without changing the running image or the designated requirement.
         let replacement = fixture.directory.join("replacement");
@@ -707,6 +916,7 @@ int main(int argc, char **argv) {
         std::fs::rename(replacement, &executable).unwrap();
         sign();
         assert!(!reader.peer_code_matches(&expected));
+        assert_eq!(reader.code_check_diagnostic()["static_check_cached"], false);
         assert_eq!(reader.code_check.borrow().sec_code_check_validity, Some(0));
         assert!(!reader.code_check.borrow().code_hash_match);
         assert_eq!(reader.code_check_diagnostic()["matched"], false);
@@ -783,5 +993,130 @@ int main(int argc, char **argv) {
         assert!(reader.code_check.borrow().audit_token);
         assert_ne!(reader.code_check.borrow().sec_code_check_validity, Some(0));
         std::fs::remove_dir_all(directory).unwrap();
+    }
+    /// Measures the code check against an installed bundle, which it only
+    /// reads. Run it with `--ignored --nocapture`; the test process is the
+    /// peer, so the check runs every step and fails the requirement.
+    #[test]
+    #[ignore = "reads an installed app bundle"]
+    fn bench_the_code_check_against_an_installed_bundle() {
+        let bundle = std::env::var_os("MUNIMENT_CODE_CHECK_BUNDLE").map_or_else(
+            || PathBuf::from("/Applications/muniment.app"),
+            PathBuf::from,
+        );
+        let executable = bundle.join("Contents/MacOS/muniment-desktop");
+        let (_client, server, directory) = connected_pair();
+        let reader = NativeMacosAttachRouteReader::new(&server);
+        for attempt in 0..5 {
+            assert!(!reader.peer_code_matches(&executable));
+            println!(
+                "code check attempt={attempt} {}",
+                reader.code_check_diagnostic()
+            );
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    fn stub_code(requirement: &[u8]) -> ExpectedCode {
+        ExpectedCode {
+            requirement: requirement.to_vec(),
+            plist: None,
+            code_hashes: Vec::new(),
+            statuses: StaticStatuses::default(),
+        }
+    }
+
+    #[test]
+    fn any_change_to_a_bundle_file_changes_its_fingerprint() {
+        let root = PathBuf::from("/tmp").join(format!(
+            "muniment-fingerprint-{}",
+            uuid::Uuid::now_v7().simple()
+        ));
+        let contents = root.join("Contents");
+        std::fs::create_dir_all(contents.join("MacOS")).unwrap();
+        let executable = contents.join("MacOS/app");
+        std::fs::write(&executable, b"one").unwrap();
+        let first = code_fingerprint(&root).unwrap();
+        assert_eq!(code_fingerprint(&root).unwrap(), first);
+        assert_eq!(first.len(), 4);
+        // Same size, new content.
+        std::fs::write(&executable, b"two").unwrap();
+        let rewritten = code_fingerprint(&root).unwrap();
+        assert_ne!(rewritten, first);
+        // A replacement by rename.
+        std::fs::write(root.join("replacement"), b"two").unwrap();
+        std::fs::rename(root.join("replacement"), &executable).unwrap();
+        let replaced = code_fingerprint(&root).unwrap();
+        assert_ne!(replaced, rewritten);
+        // A new file deep in the bundle, and a mode change.
+        std::fs::write(contents.join("Resources"), b"").unwrap();
+        let added = code_fingerprint(&root).unwrap();
+        assert_ne!(added, replaced);
+        std::fs::set_permissions(
+            &executable,
+            std::os::unix::fs::PermissionsExt::from_mode(0o700),
+        )
+        .unwrap();
+        assert_ne!(code_fingerprint(&root).unwrap(), added);
+        // A file alone is its own fingerprint, and a missing one has none.
+        assert_eq!(code_fingerprint(&executable).unwrap().len(), 1);
+        assert_eq!(code_fingerprint(&root.join("missing")), None);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_static_check_is_cached_until_the_bundle_changes() {
+        let root = PathBuf::from("/tmp").join(format!(
+            "muniment-expected-code-{}",
+            uuid::Uuid::now_v7().simple()
+        ));
+        std::fs::create_dir_all(root.join("Contents/MacOS")).unwrap();
+        let executable = root.join("Contents/MacOS/app");
+        std::fs::write(&executable, b"one").unwrap();
+        let reads = Cell::new(0);
+        let read = |requirement: &'static [u8]| {
+            let reads = &reads;
+            move || {
+                reads.set(reads.get() + 1);
+                Ok(stub_code(requirement))
+            }
+        };
+        let check = |read| {
+            let mut check = CodeCheck::default();
+            let code = expected_code(&executable, &root, read, &mut check);
+            (code.map(|code| code.requirement), check.static_check_cached)
+        };
+        assert_eq!(check(read(b"first")), (Some(b"first".to_vec()), false));
+        assert_eq!(check(read(b"unused")), (Some(b"first".to_vec()), true));
+        assert_eq!(reads.get(), 1);
+        // A changed bundle is read again.
+        std::fs::write(&executable, b"two").unwrap();
+        assert_eq!(check(read(b"second")), (Some(b"second".to_vec()), false));
+        assert_eq!(check(read(b"unused")), (Some(b"second".to_vec()), true));
+        assert_eq!(reads.get(), 2);
+        // A failed read is not kept, and drops the old entry.
+        std::fs::write(&executable, b"three").unwrap();
+        let mut failed = CodeCheck::default();
+        let failure = StaticStatuses {
+            sec_static_code_check_validity: Some(-67061),
+            ..StaticStatuses::default()
+        };
+        assert!(expected_code(&executable, &root, || Err(failure), &mut failed).is_none());
+        assert_eq!(failed.sec_static_code_check_validity, Some(-67061));
+        assert!(!failed.static_check_cached);
+        assert_eq!(check(read(b"third")), (Some(b"third".to_vec()), false));
+        assert_eq!(reads.get(), 3);
+        // A bundle that changes during the read is read again next time.
+        std::fs::write(&executable, b"before").unwrap();
+        let mut during = CodeCheck::default();
+        let changing = || {
+            std::fs::write(&executable, b"four").unwrap();
+            Ok(stub_code(b"during"))
+        };
+        assert!(expected_code(&executable, &root, changing, &mut during).is_some());
+        assert!(!during.static_check_cached);
+        assert_eq!(check(read(b"fourth")), (Some(b"fourth".to_vec()), false));
+        assert_eq!(check(read(b"unused")), (Some(b"fourth".to_vec()), true));
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
