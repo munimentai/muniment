@@ -1472,6 +1472,9 @@ pub(crate) fn complete(
         routes.truncate(1);
     }
     let mut last_failure = (503, String::new());
+    // Each failed attempt's plain refusal sentence, `None` for any other failure.
+    // The turn names the refusal only when every attempt gave the same one.
+    let mut causes: Vec<Option<String>> = Vec::new();
     let mut attempted = false;
     // A stall moves the turn to the model's next account, so every connected
     // account of the provider gets one try. Once they all stalled, the turn ends
@@ -1566,6 +1569,7 @@ pub(crate) fn complete(
             let prepared = match transport::prepare(&account, request, &route.model) {
                 Ok(prepared) => prepared,
                 Err(message) => {
+                    causes.push(None);
                     last_failure = (400, message);
                     break;
                 }
@@ -1689,6 +1693,7 @@ pub(crate) fn complete(
                     let message = stalled(state.stall.first_output);
                     state.record_error(&account.id, &message, false);
                     refusals.push(format!("{} stopped answering.", account.label));
+                    causes.push(None);
                     last_failure = (504, message.clone());
                     stall = Some(message);
                     route_stalled = true;
@@ -1772,11 +1777,13 @@ pub(crate) fn complete(
                         }
                         Err(Unserved::Failed(message)) => {
                             settle(None, false, None);
+                            causes.push(None);
                             last_failure = (502, message);
                         }
                         Err(Unserved::Stalled(message)) => {
                             settle(None, false, None);
                             refusals.push(format!("{} stopped answering.", account.label));
+                            causes.push(None);
                             last_failure = (504, message.clone());
                             stall = Some(message);
                             route_stalled = true;
@@ -1887,6 +1894,7 @@ pub(crate) fn complete(
                             "The plan of {} does not offer {}.",
                             account.label, route.model
                         ));
+                        causes.push(None);
                         last_failure = (status, String::new());
                         continue;
                     }
@@ -1900,8 +1908,18 @@ pub(crate) fn complete(
                             config::Credential::Subscription { .. } => usage::SIGN_IN_EXPIRED,
                             config::Credential::ApiKey { .. } => usage::KEY_REFUSED,
                         };
+                        causes.push(None);
                         last_failure = (status, format!("The {provider}{hint} {detail}"));
                     } else {
+                        // A provider that refused the model for good reads as
+                        // that cause, and its own answer follows for the log.
+                        causes.push(usage::provider_refusal(status, &detail).map(|cause| {
+                            let provider = account.family().map_or_else(
+                                || account.family.clone(),
+                                |family| family.name.into(),
+                            );
+                            format!("{provider}{}{cause}.", usage::MODEL_REFUSED)
+                        }));
                         last_failure = (status, detail);
                     }
                     refusals.push(format!("{} answered {status}.", account.label));
@@ -1922,6 +1940,7 @@ pub(crate) fn complete(
                         );
                     }
                     state.record_error(&account.id, &error.to_string(), true);
+                    causes.push(None);
                     refusals.push(format!("{} did not answer.", account.label));
                 }
             }
@@ -1935,8 +1954,15 @@ pub(crate) fn complete(
         return;
     }
     let refusals = refusals.join(" ");
+    let refusal = causes
+        .first()
+        .cloned()
+        .flatten()
+        .filter(|first| causes.iter().all(|cause| cause.as_ref() == Some(first)))
+        .unwrap_or_default();
     let message = [
         "No eligible model served this turn.",
+        &refusal,
         &last_failure.1,
         &refusals,
     ]
@@ -4068,6 +4094,68 @@ mod tests {
         assert!(usage::last_error_refused_credential(
             ledger.account("a1").unwrap().last_error.as_deref().unwrap()
         ));
+        std::fs::remove_dir_all(agent).unwrap();
+    }
+
+    #[test]
+    fn a_provider_refusal_names_its_cause_and_keeps_the_body() {
+        let agent = agent_dir();
+        let body = r#"{"code":"invalid-argument","error":"Client-side tools for multi-agent models require beta access"}"#;
+        let (url, _) = upstream(vec![(400, body.into(), false)]);
+        let mut xai = account("a1", &url);
+        xai.family = "xai".into();
+        xai.models = vec!["grok-test".into()];
+        let mut configuration = config(vec![xai]);
+        configuration.routes[0].family = "xai".into();
+        configuration.routes[0].model = "grok-test".into();
+        config::save(&agent, &configuration).unwrap();
+        let handle = start_with_clock(agent.clone(), fixed_clock).unwrap();
+        let (status, answer) = call(
+            handle.endpoint(),
+            "POST",
+            "/v1/chat/completions",
+            Some(&turn("fast", false)),
+            &handle.endpoint().token,
+        );
+        assert_eq!(status, 400, "{answer}");
+        let message = serde_json::from_str::<Value>(&answer).unwrap()["error"]["message"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(
+            message.starts_with(
+                "No eligible model served this turn. xAI refused this model: it requires beta access. {"
+            ),
+            "{message}"
+        );
+        assert!(message.contains(body), "{message}");
+        assert_eq!(
+            usage::model_refusal_sentence(&message).as_deref(),
+            Some("xAI refused this model: it requires beta access.")
+        );
+        std::fs::remove_dir_all(agent).unwrap();
+    }
+
+    #[test]
+    fn mixed_failures_name_no_single_refusal() {
+        let agent = agent_dir();
+        let refused = r#"{"error":{"message":"Bad request shape."}}"#;
+        let (first, _) = upstream(vec![(400, refused.into(), false)]);
+        let (second, _) = upstream(vec![(500, "boom".into(), false)]);
+        config::save(
+            &agent,
+            &config(vec![account("a1", &second), account("a2", &first)]),
+        )
+        .unwrap();
+        let handle = start_with_clock(agent.clone(), fixed_clock).unwrap();
+        let (_, answer) = call(
+            handle.endpoint(),
+            "POST",
+            "/v1/chat/completions",
+            Some(&turn("fast", false)),
+            &handle.endpoint().token,
+        );
+        assert!(!answer.contains(usage::MODEL_REFUSED), "{answer}");
         std::fs::remove_dir_all(agent).unwrap();
     }
 

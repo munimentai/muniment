@@ -2666,6 +2666,7 @@ fn readiness_detail(
 fn failure_reason(detail: Option<&str>) -> String {
     match detail {
         Some(detail) => credential_step(detail)
+            .or_else(|| model_refusal(detail))
             .unwrap_or_else(|| format!("The model could not complete this reply. {detail}")),
         None => "The model could not complete this reply.".into(),
     }
@@ -2688,6 +2689,19 @@ fn credential_step(detail: &str) -> Option<String> {
         .iter()
         .any(|words| lower.contains(words))
         .then(|| format!("The{SIGN_IN_EXPIRED}"))
+}
+
+/// The sentence that names a provider's lasting refusal of the model: the
+/// router's own, such as `xAI refused this model: it requires beta access.`,
+/// else a provider's answer that the model requires beta access.
+fn model_refusal(detail: &str) -> Option<String> {
+    use crate::model_router::usage::{model_refusal_sentence, MODEL_REFUSED};
+    model_refusal_sentence(detail).or_else(|| {
+        detail
+            .to_ascii_lowercase()
+            .contains("beta access")
+            .then(|| format!("The provider{MODEL_REFUSED}it requires beta access."))
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2847,6 +2861,25 @@ mod tests {
         assert_eq!(
             failure_reason(Some("The model is busy.")),
             "The model could not complete this reply. The model is busy."
+        );
+    }
+
+    #[test]
+    fn a_lasting_provider_refusal_reads_as_its_cause() {
+        let body = r#"{"code":"invalid-argument","error":"Client-side tools for multi-agent models require beta access"}"#;
+        let routed = format!(
+            "No eligible model served this turn. xAI refused this model: it requires beta access. {body} me answered 400."
+        );
+        assert_eq!(
+            failure_reason(Some(&routed)),
+            "xAI refused this model: it requires beta access."
+        );
+        // An older router's text and a provider's direct answer name no provider.
+        assert_eq!(
+            failure_reason(Some(&format!(
+                "No eligible model served this turn. {body} me answered 400."
+            ))),
+            "The provider refused this model: it requires beta access."
         );
     }
 
