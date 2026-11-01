@@ -6,7 +6,7 @@
 import { agentRuntimes } from '../agents/agent-runtime.js'
 import { LOCAL_RUNTIME_ID, machineName } from '../runtimes/runtimes.js'
 import { familyName, providerName } from '../lib/provider-catalog.js'
-import { formatDate, formatHour, zoneOffsetMinutes } from '../lib/time-format.svelte.js'
+import { displayZone, formatDate, formatHour, zoneOffsetMinutes } from '../lib/time-format.svelte.js'
 
 export const USAGE_VIEWS = [
   { value: 'limits', label: 'Limits' },
@@ -36,8 +36,10 @@ export function machineRefs(runtimeList) {
 }
 
 // One request through the window: each named machine answers and core joins them.
+// Days start at the shown zone's own midnight. A machine whose runtime
+// predates the zone answers at the offset alone.
 export function readUsage(tauri, machines, { range = '7d', provider = null } = {}) {
-  const body = { range, utc_offset_minutes: zoneOffsetMinutes() }
+  const body = { range, utc_offset_minutes: zoneOffsetMinutes(), time_zone: displayZone() }
   if (provider) body.provider = provider
   return tauri.invoke('usage_summary', { machines, body })
 }

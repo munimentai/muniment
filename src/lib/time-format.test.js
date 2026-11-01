@@ -3,7 +3,7 @@ import { TIME_EVENT, TIME_STORAGE_KEY, dayNumber, displayZone, formatClock, form
 import { runTimeLabel } from './agent-labels.js'
 import { messageLocalTime } from './chat-state.js'
 import { clockTime, readNotifications, scheduleTime as notificationTime } from '../notifications/notifications.js'
-import { bucketLabel } from '../usage/usage.js'
+import { bucketLabel, readUsage } from '../usage/usage.js'
 
 afterEach(async () => {
   await saveTimeSetting(null, { zone: '', clock: '' })
@@ -98,6 +98,8 @@ it('counts days from each zone midnight across both daylight saving changes', as
   const invoke = vi.fn(async () => ({}))
   await readNotifications({ invoke }, [])
   expect(invoke.mock.calls[0][1].filter.time_zone).toBe('Australia/Sydney')
+  await readUsage({ invoke }, [])
+  expect(invoke.mock.calls[1][1].body).toEqual({ range: '7d', utc_offset_minutes: zoneOffsetMinutes(), time_zone: 'Australia/Sydney' })
 })
 
 it('saves the choice to core on this computer with the computer clock, and keeps a copy', async () => {
