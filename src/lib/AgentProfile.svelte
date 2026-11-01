@@ -87,6 +87,9 @@
     return threads.filter((thread) => !thread.primary && !reached.has(thread.thread_id))
   })
   let instructionsOpen = $state(false)
+  // About three lines of the state line at the profile's width.
+  const STATE_FITS = 120
+  let stateOpen = $state(false)
   // A card's Delete opens the profile at this confirmation. The confirmation
   // scrolls into view and its safe choice takes focus once it shows. History,
   // Memory and other sections draw after the ask and push it down, so for
@@ -241,14 +244,14 @@
   <div class="body" use:panelScroll bind:this={body}>
     {#if agent.replica}
       <div class="avatar"><AgentAvatar {agent} {activity} size={92} /></div>
-      {#if activity !== undefined}<p class="state record" data-state={activityState(activity)}>{activityLabel(activity)}</p>{/if}
+      {@render stateLine()}
       <section class="field"><div class="field-heading"><h3>Name</h3></div><p class="name">{agent.name}</p></section>
       {#if agent.label}<section class="field"><div class="field-heading"><h3>Job title</h3></div><p>{agent.label}</p></section>{/if}
       <div class="settings">{@render primaryMachine()}</div>
       <p class="muted">Its instructions, tools, routines and memory live on {primary.name}. Pair this device with that machine to change them.</p>
     {:else}
     <div class="avatar"><AgentAvatar {agent} {activity} size={92} /><button class="edit quiet" aria-label="Generate another avatar" disabled={busy} onclick={() => change({ avatar: newAvatar() })}><LucideIcon name="refresh-cw" size={14} /></button></div>
-    {#if activity !== undefined}<p class="state record" data-state={activityState(activity)}>{activityLabel(activity)}</p>{/if}
+    {@render stateLine()}
     {#each [['name', 'Name'], ['label', 'Job title'], ['instructions', 'Instructions']] as [field, label]}
       <section class="field">
         <div class="field-heading"><h3>{label}</h3>{#if editing !== field}<button class="edit quiet" disabled={busy} aria-label={`Edit ${fieldLabel(field)}`} onclick={() => edit(field)}><LucideIcon name="pencil" size={14} /></button>{/if}</div>
@@ -355,6 +358,15 @@
 </aside>
 
 <!-- The primary machine shows once the fleet has another machine to move to. A pick there starts the move. -->
+<!-- The state line wraps to three lines. A longer failure reason shows whole
+     on hover and behind Show all, so no reason ends unread in an ellipsis. -->
+{#snippet stateLine()}
+  {#if activity !== undefined}
+    {@const label = activityLabel(activity)}
+    <p class="state record" class:open={stateOpen} data-state={activityState(activity)} title={label}>{label}</p>
+    {#if label.length > STATE_FITS}<button class="more state-more" aria-expanded={stateOpen} onclick={() => { stateOpen = !stateOpen }}>{stateOpen ? 'Show less' : 'Show all'}</button>{/if}
+  {/if}
+{/snippet}
 {#snippet primaryMachine()}
   {#if movable || agent.replica}
     <section class="setting" aria-label="Primary machine" data-profile-menu="machine">
@@ -425,7 +437,9 @@
   .link { line-height: 1.4; padding: 2px 4px; }
   .record { font-family: var(--font-mono); font-size: var(--text-12); }
   .muted { color: var(--muted); font-size: var(--text-12); }
-  .state { display: -webkit-box; margin: 0 0 4px; overflow: hidden; color: var(--muted); text-align: center; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+  .state { display: -webkit-box; margin: 0 0 4px; overflow: hidden; color: var(--muted); text-align: center; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+  .state.open { display: block; }
+  .state-more { display: block; margin: 0 auto 4px; }
   .state[data-state="waiting"] { color: var(--warning); }
   .state[data-state="error"] { color: var(--danger); }
   .skill span { display: grid; gap: 2px; }
