@@ -1103,6 +1103,15 @@
   // draft, such as a new agent's chat, is no thread yet. A new agent's chat
   // lists once it holds a draft, while its runtime thread is still fresh.
   const listedThreadId = $derived(freshThread && !agentChat?.record ? null : currentThreadId)
+  // The listed thread whose transcript the user can see: no page, catalog or
+  // Settings covers it and the window is not hidden. Only this thread reads.
+  let windowShown = $state(typeof document === 'undefined' || !document.hidden)
+  onMount(() => {
+    const shown = () => { windowShown = !document.hidden }
+    document.addEventListener('visibilitychange', shown)
+    return () => document.removeEventListener('visibilitychange', shown)
+  })
+  const seenThreadId = $derived(threadView && windowShown ? listedThreadId : null)
   const showFreshThread = $derived(freshThread && messages.length > 0 && !selectedAgent && !currentCreation && !threadSearch.trim())
   // When the new thread's row first showed, the time its row names until its summary lists it.
   let freshSince = $state('')
@@ -1122,11 +1131,11 @@
   // and the composer stay hidden in the loading shell, so launch never shows an
   // untitled page, a model check or a held composer before the restored thread.
   const launchHold = $derived(threadsLoading ? true : undefined)
-  const settledStatus = (status, threadId) => (status === 'done' || status === 'failed') && (!threadShown || threadId === currentThreadId) ? 'read' : status
+  const settledStatus = (status, threadId) => (status === 'done' || status === 'failed') && (!threadShown || (threadView && windowShown && threadId === currentThreadId)) ? 'read' : status
   const sidebarFeed = $derived(sidebarInput({
     summaries: threadSummaries,
     agentListing, agents: roster.filter(agent => !catalogArchived('agent', agent)), groups: swarm.groups, agentChats: agentChatRows, catalog: projectCatalog, remote: remoteProjectRows,
-    organization: threadOrganization, marks: readState, needsYou: needsYouItems, current: listedThreadId,
+    organization: threadOrganization, marks: readState, needsYou: needsYouItems, current: seenThreadId,
     working: [...sidebarRuns.working, ...(runningThreadId ? [runningThreadId] : [])], failed: sidebarRuns.failed, changed: sidebarRuns.changed,
     query: threadSearch,
     machineOf: (runtimeId) => pairedRuntimes(runtimeList).length ? machineName(runtimeList.runtimes.find(runtime => runtime.id === (runtimeId ?? LOCAL_RUNTIME_ID)) ?? { id: runtimeId }) : null,
@@ -1168,9 +1177,10 @@
     const threadId = freshThread ? null : currentThreadId
     if (threadShown && (freshThread || threadId)) untrack(() => keepOpenThread(threadId))
   })
-  // The open thread is read while it shows, and again as its replies and runs land.
+  // The open thread is read while its transcript shows, and again as its
+  // replies and runs land. A page over it, or a hidden window, reads nothing.
   $effect(() => {
-    const threadId = listedThreadId
+    const threadId = seenThreadId
     const changedAt = threadChangedAt(threadId, { threads: sidebarFeed.threads, latestRuns: agentListing.latestRuns, needsYou: needsYouItems })
     // A mark already as new as the thread's last change stays, so the sidebar
     // input stays the same. A run time ahead of this clock, from another

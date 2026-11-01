@@ -4456,6 +4456,50 @@ describe('sidebar collapse', () => {
     await waitFor(() => expect(readAt()).toBeGreaterThanOrEqual(runAt))
   })
 
+  it('keeps a run that fails while the Agents page covers its thread unread, and reads it when the thread shows again', async () => {
+    const { readAt, arranged } = failedRunReadSetup()
+    // The run lands after this clock, so only a read made after it reaches its time.
+    const runAt = '2099-01-01T00:00:00Z'
+    let latest = {}
+    const mocked = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args)
+      ? { ...agentListAnswer([{ id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null, routines: [] }], { 'agent-1': 'agent-thread' }), latest_runs: latest }
+      : command === 'chat_current_thread' ? 'agent-thread' : mocked(command, args))
+    localStorage.setItem('muniment.open-thread', 'agent-thread')
+    render(App)
+    await waitFor(() => expect(document.querySelector('.thread-row.active-thread .thread-row-title')).toHaveTextContent('Tauri Morning'))
+    await waitFor(() => expect(arranged()?.current).toBe('agent-thread'))
+    await openSidebarPage('Agents')
+    const card = await within(await screen.findByRole('region', { name: 'Agents', exact: true })).findByRole('article', { name: 'Scout' })
+    await waitFor(() => expect(arranged()?.current).toBeNull())
+    // The run fails while the page shows, and the next listing names it.
+    latest = { 'agent-1': { id: 'run-2', agent_id: 'agent-1', thread_id: 'agent-thread', status: 'failed', error: 'The model refused.', created_at: runAt, updated_at: runAt } }
+    document.dispatchEvent(new Event('visibilitychange'))
+    await waitFor(() => expect(card).toHaveTextContent('The model refused.'))
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(readAt()).toBeLessThan(Date.parse(runAt))
+    expect(arranged().current).toBeNull()
+    await fireEvent.click(within(screen.getByRole('list', { name: 'Projects list' })).getByText('Tauri Morning').closest('.thread-row'))
+    await waitFor(() => expect(arranged()?.current).toBe('agent-thread'))
+    await waitFor(() => expect(readAt()).toBeGreaterThanOrEqual(Date.parse(runAt)))
+  })
+
+  it('reads nothing while the window is hidden, and reads the open thread when it shows again', async () => {
+    const { runAt, readAt } = failedRunReadSetup()
+    const mocked = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, args) => command === 'chat_current_thread' ? 'agent-thread' : mocked(command, args))
+    localStorage.setItem('muniment.open-thread', 'agent-thread')
+    const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true)
+    onTestFinished(() => hidden.mockRestore())
+    render(App)
+    await waitFor(() => expect(document.querySelector('.thread-row.active-thread .thread-row-title')).toHaveTextContent('Tauri Morning'))
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(readAt()).toBeLessThan(runAt)
+    hidden.mockReturnValue(false)
+    document.dispatchEvent(new Event('visibilitychange'))
+    await waitFor(() => expect(readAt()).toBeGreaterThanOrEqual(runAt))
+  })
+
   it('opens the profile of an agent with no thread alone, with no new thread', async () => {
     const original = invoke.getMockImplementation()
     invoke.mockImplementation(async (command, args) => isAgentList(command, args)
