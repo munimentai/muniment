@@ -359,11 +359,11 @@
 
 <!-- The primary machine shows once the fleet has another machine to move to. A pick there starts the move. -->
 <!-- The state line wraps to three lines. A longer failure reason shows whole
-     on hover and behind Show all, so no reason ends unread in an ellipsis. -->
+     behind Show all, so no reason ends unread in an ellipsis. -->
 {#snippet stateLine()}
   {#if activity !== undefined}
     {@const label = activityLabel(activity)}
-    <p class="state record" class:open={stateOpen} data-state={activityState(activity)} title={label}>{label}</p>
+    <p class="state record" class:open={stateOpen} data-state={activityState(activity)}>{label}</p>
     {#if label.length > STATE_FITS}<button class="more state-more" aria-expanded={stateOpen} onclick={() => { stateOpen = !stateOpen }}>{stateOpen ? 'Show less' : 'Show all'}</button>{/if}
   {/if}
 {/snippet}

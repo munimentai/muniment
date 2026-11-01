@@ -605,12 +605,11 @@ it('keeps a card\'s delete confirmation in view with Cancel focused while Histor
   } finally { delete Element.prototype.scrollIntoView; outside.remove() }
 })
 
-it('wraps a failed run\'s reason and shows the whole of a long one on hover and behind Show all', async () => {
+it('wraps a failed run\'s reason and shows the whole of a long one behind Show all', async () => {
   const { invoke } = machine()
   const reason = 'The model provider refused the request because the account has no credit left for this model, and the router found no other model that this agent may use for the run.'
   const view = render(AgentProfile, { agent, tauri: { invoke }, catalog, activity: { state: 'error', action: reason, since: null }, onchange: vi.fn() })
   const line = await screen.findByText(`Last run failed: ${reason}`)
-  expect(line).toHaveAttribute('title', `Last run failed: ${reason}`)
   const more = screen.getByRole('button', { name: 'Show all' })
   expect(more).toHaveAttribute('aria-expanded', 'false')
   expect(line).not.toHaveClass('open')
