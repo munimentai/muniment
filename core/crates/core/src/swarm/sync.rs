@@ -24,7 +24,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use serde_json::{json, Value};
 
 use super::records::RecordChange;
@@ -214,7 +214,9 @@ pub(super) fn on_changes(inner: &Inner, changes: &[RecordChange]) -> Result<bool
     let mut plain = Vec::new();
     {
         let mut connection = inner.store.connect()?;
-        let transaction = connection.transaction().map_err(sql)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql)?;
         for key in keys {
             let registration = super::records::get_with(&transaction, CLASS, key)?
                 .and_then(|record| record.value(REGISTRATION).cloned())
@@ -1000,7 +1002,9 @@ pub(super) fn scan_thread(inner: &Inner, self_id: &str, thread_id: &str) -> Resu
             .thread_events_after(thread_id, mark)
             .map_err(journal_error)?;
     }
-    let transaction = connection.transaction().map_err(sql)?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(sql)?;
     for (run_id, origin, indexed) in new_runs {
         transaction
             .execute(

@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
@@ -461,7 +461,9 @@ fn store_entries(inner: &Inner, incoming: Vec<RosterEntry>) -> Result<bool, Stri
         }
     }
     let mut room = MAX_ENTRIES.saturating_sub(held.max(0) as usize);
-    let transaction = connection.transaction().map_err(sql)?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(sql)?;
     let mut added = false;
     for entry in incoming {
         if room == 0 {
