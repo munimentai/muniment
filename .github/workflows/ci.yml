@@ -406,8 +406,11 @@ jobs:
           # The E2E window probe is C that only the macOS SDK can build, and the
           # nightly compiles it on the test VM, so build it here as well. A
           # broken helper then fails this PR instead of the nightly smoke gate.
+          # Clippy lints the desktop crate here, where its macOS code compiles,
+          # with default features and with local-runtime, which compiles out the
+          # login service start path.
           if [ "$PLATFORM" = "macos" ]; then
-            cmd='. scripts/prepare-cef-macos.sh && rustup target add aarch64-apple-darwin && cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets --target aarch64-apple-darwin && cargo check --manifest-path src-tauri/Cargo.toml --package muniment-desktop --locked --features e2e-webdriver --target aarch64-apple-darwin && cargo check --manifest-path src-tauri/Cargo.toml --package muniment-runtime --package muniment-cli --locked --bins --target aarch64-apple-darwin && clang -std=gnu17 -O2 -Wall -Wno-deprecated-declarations -framework CoreFoundation -framework CoreGraphics -o /tmp/macos-window-count test/e2e/support/macos-window-count.c'
+            cmd='. scripts/prepare-cef-macos.sh && rustup target add aarch64-apple-darwin && rustup component add clippy && cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets --target aarch64-apple-darwin && cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-desktop --locked --all-targets --target aarch64-apple-darwin -- -D warnings && cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-desktop --locked --all-targets --features local-runtime --target aarch64-apple-darwin -- -D warnings && cargo check --manifest-path src-tauri/Cargo.toml --package muniment-desktop --locked --features e2e-webdriver --target aarch64-apple-darwin && cargo check --manifest-path src-tauri/Cargo.toml --package muniment-runtime --package muniment-cli --locked --bins --target aarch64-apple-darwin && clang -std=gnu17 -O2 -Wall -Wno-deprecated-declarations -framework CoreFoundation -framework CoreGraphics -o /tmp/macos-window-count test/e2e/support/macos-window-count.c'
           fi
           build_timeout=3600
           if [ "$INSTALLER" = true ]; then
