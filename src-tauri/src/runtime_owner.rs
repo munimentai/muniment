@@ -27,11 +27,11 @@ pub(crate) enum RuntimeEvent {
     RequiresApproval,
     #[cfg(any(test, target_os = "macos"))]
     Approved,
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", any(test, not(feature = "local-runtime"))))]
     NotFound,
     #[cfg(any(test, target_os = "macos"))]
     RegistrationFailed,
-    #[cfg(any(test, target_os = "macos"))]
+    #[cfg(any(test, all(target_os = "macos", not(feature = "local-runtime"))))]
     ServiceInactive,
     #[cfg(any(test, target_os = "macos"))]
     ChildStarted,
@@ -86,6 +86,7 @@ enum Child {
     /// The service runs the runtime, or nothing does.
     None,
     /// The service never registers or never stays running.
+    #[cfg(any(test, all(target_os = "macos", not(feature = "local-runtime"))))]
     ServiceUnavailable,
     /// The user turned the service off in Login Items.
     LoginItemsOff,
