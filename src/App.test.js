@@ -173,6 +173,8 @@ const device = (device_id, overrides = {}) => ({
 async function findWorkspaceComposer() {
   const composer = await screen.findByLabelText('Message', { selector: '#composer-message' })
   expect(composer).toHaveAttribute('placeholder', 'Ask anything')
+  // The composer takes typing once the launch hold lifts on the first thread view.
+  await waitFor(() => expect(composer.closest('[data-launch-hold]')).toBeNull())
   return composer
 }
 
@@ -394,7 +396,9 @@ describe('launcher requests', () => {
     await waitFor(() => expect(screen.getByText('Start here', { selector: '.user-message p' })).toBeInTheDocument())
     expect(invoke).toHaveBeenCalledWith('chat_new_thread')
     expect(invoke).toHaveBeenCalledWith('chat_submit', { prompt: 'Start here', files: [] })
-    expect(composer.value).toBe('Keep my main draft')
+    // The draft stays with the thread it was written in.
+    await fireEvent.click(document.querySelector('#sidebar .thread-row[data-thread-id="thread-1"]'))
+    await waitFor(() => expect(composer.value).toBe('Keep my main draft'))
     expect(launcherReply).toHaveBeenCalledWith('launcher', 'launcher-result', { id: 'launcher-request', error: '' })
   })
 })
@@ -1397,8 +1401,10 @@ describe('workspace composer entry', () => {
       return fallback(command, payload)
     })
     render(App)
-    const composer = await findWorkspaceComposer()
+    const composer = await screen.findByLabelText('Message', { selector: '#composer-message' })
     await waitFor(() => expect(composer).toBeDisabled())
+    // The launch hold keeps the held composer out of sight while the thread restores.
+    expect(composer.closest('[data-launch-hold]')).not.toBeNull()
 
     // A stale input event can land as the thread restore starts.
     await fireEvent.input(composer, { target: { value: 'Keep this prompt' } })
@@ -1683,7 +1689,7 @@ describe('workspace composer entry', () => {
     const hide = document.head.appendChild(document.createElement('style'))
     hide.textContent = '.workspace.settings-open > :not(.titlebar, .sidebar, .sidebar-divider, .settings-layout, .workspace-panel) { visibility: hidden; }'
     render(App)
-    const composer = await screen.findByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     composer.focus()
     expect(composer).toHaveFocus()
     await fireEvent.keyDown(document, navigator.platform.startsWith('Mac') ? { key: ',', metaKey: true } : { key: ',', ctrlKey: true })
@@ -2982,9 +2988,9 @@ describe('artifact rail', () => {
   it('toggles the artifact rail and sidebar from the focused composer', async () => {
     render(App)
     const toggle = await screen.findByRole('button', { name: 'Artifacts' })
-    const composer = screen.getByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     const mac = navigator.platform.startsWith('Mac')
-    expect(composer).toHaveFocus()
+    await waitFor(() => expect(composer).toHaveFocus())
 
     await fireEvent.keyDown(composer, { key: 'j', metaKey: mac, ctrlKey: !mac })
     await waitFor(() => expect(toggle).toHaveAttribute('aria-expanded', 'true'))
@@ -3853,6 +3859,52 @@ describe('thread name', () => {
       expect(within(firstRun).getByRole('heading', { name: 'Connect a model' })).toBeVisible()
       expect(within(firstRun).getByTestId('onboarding-home-path')).toHaveTextContent('/Documents/Muniment')
     }
+  })
+
+  it('goes from the loading shell straight to the restored thread, with no untitled page, model check or held composer between', async () => {
+    localModeStatus = true
+    const at = '2026-07-28T11:55:00Z'
+    threadSummaryResult = [{ threadId: 'final', title: 'Final Verification Thread', updatedAt: at, runtimeId: 'local' }]
+    const open = deferred()
+    const models = deferred()
+    const fallback = invoke.getMockImplementation()
+    invoke.mockImplementation((command, payload) => {
+      if (command === 'chat_thread_open') return open.promise
+      if (command === 'local_mode_provider_inventory') return models.promise.then(() => fallback(command, payload))
+      return fallback(command, payload)
+    })
+    // Each frame the page draws counts: a held part is in the DOM but hidden.
+    const seen = []
+    const shown = (node) => !node.closest('[data-launch-hold]')
+    const look = () => {
+      for (const node of document.querySelectorAll('.thread-panel .empty, #composer-hint')) {
+        if (shown(node) && /Checking available models|Send waits for the thread/.test(node.textContent)) seen.push(node.textContent)
+      }
+      for (const node of document.querySelectorAll('.thread-title-heading')) {
+        if (shown(node) && !node.textContent.trim()) seen.push('untitled page')
+      }
+    }
+    const observer = new MutationObserver(look)
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true })
+    onTestFinished(() => observer.disconnect())
+    render(App)
+    const composer = await screen.findByLabelText('Message', { selector: '#composer-message' })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', expect.objectContaining({ threadId: 'final' })))
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    // The thread pane holds: title, transcript, composer and model line stay hidden.
+    expect(composer.closest('.thread-panel')).toHaveAttribute('data-launch-hold')
+    expect(composer.closest('.thread-panel').inert).toBe(true)
+    expect(document.querySelector('.titlebar-thread')).toHaveAttribute('data-launch-hold')
+    expect(appRules.get('[data-launch-hold]')).toMatch(/visibility:\s*hidden/)
+    expect(composer).not.toHaveFocus()
+    open.resolve([{ runId: 'run-1', phase: 'complete', prompt: 'Question', text: 'Answer', toolActivity: [] }])
+    expect(await screen.findByRole('heading', { level: 1, name: 'Final Verification Thread' })).toBeInTheDocument()
+    expect(document.querySelector('[data-launch-hold]')).toBeNull()
+    await waitFor(() => expect(composer).toHaveFocus())
+    models.resolve()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    look()
+    expect(seen).toEqual([])
   })
 
   it('shows a loading line, no empty list and no new thread until the first thread read settles at launch', async () => {
@@ -10195,7 +10247,7 @@ describe('runtimes', () => {
     expect(remoteMeta.querySelector('[data-icon=container]')).not.toBeNull()
     expect(remoteMeta.querySelector('.machine-dot, .machine-badge')).toBeNull()
     expect(remoteMeta.closest('.thread-row-body')).not.toHaveAttribute('data-layout')
-    expect(screen.getByText('Local work').closest('.thread-row').querySelector('.thread-row-meta')).toHaveTextContent('This computer')
+    expect(screen.getByText('Local work', { selector: '.thread-row-title' }).closest('.thread-row').querySelector('.thread-row-meta')).toHaveTextContent('This computer')
 
     // The newest thread opens first, and New thread waits for it.
     await waitFor(async () => {

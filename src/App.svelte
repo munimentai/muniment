@@ -1106,6 +1106,10 @@
   // Until then the window names no thread and offers no starters, so a
   // launch never shows an empty list or a new thread before the last one opens.
   const threadsLoading = $derived(!threadShown)
+  // Until the first thread view settles at launch, the title, the transcript
+  // and the composer stay hidden in the loading shell, so launch never shows an
+  // untitled page, a model check or a held composer before the restored thread.
+  const launchHold = $derived(threadsLoading ? true : undefined)
   const settledStatus = (status, threadId) => (status === 'done' || status === 'failed') && (!threadShown || threadId === currentThreadId) ? 'read' : status
   const sidebarFeed = $derived(sidebarInput({
     summaries: threadSummaries,
@@ -2916,7 +2920,7 @@
   function focusComposerOnMount(node) {
     // The first composer that takes typing marks the page timeline. scripts/speed-timing.mjs reads the mark.
     try { if (!performance.getEntriesByName('muniment:composer-ready').length) performance.mark('muniment:composer-ready') } catch (_) {}
-    if (!wasInWorkspace && active?.phase !== 'resuming') {
+    if (threadShown && !wasInWorkspace && active?.phase !== 'resuming') {
       wasInWorkspace = true
       node.focus()
     }
@@ -3019,6 +3023,11 @@
     if (!workspaceMode() || onboarding.name !== 'complete') { browserPanel = null; closeRail() }
   })
 
+  function focusResting() {
+    const focused = document.activeElement
+    return !focused || focused === document.body || !!focused.closest?.('[data-launch-hold]')
+  }
+
   function workspaceMode() {
     return auth.name === 'signed-in' || auth.name === 'local' || (auth.name === 'signing-in' && signInFromLocal)
   }
@@ -3035,10 +3044,12 @@
 
   $effect(() => {
     const inWorkspace = workspaceMode() && onboarding.name === 'complete' && desktopClientStatus
-      && !backgroundServiceNoticeVisible
+      && !backgroundServiceNoticeVisible && threadShown
     if (inWorkspace && !wasInWorkspace && active?.phase !== 'resuming' && pairingRequests.length === 0 && composer) {
       wasInWorkspace = true
-      composer.focus()
+      // The composer takes focus once the launch hold lifts, unless the user
+      // already moved it, as to a Settings page opened during launch.
+      if (untrack(() => focusResting())) composer.focus()
     } else if (!inWorkspace) {
       wasInWorkspace = false
     }
@@ -3915,7 +3926,7 @@
               <LucideIcon name={sidebarCollapsed ? 'panel-left-open' : 'panel-left-close'} />
             </button>
           </div>
-          <div class="titlebar-thread" data-tauri-drag-region>
+          <div class="titlebar-thread" data-tauri-drag-region data-launch-hold={launchHold} inert={threadsLoading}>
             {#if catalogTitle}<span class="catalog-title" data-tauri-drag-region>{catalogTitle}</span>
             {:else}
             {#if threadAgent}<button class="quiet agent-chat-title" data-accent-edge style:--agent-color={agentColor(threadAgent)} style:--edge-color={agentColor(threadAgent)} aria-label={`Open profile for ${threadAgent.name}`} onclick={revealAgentProfile}><AgentAvatar agent={threadAgent} activity={threadAgent.activity} size={20} /><span>{threadAgent.name}</span></button>{/if}
@@ -4038,7 +4049,7 @@
             onkeydown={sidebarKeydown}
           ><span class="divider-grip" aria-hidden="true"><LucideIcon name="ellipsis-vertical" size={14} variant="action" /></span></div>
         {/if}
-        <div data-panel="chat" class="thread-panel" style:--composer-height="{composerBoxHeight}px" style:--file-chip-height={changed.length ? '40px' : '0px'}>
+        <div data-panel="chat" class="thread-panel" data-launch-hold={launchHold} inert={threadsLoading} aria-busy={threadsLoading} style:--composer-height="{composerBoxHeight}px" style:--file-chip-height={changed.length ? '40px' : '0px'}>
           {#if profileAgent && !agentProfileOpen && !agentsOpen}<button type="button" data-panel-control="corner" class="quiet" aria-label="Reveal agent profile" onclick={revealAgentProfile}><LucideIcon name="panel-right-open" /></button>{/if}
         {#if draggingFiles}<div class="drop-affordance" role="status"><strong>Drop files to add them</strong><span>Saved locally · supported images sent with first prompt</span></div>{/if}
         <div class="thread-shell" data-panel-fade="chat">
@@ -4884,6 +4895,7 @@
   /* Settings gives the rail column to an open workspace panel. */
   .workspace.settings-open.tools-open :global(.settings-layout) { grid-column: 2; }
   .workspace.settings-open .titlebar-thread { visibility: hidden; }
+  [data-launch-hold] { visibility: hidden; }
   .workspace.settings-open .update-slot, .workspace.settings-open .titlebar-thread :global(.workspace-menu) { visibility: visible; }
   .artifact-rail { grid-area: rail; min-width: 0; padding: 22px 24px; overflow-y: auto; }
   .artifact-rail header { padding-bottom: 15px; border-bottom: 1px solid var(--border); }
