@@ -77,16 +77,47 @@
     void tick().then(() => rail?.querySelector('[aria-current="true"]')?.focus())
   }
 
-  // Hovering or focusing a mark names its provider beside the column.
+  // Hovering or focusing a mark names its provider next to its icon and
+  // never over the list: left of the picker, where free page lies there, else
+  // just above the icon, over the rail, ending where the words of the list's
+  // rows start. A name too long for the room there covers the sidebar's edge,
+  // never a model name. An embedded picker has its card's rail at its left, so
+  // its names show above the icon. The tip sits on the page, since the picker
+  // clips what overflows it.
+  const TIP_GAP = 4
+  // The list's headings and rows inset their words 8px.
+  const ROW_INSET = 8
+  let picker = $state()
   function showTip(event, group) {
-    const mark = event.currentTarget
-    tip = { label: group.label, top: mark.offsetTop - mark.parentElement.scrollTop + mark.offsetHeight / 2 }
+    tip = { label: group.label, mark: event.currentTarget }
+  }
+  function placeTip(node, { mark }) {
+    const box = picker.getBoundingClientRect()
+    const markBox = mark.getBoundingClientRect()
+    const icon = (mark.querySelector('svg') ?? mark).getBoundingClientRect()
+    const sidebar = document.getElementById('sidebar')?.getBoundingClientRect()
+    const page = sidebar?.width && sidebar.right <= box.left + 1 && sidebar.top < box.bottom && box.top < sidebar.bottom ? sidebar.right : 0
+    const { width, height } = node.getBoundingClientRect()
+    let left = box.left - TIP_GAP - width
+    let top = icon.top + icon.height / 2 - height / 2
+    if (embedded || left < page) {
+      const rows = list ? list.getBoundingClientRect().left + parseFloat(getComputedStyle(list).paddingLeft) + ROW_INSET : markBox.right
+      left = Math.max(0, rows - width)
+      top = markBox.top - 2 - height
+      if (top < 0) top = markBox.bottom + 2
+    }
+    Object.assign(node.style, { left: `${left}px`, top: `${top}px` })
+  }
+  function onPage(node, value) {
+    document.body.append(node)
+    placeTip(node, value)
+    return { update(next) { placeTip(node, next) }, destroy() { node.remove() } }
   }
 </script>
 
 <svelte:window onkeydown={keydown} />
 
-<div data-panel="model-picker" data-panel-variant={embedded ? 'embedded' : 'overlay'} data-composer-panel={embedded ? undefined : ''} class="model-picker" class:embedded role={embedded ? 'group' : 'dialog'} aria-label="Model">
+<div bind:this={picker} data-panel="model-picker" data-panel-variant={embedded ? 'embedded' : 'overlay'} data-composer-panel={embedded ? undefined : ''} class="model-picker" class:embedded role={embedded ? 'group' : 'dialog'} aria-label="Model">
   <div class="picker-search">
     <LucideIcon name="search" variant="action" size={14} />
     <input type="search" data-focus-frame autocomplete="off" aria-label="Search models" placeholder="Search models" bind:this={search} bind:value={query}>
@@ -104,7 +135,7 @@
         {/each}
       </nav>
     {/if}
-    {#if tip}<span class="rail-tip" aria-hidden="true" style:top="{tip.top}px">{tip.label}</span>{/if}
+    {#if tip}<span class="rail-tip" aria-hidden="true" use:onPage={tip}>{tip.label}</span>{/if}
     <div class="picker-list" id={`${uid}-list`} role="region" aria-label={searching ? 'Search results' : 'Models'} bind:this={list} use:panelScroll>
       {#if groups.length === 0}
         <p class="support">{inventory?.providers?.length ? 'No model matches.' : 'No provider is connected.'}</p>
@@ -181,7 +212,7 @@
   .rail-mark[aria-current="true"] { background: var(--selected); }
   /* The edge spans the picked mark and meets the rail's divider, so it reads as the tab's edge and never as a text caret. */
   .rail-mark[aria-current="true"]::after { content: ''; position: absolute; top: 0; bottom: 0; right: -7px; width: 2px; background: var(--selected-edge); }
-  .rail-tip { position: absolute; z-index: 1; left: 52px; transform: translateY(-50%); padding: 3px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); box-shadow: var(--shadow-overlay); color: var(--ink); font: var(--text-12) var(--font-human); white-space: nowrap; pointer-events: none; }
+  .rail-tip { position: fixed; z-index: 30; padding: 2px 6px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); box-shadow: var(--shadow-overlay); color: var(--ink); font: var(--text-12) var(--font-human); white-space: nowrap; pointer-events: none; }
   .picker-list { flex: 1; min-width: 0; min-height: 0; padding: 6px; overflow-y: auto; }
   .picker-group h4 { display: flex; align-items: center; gap: 8px; margin: 6px 8px 2px; color: var(--muted); font: var(--weight-semibold) var(--text-12) var(--font-human); }
   /* Routing is off or has no decision model: the heading links to Roles in Models. */

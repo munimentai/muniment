@@ -18,11 +18,11 @@ it('shows a column of full-color provider marks named on hover without connectio
   expect(within(screen.getByRole('navigation', { name: 'Providers' })).getByRole('button', { name: 'Model router' }).querySelector('[data-icon=route]')).not.toBeNull()
   // Anthropic's mark is its brand's colored one, as on the model Settings pages.
   expect(within(screen.getByRole('navigation', { name: 'Providers' })).getByRole('button', { name: 'Anthropic' }).querySelector('.logo svg')).not.toBeNull()
-  expect(container.querySelector('.rail-tip')).toBeNull()
+  expect(document.querySelector('.rail-tip')).toBeNull()
   await fireEvent.pointerEnter(within(screen.getByRole('navigation', { name: 'Providers' })).getByRole('button', { name: 'Anthropic' }))
-  expect(container.querySelector('.rail-tip')).toHaveTextContent('Anthropic')
+  expect(document.querySelector('.rail-tip')).toHaveTextContent('Anthropic')
   await fireEvent.pointerLeave(within(screen.getByRole('navigation', { name: 'Providers' })).getByRole('button', { name: 'Anthropic' }))
-  expect(container.querySelector('.rail-tip')).toBeNull()
+  expect(document.querySelector('.rail-tip')).toBeNull()
 
   // The first provider leads, and a mark filters the list to its own models.
   expect(within(screen.getByRole('navigation', { name: 'Providers' })).getByRole('button', { name: 'Model router' })).toHaveAttribute('aria-current', 'true')
