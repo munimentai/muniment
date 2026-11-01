@@ -946,7 +946,9 @@ export function createChatController({
     onSubmitError('')
     const submissionId = ++submissionSequence
     const userMessage = { role: 'user', sentAt: new Date().toISOString(), text: prompt, attachments: [], submissionId }
-    const pending = { id: 'pending', phase: 'thinking', startedAt: userMessage.sentAt, text: '', receipt: null, prompt, submissionId }
+    // A reply carries no start time until the runtime's first event names the
+    // run's start, which its receipt times from, so its live time never jumps back.
+    const pending = { id: 'pending', phase: 'thinking', text: '', receipt: null, prompt, submissionId }
     publishMessages([...messages(), userMessage, { role: 'assistant', run: pending }])
     onActive(pending)
     onAnnounce(pending)
@@ -962,9 +964,6 @@ export function createChatController({
       const model = preserveDraft ? null : readPendingModel()
       const mentions = preserveDraft ? [] : readMentions(prompt)
       const run = await submitWhenAvailable({ prompt, files, ...(thinkingLevel ? { thinkingLevel } : {}), ...(permissionMode ? { permissionMode } : {}), ...(model ? { model } : {}), ...(mentions.length ? { mentions } : {}) })
-      // The live time counts from the run's acceptance until the runtime's
-      // first event names the run's own start, which its receipt times from.
-      const acceptedAt = new Date().toISOString()
       if (destroyed || submissionId !== submissionSequence) return
       onSubmitted()
       if (run.mentions?.length) onMentions(run.mentions)
@@ -973,7 +972,7 @@ export function createChatController({
         onFiles([])
       }
       publishMessages(messages().map((message) => message.submissionId === submissionId ? { ...message, attachments: run.attachments ?? [] } : message))
-      const identified = { ...pending, id: run.runId, startedAt: acceptedAt }
+      const identified = { ...pending, id: run.runId }
       const projected = applyLiveEvents(identified, buffered.get(run.runId) ?? [])
       buffered.delete(run.runId)
       publishMessages(messages().map((message) => message.run?.submissionId === submissionId ? { ...message, run: projected } : message))

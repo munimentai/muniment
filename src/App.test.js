@@ -7760,9 +7760,11 @@ it('does not offer another-model retry in a completed reply', async () => {
     const mark = screen.getByLabelText('Starting')
     expect(mark.querySelector('path.torso').getAttribute('d')).toMatch(/^M160 0 H274/)
     expect(mark.querySelector('path.accent')).toBeInTheDocument()
+    // No time shows before the runtime names the run's start.
+    expect(chip.closest('.live-receipt').querySelector('[aria-label^="Execution time"]')).toBeNull()
 
     chatListener({ payload: {
-      runId: 'run-thinking', phase: 'streaming', text: 'First token',
+      runId: 'run-thinking', phase: 'streaming', text: 'First token', startedAt: new Date().toISOString(),
       receipt: null, toolActivity: [], pendingPermission: null,
     } })
 

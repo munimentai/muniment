@@ -50,6 +50,45 @@ describe('execution time', () => {
     }
   })
 
+  it('shows no time before the runtime names the start, then counts up to the receipt without going back', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'))
+    try {
+      // The click mounts the chip; the runtime's first event names the run's
+      // start 1.29 seconds later, and the run records 2.4 seconds.
+      const { container, rerender, unmount } = render(ExecutionTime, { startedAt: undefined })
+      await tick()
+      const seen = []
+      const read = () => {
+        const text = container.textContent.trim()
+        if (text) seen.push(text)
+        return text
+      }
+      for (const ms of [820, 440]) {
+        await vi.advanceTimersByTimeAsync(ms)
+        expect(read()).toBe('')
+      }
+      expect(vi.getTimerCount()).toBe(0)
+      await vi.advanceTimersByTimeAsync(30)
+      await rerender({ startedAt: '2026-01-01T00:00:01.290Z' })
+      await tick()
+      expect(read()).toBe('0s')
+      for (let step = 0; step < 24; step += 1) {
+        await vi.advanceTimersByTimeAsync(100)
+        read()
+      }
+      const seconds = seen.map((text) => Number(text.replace('s', '')))
+      expect(seconds).toEqual([...seconds].sort((a, b) => a - b))
+      expect(seen.at(-1)).toBe(receiptTime('2.4s'))
+      expect(seen.at(-1)).toBe('2s')
+      unmount()
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      cleanup()
+      vi.useRealTimers()
+    }
+  })
+
   it('ticks from the original start time and clears its timer when removed', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-01-01T01:00:00Z'))
