@@ -63,6 +63,17 @@
   }
 
   $effect(() => { void range; void provider; void machine; void machines.map((entry) => entry.id).join(); void refresh() })
+  // A filter keeps one line, and a name its width clips ends in an ellipsis
+  // with the whole name on hover.
+  function fullName(node) {
+    const hover = () => {
+      const label = node.querySelector('button[aria-haspopup] > span')
+      if (label && label.scrollWidth > label.clientWidth) node.dataset.tooltip = label.textContent
+      else delete node.dataset.tooltip
+    }
+    node.addEventListener('pointerenter', hover)
+    return { destroy: () => node.removeEventListener('pointerenter', hover) }
+  }
   onMount(() => {
     const poll = () => { if (!document.hidden) void refresh() }
     const timer = setInterval(poll, 60_000)
@@ -77,9 +88,9 @@
       <div class="crumbs">
         <h2>Usage</h2>
         <span class="sep" aria-hidden="true">›</span>
-        <span class="filter"><ChoiceField label="Machine" hideLabel inline={false} value={machine} options={machineOptions} onchange={(value) => { machine = value; if (breakdown === 'machine' && value) breakdown = 'model' }} /></span>
+        <span class="filter" use:fullName><ChoiceField label="Machine" hideLabel inline={false} value={machine} options={machineOptions} onchange={(value) => { machine = value; if (breakdown === 'machine' && value) breakdown = 'model' }} /></span>
         <span class="sep" aria-hidden="true">›</span>
-        <span class="filter"><ChoiceField label="Provider" hideLabel inline={false} value={provider} options={providerOptions(summary)} onchange={(value) => { provider = value }} /></span>
+        <span class="filter" use:fullName><ChoiceField label="Provider" hideLabel inline={false} value={provider} options={providerOptions(summary)} onchange={(value) => { provider = value }} /></span>
       </div>
       <div class="controls">
         <SegmentedField label="Usage view" hideLabel value={view} options={USAGE_VIEWS} onchange={(value) => { view = value }} />
@@ -125,7 +136,10 @@
   .crumbs, .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
   h2 { margin: 0; color: var(--ink); font: 600 var(--text-17) var(--font-heading, var(--font-human)); }
   .sep { color: var(--muted); }
-  .filter { width: 170px; }
+  .filter { position: relative; width: 170px; }
+  .filter :global(button[aria-haspopup] > span) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .filter[data-tooltip]::after { content: attr(data-tooltip); position: absolute; z-index: 4; left: 0; top: calc(100% + 6px); padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-12) var(--font-human); white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity 80ms ease; }
+  .filter[data-tooltip]:hover:not(:has([aria-expanded="true"]))::after { opacity: 1; transition-delay: 350ms; }
   .note { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--muted); font-size: var(--text-13); }
   .note.error { color: var(--danger); }
   .limits { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr)); align-items: start; gap: 12px; }
