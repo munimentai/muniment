@@ -64,6 +64,8 @@
     "allow-onboarding-model-settings-error",
     "allow-installed-fonts",
     "allow-input-mark-dismiss",
+    "allow-input-mark-watch",
+    "allow-input-mark-unwatch",
     "allow-auth-sign-in",
     "allow-auth-status",
     "allow-auth-entitlement-snapshot",

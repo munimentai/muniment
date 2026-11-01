@@ -56,23 +56,33 @@ export function takesText(element) {
 // The terminal draws its prompt where AppKit draws the input-source mark,
 // beside the caret of xterm's hidden text field, so the mark covers the
 // prompt. AppKit shows the mark up to two seconds after the caret moves, and
-// the shell hides only a mark it sees. So each poke asks the shell to hide
-// the mark at each of `checks` ms after the last focus, keystroke or output.
-// macOS shows it again on its own when the input source changes.
-export const INPUT_MARK_CHECKS_MS = [1000, 2000, 3000]
-export function inputMarkSettler(invoke, checks = INPUT_MARK_CHECKS_MS) {
+// the shell hides only a mark it sees. So each focus, keystroke or output
+// asks the shell to watch: it checks every 50 ms and hides the mark until
+// three seconds after the last request. A burst of pokes sends at most one
+// request per `throttle` ms, and the last poke of a burst sends one at the
+// burst's end. `stop` ends the watch when the terminal loses focus or closes.
+export const INPUT_MARK_THROTTLE_MS = 250
+export function inputMarkSettler(invoke, throttle = INPUT_MARK_THROTTLE_MS) {
   let timer
-  const check = (index) => {
+  let pending = false
+  const send = (command) => Promise.resolve(invoke?.(command)).catch(() => {})
+  const open = () => {
+    send('input_mark_watch')
     timer = setTimeout(() => {
-      Promise.resolve(invoke?.('input_mark_dismiss')).catch(() => {})
-      if (index + 1 < checks.length) check(index + 1)
-    }, checks[index] - (checks[index - 1] ?? 0))
+      timer = undefined
+      if (pending) { pending = false; open() }
+    }, throttle)
   }
   return {
     poke() {
-      clearTimeout(timer)
-      if (checks.length) check(0)
+      if (timer === undefined) open()
+      else pending = true
     },
-    stop() { clearTimeout(timer) },
+    stop() {
+      clearTimeout(timer)
+      timer = undefined
+      pending = false
+      send('input_mark_unwatch')
+    },
   }
 }

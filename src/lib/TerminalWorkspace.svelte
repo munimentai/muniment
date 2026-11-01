@@ -17,7 +17,7 @@
   let active = true
   let timer
   let inputQueue = Promise.resolve()
-  // The input-source mark leaves the prompt once focus, typing or output settles.
+  // The shell hides the input-source mark over the prompt while focus, typing or output moves the caret.
   const inputMark = inputMarkSettler((command) => tauri?.invoke(command))
   // A folder path too long for the line drops its start behind a leading
   // ellipsis, as the Files panel does, and only then names the full path on hover.
@@ -85,7 +85,7 @@
       return false
     })
     const input = terminal.onData(data => { inputMark.poke(); if (!id || exited) return; const session = id; inputQueue = inputQueue.then(() => tauri.invoke('terminal_write', { id: session, data })).catch(e => { if (active) error = String(e) }) })
-    const field = terminal.textarea; field?.addEventListener('focus', inputMark.poke)
+    const field = terminal.textarea; field?.addEventListener('focus', inputMark.poke); field?.addEventListener('blur', inputMark.stop)
     // AppKit draws the mark again when shell output moves the caret, so the
     // wait also restarts on each parsed write while the terminal holds focus.
     const written = terminal.onWriteParsed(() => { if (field && document.activeElement === field) inputMark.poke() })
@@ -96,7 +96,7 @@
     const sized = (event) => { terminal.options.fontSize = codeFontSize(event.detail); void resize() }
     window.addEventListener(TYPE_EVENT, sized)
     void start()
-    return () => { active = false; clearTimeout(timer); inputMark.stop(); field?.removeEventListener('focus', inputMark.poke); observer.disconnect(); themes.disconnect(); media.removeEventListener('change',theme); window.removeEventListener(TYPE_EVENT, sized); input.dispose(); written.dispose(); terminal.dispose(); if (id) void tauri.invoke('terminal_close',{id}).catch(() => {}) }
+    return () => { active = false; clearTimeout(timer); inputMark.stop(); field?.removeEventListener('focus', inputMark.poke); field?.removeEventListener('blur', inputMark.stop); observer.disconnect(); themes.disconnect(); media.removeEventListener('change',theme); window.removeEventListener(TYPE_EVENT, sized); input.dispose(); written.dispose(); terminal.dispose(); if (id) void tauri.invoke('terminal_close',{id}).catch(() => {}) }
   })
 </script>
 <section class="terminal-workspace" class:hidden aria-label="Terminal">

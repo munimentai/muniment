@@ -42,6 +42,8 @@ const APP_COMMANDS: &[&str] = &[
     "onboarding_model_settings_error",
     "installed_fonts",
     "input_mark_dismiss",
+    "input_mark_watch",
+    "input_mark_unwatch",
     "auth_sign_in",
     "auth_status",
     "auth_entitlement_snapshot",

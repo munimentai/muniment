@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { INPUT_MARK_CHECKS_MS, inputMarkSettler, landFocus, shown, takesText } from './focus-landing.js'
+import { INPUT_MARK_THROTTLE_MS, inputMarkSettler, landFocus, shown, takesText } from './focus-landing.js'
 
 const SKIP = '#sidebar, .titlebar, [data-panel="workspace"]'
 afterEach(() => { document.body.innerHTML = '' })
@@ -106,57 +106,41 @@ it('tells a field that takes typed text from a heading, a button and the body', 
   expect([name, search, message, draft].map(takesText)).toEqual([true, true, true, true])
 })
 
-it('hides the input-source mark at one, two and three seconds after the last focus or keystroke', async () => {
+it('asks the shell to watch for the input-source mark on each poke, at most once per throttle, and to stop on stop', async () => {
   vi.useFakeTimers()
   try {
     const invoke = vi.fn(async () => {})
+    const watches = () => invoke.mock.calls.filter(([command]) => command === 'input_mark_watch').length
+    const stops = () => invoke.mock.calls.filter(([command]) => command === 'input_mark_unwatch').length
     const settler = inputMarkSettler(invoke)
-    expect(INPUT_MARK_CHECKS_MS).toEqual([1000, 2000, 3000])
+    expect(INPUT_MARK_THROTTLE_MS).toBe(250)
+    // The first poke asks at once, so the shell checks from the first frame.
     settler.poke()
-    vi.advanceTimersByTime(999)
-    expect(invoke).not.toHaveBeenCalled()
-    // Each keystroke starts the wait again.
-    settler.poke()
-    vi.advanceTimersByTime(600)
-    settler.poke()
-    vi.advanceTimersByTime(999)
-    expect(invoke).not.toHaveBeenCalled()
-    vi.advanceTimersByTime(1)
-    expect(invoke).toHaveBeenCalledTimes(1)
-    expect(invoke).toHaveBeenCalledWith('input_mark_dismiss')
-    // AppKit can show the mark after the first check, so two more follow.
-    vi.advanceTimersByTime(999)
-    expect(invoke).toHaveBeenCalledTimes(1)
-    vi.advanceTimersByTime(1)
-    expect(invoke).toHaveBeenCalledTimes(2)
-    vi.advanceTimersByTime(1000)
-    expect(invoke).toHaveBeenCalledTimes(3)
+    expect(watches()).toBe(1)
+    // A burst of keystrokes and output asks once more, at the burst's end.
+    for (let i = 0; i < 20; i++) { settler.poke(); vi.advanceTimersByTime(10) }
+    expect(watches()).toBe(1)
+    vi.advanceTimersByTime(50)
+    expect(watches()).toBe(2)
+    vi.advanceTimersByTime(250)
+    expect(watches()).toBe(2)
     vi.advanceTimersByTime(10000)
-    expect(invoke).toHaveBeenCalledTimes(3)
-    // A poke between checks starts the whole window again.
+    expect(watches()).toBe(2)
+    // A poke after a quiet spell asks at once again.
     settler.poke()
-    vi.advanceTimersByTime(1500)
-    expect(invoke).toHaveBeenCalledTimes(4)
-    settler.poke()
-    vi.advanceTimersByTime(2999)
-    expect(invoke).toHaveBeenCalledTimes(6)
-    vi.advanceTimersByTime(1)
-    expect(invoke).toHaveBeenCalledTimes(7)
-    vi.advanceTimersByTime(10000)
-    expect(invoke).toHaveBeenCalledTimes(7)
-    // A stopped settler asks nothing, also between checks, and a failed call stays quiet.
+    expect(watches()).toBe(3)
+    // A stop ends the watch and drops a pending ask.
     settler.poke()
     settler.stop()
-    vi.advanceTimersByTime(5000)
-    expect(invoke).toHaveBeenCalledTimes(7)
-    settler.poke()
+    expect(stops()).toBe(1)
     vi.advanceTimersByTime(1000)
-    settler.stop()
-    vi.advanceTimersByTime(5000)
-    expect(invoke).toHaveBeenCalledTimes(8)
+    expect(watches()).toBe(3)
+    settler.poke()
+    expect(watches()).toBe(4)
+    expect(invoke.mock.calls.every(([command]) => ['input_mark_watch', 'input_mark_unwatch'].includes(command))).toBe(true)
     const failing = inputMarkSettler(vi.fn(() => Promise.reject(new Error('no shell'))))
     failing.poke()
-    vi.advanceTimersByTime(3000)
+    failing.stop()
     await Promise.resolve()
   } finally { vi.useRealTimers() }
 })
