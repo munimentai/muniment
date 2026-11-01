@@ -16,7 +16,7 @@
   import StatusChip from './lib/ui/StatusChip.svelte'
   import StatusRing from './sidebar/StatusRing.svelte'
   import { floatingMenu } from './lib/floating-menu.js'
-  import { landFocus, takesText } from './lib/focus-landing.js'
+  import { inputMarkSettler, landFocus, settleTextFocusMoves, takesText } from './lib/focus-landing.js'
   import { panelScroll } from './lib/panel-scroll.js'
   import UserQuestion from './lib/UserQuestion.svelte'
   import { THREAD_ORGANIZATION_KEY, keepOpenThread, readOpenThread, readThreadOrganization, listedThreads } from './lib/thread-organization.js'
@@ -542,6 +542,9 @@
     let frame = requestAnimationFrame(() => { frame = requestAnimationFrame(land) })
     return () => cancelAnimationFrame(frame)
   })
+  // Focus that moves between text fields, as from the composer to a picker's
+  // search field, asks the shell to hide the mark left at the old caret.
+  onMount(() => tauri ? settleTextFocusMoves(document, inputMarkSettler((command) => tauri.invoke(command))) : undefined)
   let workspacePanelWidth = $state(500)
   let workspacePanelMaximum = $state(1200)
   let workspacePanelPointer = $state()

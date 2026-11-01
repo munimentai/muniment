@@ -86,3 +86,22 @@ export function inputMarkSettler(invoke, throttle = INPUT_MARK_THROTTLE_MS) {
     },
   }
 }
+
+// Focus that moves from one text field to another, such as from the composer
+// to the search field of a picker or a popover, leaves the mark at the old
+// caret too: WebKit tells AppKit of no move it sees. So each focus on a text
+// field other than the last one asks `settler` to watch, and the shell hides
+// the stale mark. Focus that returns to the same field asks nothing. Answers
+// the function that stops listening.
+export function settleTextFocusMoves(target, settler) {
+  let last = null
+  const moved = (event) => {
+    const field = event.target
+    if (!takesText(field)) return
+    const from = takesText(event.relatedTarget) ? event.relatedTarget : last
+    last = field
+    if (from && from !== field) settler.poke()
+  }
+  target.addEventListener('focusin', moved)
+  return () => target.removeEventListener('focusin', moved)
+}

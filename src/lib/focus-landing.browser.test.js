@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { INPUT_MARK_THROTTLE_MS, inputMarkSettler, landFocus, shown, takesText } from './focus-landing.js'
+import { INPUT_MARK_THROTTLE_MS, inputMarkSettler, landFocus, settleTextFocusMoves, shown, takesText } from './focus-landing.js'
 
 const SKIP = '#sidebar, .titlebar, [data-panel="workspace"]'
 afterEach(() => { document.body.innerHTML = '' })
@@ -143,4 +143,35 @@ it('asks the shell to watch for the input-source mark on each poke, at most once
     failing.stop()
     await Promise.resolve()
   } finally { vi.useRealTimers() }
+})
+
+it('asks to hide the mark when focus moves from one text field to another, as into a picker search field', () => {
+  document.body.innerHTML = `
+    <textarea aria-label="Message"></textarea>
+    <button>Model</button>
+    <div role="dialog"><input type="search" aria-label="Search models"><input type="checkbox" aria-label="Pin"></div>`
+  const [composer, button, search, pin] = ['textarea', 'button', 'input[type=search]', 'input[type=checkbox]'].map((selector) => document.querySelector(selector))
+  const settler = { poke: vi.fn() }
+  const stop = settleTextFocusMoves(document, settler)
+  try {
+    // The first text field to take focus leaves no mark behind.
+    composer.focus()
+    expect(settler.poke).not.toHaveBeenCalled()
+    // The composer's caret hands focus straight to the picker's search field.
+    search.focus()
+    expect(settler.poke).toHaveBeenCalledTimes(1)
+    // Focus on a control that takes no text asks nothing here.
+    pin.focus()
+    expect(settler.poke).toHaveBeenCalledTimes(1)
+    // Back to the composer by way of a button: the last text field was the search field.
+    button.focus()
+    composer.focus()
+    expect(settler.poke).toHaveBeenCalledTimes(2)
+    // Focus that returns to the same field asks nothing.
+    composer.blur()
+    composer.focus()
+    expect(settler.poke).toHaveBeenCalledTimes(2)
+  } finally { stop() }
+  search.focus()
+  expect(settler.poke).toHaveBeenCalledTimes(2)
 })
