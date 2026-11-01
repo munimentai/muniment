@@ -345,7 +345,9 @@ class CargoPrecedence(unittest.TestCase):
             self.fail("cargo is not on PATH")
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
-        self.root = Path(self._tmp.name)
+        # Cargo resolves a relative config entry through symlinks, and the
+        # macOS temporary directory sits under the /var symlink to /private/var.
+        self.root = Path(self._tmp.name).resolve()
         (self.root / ".cargo").mkdir()
         (self.root / "desktop").mkdir()
         (self.root / ".cargo/config.toml").write_text(
