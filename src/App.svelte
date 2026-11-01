@@ -1822,6 +1822,7 @@
     readActive: () => active,
     readAnnounced: () => announcedRun,
     readDraft: outgoingDraft,
+    readComposer: () => ({ text: draft, files: selectedFiles }),
     readFiles: () => selectedFiles,
     readThinkingLevel: () => chipThinking?.level ?? null,
     readPermissionMode: () => composerThreadId ? null : pendingMode,

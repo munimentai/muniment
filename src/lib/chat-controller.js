@@ -38,6 +38,8 @@ export function createChatController({
   readAnnounced,
   readDraft,
   readFiles,
+  // The composer's own draft and files, which a refused send puts back.
+  readComposer = () => ({ text: readDraft(), files: readFiles() }),
   // The thinking level a send carries, or null for the model's default.
   readThinkingLevel = () => null,
   // The permission mode picked for a new thread before its first message, or
@@ -911,7 +913,7 @@ export function createChatController({
     }
     const selected = readFiles()
     const folders = selected.filter(file => file.isDirectory).map(file => file.path)
-    return submitPrompt(withFolders(prompt, folders), selected.filter(file => !file.isDirectory).map(({ path }) => ({ path })))
+    return submitPrompt(withFolders(prompt, folders), selected.filter(file => !file.isDirectory).map(({ path }) => ({ path })), false, readComposer())
   }
 
   async function submitWhenAvailable(payload) {
@@ -941,7 +943,10 @@ export function createChatController({
     }
   }
 
-  async function submitPrompt(prompt, files, preserveDraft = false) {
+  // `composer` is the draft and files the send took from the composer. They
+  // leave it in the same update that shows the sent message, and a send the
+  // runtime refuses puts them back while the composer stays empty.
+  async function submitPrompt(prompt, files, preserveDraft = false, composer = null) {
     onSend()
     onSubmitError('')
     const submissionId = ++submissionSequence
@@ -950,6 +955,15 @@ export function createChatController({
     // run's start, which its receipt times from, so its live time never jumps back.
     const pending = { id: 'pending', phase: 'thinking', text: '', receipt: null, prompt, submissionId }
     publishMessages([...messages(), userMessage, { role: 'assistant', run: pending }])
+    if (composer) {
+      onDraft('')
+      onFiles([])
+    }
+    const restoreComposer = () => {
+      if (!composer || submissionId !== submissionSequence || readDraft().trim() || readFiles().length) return
+      onDraft(composer.text)
+      onFiles(composer.files)
+    }
     onActive(pending)
     onAnnounce(pending)
     onFollow()
@@ -967,10 +981,6 @@ export function createChatController({
       if (destroyed || submissionId !== submissionSequence) return
       onSubmitted()
       if (run.mentions?.length) onMentions(run.mentions)
-      if (!preserveDraft) {
-        onDraft('')
-        onFiles([])
-      }
       publishMessages(messages().map((message) => message.submissionId === submissionId ? { ...message, attachments: run.attachments ?? [] } : message))
       const identified = { ...pending, id: run.runId }
       const projected = applyLiveEvents(identified, buffered.get(run.runId) ?? [])
@@ -990,6 +1000,7 @@ export function createChatController({
         publishMessages(messages().filter((message) => message.submissionId !== submissionId && message.run?.submissionId !== submissionId))
         if (submissionId !== submissionSequence) return false
         if (preserveDraft && !readDraft().trim()) onDraft(prompt)
+        restoreComposer()
         onAnnounce(null)
         onActive(null)
         onSubmitError(runElsewhere)
@@ -1001,10 +1012,8 @@ export function createChatController({
         publishMessages(messages().filter((message) => message.submissionId !== submissionId && message.run?.submissionId !== submissionId))
         onAnnounce(null)
         onActive(null)
-        if (await postElsewhere(prompt)) {
-          if (!preserveDraft) { onDraft(''); onFiles([]) }
-          return true
-        }
+        if (await postElsewhere(prompt)) return true
+        restoreComposer()
         return false
       }
       if (deliveryFailureReason || recoveryPending || [...buffered.values()].some((events) => events.some((event) => event.threadId && (!readThreadId() || event.threadId === readThreadId())))) {
@@ -1014,11 +1023,13 @@ export function createChatController({
         onActive(restoring)
         onAnnounce(restoring)
         recoveryPending = true
+        restoreComposer()
         return false
       }
       const { message } = submissionFailure(error)
       const failed = { ...pending, id: `rejected-${messages().length}`, phase: 'failed', failureReason: typeof message === 'string' ? message : 'The message could not be sent.' }
       publishMessages(messages().map((message) => message.run?.submissionId === submissionId ? { ...message, run: failed } : message))
+      restoreComposer()
       if (submissionId !== submissionSequence) return
       onAnnounce(failed)
       onActive(null)

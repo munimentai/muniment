@@ -182,6 +182,48 @@ describe('submission admission', () => {
     context.controller.cleanup()
   })
 
+  it('empties the composer in the update that shows the sent message, and puts a refused draft back', async () => {
+    const submit = deferred()
+    const invoke = vi.fn((command) => command === 'chat_submit' ? submit.promise : Promise.resolve({ summaries: [], nextCursor: null }))
+    const context = setup(invoke, { threadId: 'thread-1' })
+    const file = { path: '/tmp/notes.md', isDirectory: false }
+    context.setFiles([file])
+
+    // No await: the bubble and the empty composer land in one synchronous step.
+    const sending = context.controller.send()
+    expect(context.messages().at(-2)).toMatchObject({ role: 'user', text: 'Hello' })
+    expect(context.draft()).toBe('')
+    expect(context.files()).toEqual([])
+
+    submit.reject('The message could not be sent.')
+    await expect(sending).resolves.toBe(false)
+    expect(context.draft()).toBe('Hello')
+    expect(context.files()).toEqual([file])
+    context.controller.cleanup()
+  })
+
+  it('keeps what the user typed after Send when the send is refused', async () => {
+    const submit = deferred()
+    const invoke = vi.fn((command) => command === 'chat_submit' ? submit.promise : Promise.resolve({ summaries: [], nextCursor: null }))
+    const context = setup(invoke, { threadId: 'thread-1' })
+    const sending = context.controller.send()
+    expect(context.draft()).toBe('')
+    context.setDraft('A new thought')
+    submit.reject('The message could not be sent.')
+    await expect(sending).resolves.toBe(false)
+    expect(context.draft()).toBe('A new thought')
+    context.controller.cleanup()
+  })
+
+  it('leaves the composer empty once the runtime accepts the send', async () => {
+    const invoke = vi.fn((command) => command === 'chat_submit' ? Promise.resolve({ runId: 'run-1', attachments: [] }) : Promise.resolve({ summaries: [], nextCursor: null }))
+    const context = setup(invoke, { threadId: 'thread-1' })
+    await expect(context.controller.send()).resolves.toBe(true)
+    expect(context.draft()).toBe('')
+    expect(context.files()).toEqual([])
+    context.controller.cleanup()
+  })
+
   it.each(['local-mode', 'auth', 'thread', 'submit', 'PRIVATE', null])('records only a bounded submission source: %s', async source => {
     const error = { source, message: 'PRIVATE token, path, and prompt' }
     const invoke = vi.fn().mockRejectedValue(error)

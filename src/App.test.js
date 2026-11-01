@@ -6888,7 +6888,7 @@ describe('local file selection', () => {
     expect(screen.queryByText('/secret/location/evidence.pdf')).not.toBeInTheDocument()
   })
 
-  it('submits selected paths and clears the draft and selection only after success', async () => {
+  it('submits selected paths and clears the draft and selection as the message shows', async () => {
     let resolveSubmit
     invoke.mockImplementation(async (command, payload) => {
       if (command === 'project_list') return { projects: {}, threads: {} }
@@ -6918,17 +6918,16 @@ describe('local file selection', () => {
         { path: '/private/notes.txt' },
       ],
     })
-    expect(composer).toHaveValue('Review these')
-    expect(screen.getByText('lease.png')).toBeInTheDocument()
-    expect(screen.getByText('notes.txt')).toBeInTheDocument()
+    expect(composer).toHaveValue('')
+    expect(screen.queryByRole('list', { name: 'Selected files' })).not.toBeInTheDocument()
 
     resolveSubmit({ runId: 'run-with-files', attachments: [
       { displayName: 'lease.png', byteLength: 1024, mediaType: 'image/png' },
       { displayName: 'notes.txt', byteLength: 1024 },
     ] })
-    await waitFor(() => expect(composer).toHaveValue(''))
+    const saved = await screen.findByRole('list', { name: 'Saved attachments' })
+    expect(composer).toHaveValue('')
     expect(screen.queryByRole('list', { name: 'Selected files' })).not.toBeInTheDocument()
-    const saved = screen.getByRole('list', { name: 'Saved attachments' })
     const chips = within(saved).getAllByRole('listitem')
     expect(chips[0]).toHaveTextContent('lease.png1.0 KBimage/png')
     expect(chips[1]).toHaveTextContent('notes.txt1.0 KB')
@@ -9828,7 +9827,8 @@ it('prepares and routes extensions once across repeated busy refusals', async ()
     ['extend_command', { action: 'route', data: { threadId: 'thread-1', prompt: 'Search for the answer' } }],
   ])
   expect(extensions.submitted).not.toHaveBeenCalled()
-  expect(composer).toHaveValue('Search for the answer')
+  // The composer empties when the message shows, while the runtime still answers busy.
+  expect(composer).toHaveValue('')
   accepted.resolve({ runId: 'extension-turn', attachments: [] })
   await waitFor(() => expect(extensions.submitted).toHaveBeenCalledTimes(1))
   await waitFor(() => expect(composer).toHaveValue(''))
