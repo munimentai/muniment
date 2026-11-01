@@ -446,11 +446,16 @@ pub fn merge(answers: Vec<MachineAnswer>, filter: &Filter, now_ms: i64) -> Page 
             .as_deref()
             .and_then(|thread| filter.read.get(thread))
             .and_then(|time| millis(time));
-        let unread = read_at.is_none_or(|read| at > read)
+        let mut unread = read_at.is_none_or(|read| at > read)
             && thread_read.is_none_or(|read| at > read)
             && state != "running";
+        // A failure stays unread only while it needs the user: an agent's
+        // later run supersedes it, and a usage stop leaves after its window.
+        if state == "failed" {
+            unread &= newest_of_agent && (!item.limit_stop || at >= stop_since);
+        }
         // An agent's newest run that failed needs the user until they read it.
-        if state == "failed" && !item.limit_stop && newest_of_agent && unread {
+        if state == "failed" && !item.limit_stop && unread {
             page.needs_you.push(NeedsYou {
                 kind: "failed".into(),
                 id: item.run.id.clone(),
@@ -733,6 +738,66 @@ mod tests {
             .entries
             .iter()
             .all(|entry| entry.run.agent_id != "a" || !entry.unread));
+    }
+
+    #[test]
+    fn a_failure_a_later_run_superseded_reads_as_read_in_the_failed_view() {
+        let hour = 60 * 60 * 1000;
+        let day = 24 * hour;
+        let mut old_stop = run("r5", "c", RunStatus::Failed, NOW - 2 * day);
+        old_stop.limit_stop = true;
+        let listing = Listing {
+            runs: vec![
+                run("r1", "a", RunStatus::Completed, NOW - hour),
+                run("r2", "a", RunStatus::Failed, NOW - day - hour),
+                run("r3", "a", RunStatus::Failed, NOW - day - 2 * hour),
+                run("r4", "b", RunStatus::Failed, NOW - 2 * hour),
+                old_stop,
+            ],
+            ..Listing::default()
+        };
+        let page = |filter: &Filter| {
+            merge(
+                vec![MachineAnswer {
+                    machine: machine("local"),
+                    listing: Ok(listing.clone()),
+                }],
+                filter,
+                NOW,
+            )
+        };
+        let failed = page(&Filter {
+            view: View::Failed,
+            ..Filter::default()
+        });
+        let unread: Vec<&str> = failed
+            .days
+            .iter()
+            .flat_map(|day| &day.entries)
+            .filter(|entry| entry.unread)
+            .map(|entry| entry.run.id.as_str())
+            .collect();
+        assert_eq!(unread, vec!["r4"]);
+        let needs: Vec<&str> = failed
+            .needs_you
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect();
+        assert_eq!(needs, vec!["r4"]);
+        assert_eq!(failed.counts.needs_you, 1);
+        assert_eq!(failed.counts.failed, 4);
+        // The newer reply stays unread, and every unread failure needs the user.
+        assert_eq!(failed.counts.unread, 2);
+
+        let mut read = Filter::default();
+        read.read.insert("thread-b".into(), time(NOW - hour));
+        let opened = page(&read);
+        assert_eq!(opened.counts.needs_you, 0);
+        assert!(opened
+            .days
+            .iter()
+            .flat_map(|day| &day.entries)
+            .all(|entry| entry.status != "failed" || !entry.unread));
     }
 
     #[test]
