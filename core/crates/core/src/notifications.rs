@@ -189,6 +189,10 @@ pub struct Filter {
     /// thread was read after the run ended is read.
     #[serde(default)]
     pub read: BTreeMap<String, String>,
+    /// The threads deleted on the client's computer. A run in one reads as
+    /// read, since nothing can open its thread to read it.
+    #[serde(default)]
+    pub deleted: BTreeSet<String>,
 }
 
 /// The machine an item belongs to.
@@ -446,8 +450,14 @@ pub fn merge(answers: Vec<MachineAnswer>, filter: &Filter, now_ms: i64) -> Page 
             .as_deref()
             .and_then(|thread| filter.read.get(thread))
             .and_then(|time| millis(time));
+        let thread_deleted = item
+            .run
+            .thread_id
+            .as_deref()
+            .is_some_and(|thread| filter.deleted.contains(thread));
         let mut unread = read_at.is_none_or(|read| at > read)
             && thread_read.is_none_or(|read| at > read)
+            && !thread_deleted
             && state != "running";
         // A failure stays unread only while it needs the user: an agent's
         // later run supersedes it, and a usage stop leaves after its window.
@@ -738,6 +748,40 @@ mod tests {
             .entries
             .iter()
             .all(|entry| entry.run.agent_id != "a" || !entry.unread));
+    }
+
+    #[test]
+    fn a_failed_run_whose_thread_was_deleted_reads_as_read() {
+        let hour = 60 * 60 * 1000;
+        let listing = Listing {
+            runs: vec![
+                run("r1", "a", RunStatus::Failed, NOW - hour),
+                run("r2", "b", RunStatus::Failed, NOW - hour),
+            ],
+            ..Listing::default()
+        };
+        let mut filter = Filter::default();
+        filter.deleted.insert("thread-a".into());
+        let page = merge(
+            vec![MachineAnswer {
+                machine: machine("local"),
+                listing: Ok(listing),
+            }],
+            &filter,
+            NOW,
+        );
+        let waiting: Vec<&str> = page.needs_you.iter().map(|item| item.id.as_str()).collect();
+        assert_eq!(waiting, vec!["r2"]);
+        assert_eq!(page.counts.needs_you, 1);
+        assert_eq!(page.counts.unread, 1);
+        let gone = page.days[0]
+            .entries
+            .iter()
+            .find(|entry| entry.run.id == "r1")
+            .unwrap();
+        assert!(!gone.unread);
+        let parsed: Filter = serde_json::from_value(json!({"deleted": ["thread-a"]})).unwrap();
+        assert!(parsed.deleted.contains("thread-a"));
     }
 
     #[test]
