@@ -107,8 +107,9 @@ export function familyName(family) {
 // of its family that the provider has not moved past, or when the user turned
 // it on, unless the user turned it off. The saved default stays shown, so the
 // chip always names a row. With `all`, every row comes back, each marked with
-// whether it leads and whether it is shown, and the picker folds the rest
-// under Legacy models.
+// whether it leads, whether it is shown, and whether a pick runs on it, and
+// the picker folds the rest under Legacy models. The router serves only the
+// models the picker shows, so a hidden router row is `served: false`.
 //
 // The router's models sit under their provider, each model once: a model the
 // provider also serves directly is one row, and it takes the router's route
@@ -192,6 +193,9 @@ export function pickerGroups(inventory, query = '', { all = false } = {}) {
         || (inventory.default_provider === group.id && inventory.default_model === model.id)
       model.lead = !current || (current.has(model.id) && !past.has(model.id))
       model.shown = !model.off && (model.lead || saved || turnedOn.has(modelKey(model.provider, model.choice)) || turnedOn.has(modelKey(group.id, model.id)))
+      // The router leaves a model the picker hides out of the running, so a
+      // hidden row that takes the router's route is no choice until shown.
+      model.served = model.shown || !router || model.provider !== router.id
     }
   }
   return groups
@@ -199,7 +203,7 @@ export function pickerGroups(inventory, query = '', { all = false } = {}) {
       ...group,
       models: group.models
         .filter((model) => (all || model.shown) && (!needle || model.id.toLowerCase().includes(needle) || model.label.toLowerCase().includes(needle) || group.name.toLowerCase().includes(needle)))
-        .map(({ off, lead, shown, ...model }) => all ? { ...model, lead, shown } : model),
+        .map(({ off, lead, shown, served, ...model }) => all ? { ...model, lead, shown, served } : model),
     }))
     // The router heading stays in the picker for its Manage link while routing is off.
     .filter((group) => group.models.length > 0 || (group.manage && !needle))
@@ -237,8 +241,10 @@ function groupCatalogId(id) {
 // `kept` names a model a run uses whatever the picker shows, as an open
 // thread's or an agent's own model from core's `thread_settings`: a row the
 // picker hides still names it, and a model no row lists names it by its
-// display name marked `unavailable`, never another model.
-export function currentModel(inventory, { kept = false } = {}) {
+// display name marked `unavailable`, never another model. `base` is the
+// inventory the router's running set comes from, without the kept model as
+// its default: a kept model the router leaves out is `unavailable` too.
+export function currentModel(inventory, { kept = false, base = null } = {}) {
   if (!inventory) return null
   const rows = pickerGroups(inventory).flatMap((group) => group.models)
   const saved = inventory.default_provider && inventory.default_model
@@ -249,18 +255,27 @@ export function currentModel(inventory, { kept = false } = {}) {
   if (kept && !saved && !equivalent && inventory.default_provider && inventory.default_model) return keptModel(inventory)
   // With no saved row, the first row some account serves leads.
   const row = saved ?? equivalent ?? rows.find((entry) => !entry.unavailable) ?? rows[0]
-  return row ? { provider: row.provider, model: row.choice, label: row.label } : null
+  if (!row) return null
+  return { provider: row.provider, model: row.choice, label: row.label, ...(kept && base && !routerServes(base, row) ? { unavailable: true } : {}) }
+}
+
+// Whether the router serves a row's choice, judged against `base`: a row
+// that takes another route always runs.
+function routerServes(base, row) {
+  return pickerGroups(base, '', { all: true }).flatMap((group) => group.models)
+    .find((entry) => entry.provider === row.provider && entry.choice === row.choice)?.served !== false
 }
 
 // A kept model the picker does not show: its hidden row when one lists it,
-// else its name, unavailable.
+// else its name, unavailable. A hidden row the router would route is
+// unavailable too, since the router refuses it.
 function keptModel(inventory) {
   const { default_provider: provider, default_model: model } = inventory
   const groups = pickerGroups(inventory, '', { all: true })
   const rows = groups.flatMap((group) => group.models)
   const row = rows.find((entry) => entry.provider === provider && entry.choice === model)
     ?? groups.find((group) => group.id === provider)?.models.find((entry) => entry.id === model)
-  if (row) return { provider: row.provider, model: row.choice, label: row.label, ...(row.unavailable ? { unavailable: true } : {}) }
+  if (row) return { provider: row.provider, model: row.choice, label: row.label, ...(row.unavailable || row.served === false ? { unavailable: true } : {}) }
   return { provider, model, label: modelDisplayName(inventory, provider, model), unavailable: true }
 }
 

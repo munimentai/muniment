@@ -243,13 +243,13 @@
   const keptModel = $derived(currentThreadId ? (threadModel?.thread_id === currentThreadId ? threadModel.model : null) : pendingModel)
   const threadInventory = $derived(keptModel && inventory ? { ...inventory, default_provider: keptModel.provider, default_model: keptModel.model } : inventory)
   // The chip names the model the thread runs on, even one the picker hides.
-  const chipModel = $derived(currentModel(threadInventory, { kept: !!keptModel }))
+  const chipModel = $derived(currentModel(threadInventory, { kept: !!keptModel, base: inventory }))
   // Until a read of the inventory settles, the chip names no model and never
   // offers to connect one: a launch reads nothing yet, and a connected provider
   // can list its models only on a later read.
   let inventorySettled = $state(false)
   const modelsLoading = $derived(!inventoryError && (!inventory || (!chipModel && !inventorySettled)))
-  const modelSourceLabel = $derived(modelsLoading ? 'Checking models…' : modelChipLabel(threadInventory, { kept: !!keptModel }))
+  const modelSourceLabel = $derived(modelsLoading ? 'Checking models…' : modelChipLabel(threadInventory, { kept: !!keptModel, base: inventory }))
   // The composer warns only at or near a subscription limit of the machine
   // the thread runs on, for the chip's provider when one is known, from core's
   // usage summary. It reads again every two minutes and after each reply.

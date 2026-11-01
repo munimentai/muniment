@@ -162,7 +162,7 @@
               <span class="legacy-text"><span>Legacy models</span><span class="legacy-count">{group.legacy.length} {group.legacy.length === 1 ? 'model' : 'models'}</span></span>
               <LucideIcon name={open ? 'chevron-down' : 'chevron-right'} variant="action" size={14} />
             </button>
-            {#if open}<ul aria-label="Legacy models">{#each group.legacy as model (model.id)}{@render row(group, model)}{/each}</ul>{/if}
+            {#if open}{#if group.legacy.some((model) => model.served === false)}<p class="support">Show a legacy model to use it.</p>{/if}<ul aria-label="Legacy models">{#each group.legacy as model (model.id)}{@render row(group, model)}{/each}</ul>{/if}
           {/if}
         </section>
       {/if}
@@ -184,8 +184,9 @@
   {@const used = inUse(model)}
   {@const compacts = !used && compactsOnSwitch(contextUsage, model.contextWindow ?? windowTokens(model.context))}
   {@const auto = model.id === 'auto' && group.classifier}
+  {@const choosable = used || (!model.unavailable && model.served !== false)}
   <li class="picker-item">
-    <button type="button" class="quiet picker-row" data-provider={model.provider} data-model={model.choice} aria-pressed={used} disabled={disabled || (!!model.unavailable && !used)} aria-describedby={model.unavailable ? `${uid}-unavailable-${group.id}-${model.id}` : undefined} onclick={() => onchoose(model.provider, model.choice)}>
+    <button type="button" class="quiet picker-row" data-provider={model.provider} data-model={model.choice} aria-pressed={used} disabled={disabled || !choosable} aria-describedby={model.unavailable ? `${uid}-unavailable-${group.id}-${model.id}` : undefined} onclick={() => { if (choosable) onchoose(model.provider, model.choice) }}>
       <span class="model-label">{#if auto}<ProviderLogo provider={group.providerId} size={16} />{/if}<span class="model-id" class:classifier={auto}>{model.label ?? model.id}</span>{#if compacts}<span class="will-compact"><LucideIcon name="combine" variant="action" size={12} />will compact</span>{/if}{#if model.unavailable}<span class="unavailable" id={`${uid}-unavailable-${group.id}-${model.id}`}>Unavailable. {model.unavailable}</span>{/if}</span>
       {#if model.accounts > 1}<span class="balanced" aria-label={`Balanced across ${model.accounts} accounts`}><LucideIcon name="scale" variant="action" size={14} /><span class="tag">{model.accounts}</span></span>{/if}
       {#if used}<LucideIcon name="check" variant="action" size={14} />{/if}

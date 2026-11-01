@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { modelLabel } from './model-label.js'
 import { PROVIDERS, catalogProvider, connectableProviders, currentModel, currentModelAvailable, methodLabel, modelChipLabel, modelDisplayName, pickerGroups, providerName, routerHidden, searchProviders, sourceTag } from './provider-catalog.js'
 
 const inventory = {
@@ -327,5 +328,51 @@ describe('model display names', () => {
     expect(modelDisplayName(null, null, 'xai/grok-4.20-multi-agent-0309')).toBe('Grok 4.20 Multi Agent 0309')
     expect(modelDisplayName(inventory, 'custom-omlx', 'Qwen3.6-35B-A3B-4bit')).toBe('Qwen3.6-35B-A3B-4bit')
     expect(modelDisplayName(inventory, 'anthropic', '')).toBeNull()
+  })
+})
+
+describe('a legacy model the router leaves out of the running', () => {
+  // The router serves only the models the picker shows, as `routerHidden` tells it.
+  const routed = {
+    providers: [{ id: 'muniment-router', name: 'Model router', source: 'router', models: [] }],
+    hidden: [], shown: [],
+    default_provider: 'muniment-router',
+    default_model: 'openai/gpt-6-luna',
+    // The OpenAI models a ChatGPT account lists, older generations with them.
+    router_models: ['gpt-5.6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-6-astra', 'gpt-6-luna', 'gpt-6-sol', 'gpt-6.1-sol', 'gpt-6.1-terra']
+      .map((model) => ({ id: `openai/${model}`, family: 'openai', model, name: modelLabel(model), accounts: 1 })),
+  }
+  const rows = (inventory) => pickerGroups(inventory, '', { all: true }).flatMap((group) => group.models)
+
+  it('lists a hidden router row as no choice, and every row a pick runs on as served', () => {
+    const terra = rows(routed).find((model) => model.id === 'gpt-5.6-terra')
+    expect(terra).toMatchObject({ shown: false, served: false, provider: 'muniment-router', choice: 'openai/gpt-5.6-terra' })
+    expect(routerHidden(routed)).toContain('openai/gpt-5.6-terra')
+    // Every row the router serves is a choice, and none the router refuses.
+    for (const row of rows(routed)) expect(row.served).toBe(!routerHidden(routed).includes(row.choice))
+    expect(pickerGroups(routed).flatMap((group) => group.models).some((model) => model.id === 'gpt-5.6-terra')).toBe(false)
+  })
+
+  it('serves a legacy router row once the user shows it', () => {
+    const shown = { ...routed, shown: ['muniment-router/openai/gpt-5.6-terra'] }
+    expect(rows(shown).find((model) => model.id === 'gpt-5.6-terra')).toMatchObject({ shown: true, served: true })
+    expect(routerHidden(shown)).not.toContain('openai/gpt-5.6-terra')
+  })
+
+  it('marks an agent or thread kept on a hidden router row unavailable, as the router refuses it', () => {
+    // The chip reads the thread's model as the inventory's default, and the
+    // router's running set comes from the machine's own default.
+    const kept = { ...routed, default_model: 'openai/gpt-5.6-terra' }
+    expect(currentModel(kept, { kept: true, base: routed })).toEqual({ provider: 'muniment-router', model: 'openai/gpt-5.6-terra', label: 'GPT-5.6 Terra', unavailable: true })
+    expect(modelChipLabel(kept, { kept: true, base: routed })).toBe('GPT-5.6 Terra (unavailable)')
+    const luna = { ...routed, default_model: 'openai/gpt-6-luna' }
+    expect(currentModel(luna, { kept: true, base: routed })).toEqual({ provider: 'muniment-router', model: 'openai/gpt-6-luna', label: 'GPT-6 Luna' })
+    // The machine's own default stays served: the router keeps the saved default in the running.
+    expect(currentModel(kept, { kept: true, base: kept }).unavailable).toBeUndefined()
+  })
+
+  it('keeps a hidden row of a provider that runs its own turns a choice', () => {
+    const direct = { providers: [{ id: 'openai', name: 'OpenAI', source: 'key', models: [{ id: 'gpt-6-luna' }, { id: 'gpt-5.6-terra' }] }], hidden: ['openai/gpt-5.6-terra'], shown: [] }
+    expect(rows(direct).find((model) => model.id === 'gpt-5.6-terra')).toMatchObject({ shown: false, served: true })
   })
 })

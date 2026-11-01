@@ -73,6 +73,28 @@ it('keeps an older saved model in the current list and searches every provider',
   expect(screen.getByRole('region', { name: 'Anthropic' })).toHaveTextContent('Claude Opus 5.5')
 })
 
+it('offers a legacy model the router routes only once it is shown, since the router serves only the shown models', async () => {
+  // A ChatGPT account through the router lists older generations it no longer runs.
+  const inventory = { providers: [{ id: 'muniment-router', name: 'Model router', source: 'router', models: [] }], hidden: [], shown: [],
+    router_models: ['gpt-5.6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-6-astra', 'gpt-6-luna', 'gpt-6-sol', 'gpt-6.1-sol', 'gpt-6.1-terra'].map((model) => ({ id: `openai/${model}`, family: 'openai', model, accounts: 1 })) }
+  const onchoose = vi.fn()
+  const onvisibility = vi.fn()
+  render(ModelPicker, props(inventory, { onchoose, onvisibility, embedded: true, current: { provider: 'muniment-router', model: 'openai/gpt-6-astra' } }))
+  await fireEvent.click(screen.getByRole('button', { name: /Legacy models/ }))
+  expect(screen.getByText('Show a legacy model to use it.')).toBeInTheDocument()
+  const terra = within(screen.getByRole('list', { name: 'Legacy models' })).getByRole('button', { name: 'GPT-5.6 Terra' })
+  expect(terra).toBeDisabled()
+  await fireEvent.click(terra)
+  expect(onchoose).not.toHaveBeenCalled()
+  await fireEvent.click(screen.getByRole('button', { name: 'Show GPT-5.6 Terra' }))
+  expect(onvisibility).toHaveBeenCalledWith(expect.objectContaining({ provider: 'muniment-router', choice: 'openai/gpt-5.6-terra' }), true)
+  // Shown, the router serves it, and a pick runs on it.
+  cleanup()
+  render(ModelPicker, props({ ...inventory, shown: ['muniment-router/openai/gpt-5.6-terra'] }, { onchoose, embedded: true, current: { provider: 'muniment-router', model: 'openai/gpt-6-astra' } }))
+  await fireEvent.click(screen.getByRole('button', { name: 'GPT-5.6 Terra' }))
+  expect(onchoose).toHaveBeenCalledWith('muniment-router', 'openai/gpt-5.6-terra')
+})
+
 it('moves a model between its current list and Legacy models', async () => {
   const inventory = { providers: [{ id: 'anthropic', name: 'Anthropic', source: 'key', models: [{ id: 'claude-opus-5-5' }, { id: 'claude-opus-4-8' }] }], hidden: [], shown: [] }
   const onvisibility = vi.fn()
