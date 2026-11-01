@@ -61,6 +61,22 @@ pub struct RuntimeAttachState {
     session_names: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
+/// The pass over Home at start: it removes the folders deleted agents left
+/// that hold only Muniment's own files, and names legacy session folders.
+fn tidy_home(profile: &Path) -> Result<(), String> {
+    match muniment_core::agents::remove_deleted_folders(profile) {
+        Ok(removed) if !removed.is_empty() => muniment_core::runtime_eprintln!(
+            "muniment-runtime: agent_folders removed={}",
+            removed.len()
+        ),
+        Ok(_) => {}
+        Err(error) => muniment_core::runtime_eprintln!(
+            "muniment-runtime: agent_folders outcome=failed error={error}"
+        ),
+    }
+    muniment_core::projects::migrate_session_names(profile)
+}
+
 impl RuntimeAttachState {
     /// Opens the profile storage and companion registry for the runtime of one host.
     pub fn open(
@@ -68,12 +84,7 @@ impl RuntimeAttachState {
         profile_directory: impl AsRef<Path>,
         config_directory: impl AsRef<Path>,
     ) -> Result<Self, ProtocolError> {
-        Self::open_with_session_names(
-            host,
-            profile_directory,
-            config_directory,
-            muniment_core::projects::migrate_session_names,
-        )
+        Self::open_with_session_names(host, profile_directory, config_directory, tidy_home)
     }
 
     /// Opens the state like [`Self::open`] with the pass that names legacy

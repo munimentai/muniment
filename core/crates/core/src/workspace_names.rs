@@ -54,6 +54,24 @@ pub fn recorded(profile: &Path, root: &Path, id: &str) -> Result<Option<String>,
     }
 }
 
+/// Every folder name the index records under `root`, read without a lock.
+pub fn recorded_names(
+    profile: &Path,
+    root: &Path,
+) -> Result<std::collections::BTreeSet<String>, String> {
+    let names: BTreeMap<String, String> = match fs::read(profile.join("workspace-names.json")) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| e.to_string())?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
+        Err(e) => return Err(e.to_string()),
+    };
+    let prefix = format!("{}:", root.display());
+    Ok(names
+        .into_iter()
+        .filter(|(key, _)| key.starts_with(&prefix))
+        .map(|(_, leaf)| leaf)
+        .collect())
+}
+
 /// An I/O error as text: plain words for a full disk, else the error itself.
 fn io_text(error: std::io::Error) -> String {
     crate::disk_full::or_message(&error, &error.to_string())

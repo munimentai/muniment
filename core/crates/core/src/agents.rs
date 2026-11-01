@@ -1184,19 +1184,101 @@ pub fn update_run(profile: &Path, id: &str, run: RunState) -> Result<(), String>
     state.runs.insert(id.into(), run);
     persist_state(profile, &state)
 }
-/// Removing an agent keeps outputs, its memory and existing thread history.
+/// Removing an agent keeps its memory, the user's files in its folder and
+/// existing thread history.
 pub fn delete(profile: &Path, id: &str) -> Result<(), String> {
-    delete_agent(profile, id, false)
+    delete_agent(profile, id, false).map(drop)
 }
-/// Removes an agent, its routines and its run history. With
-/// `remove_memory`, its private memory folder goes too; the user confirms
-/// that first, since the memory cannot be recovered.
-pub fn delete_agent(profile: &Path, id: &str, remove_memory: bool) -> Result<(), String> {
-    remove_agent(profile, id, remove_memory)?;
+/// What a delete left in place.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Deleted {
+    /// The agent's folder, kept because it holds the user's files.
+    pub folder_kept: Option<PathBuf>,
+}
+/// The folder Muniment keeps its own files in, inside an agent's folder.
+const INTERNAL_FOLDER: &str = ".muniment";
+/// Whether `folder` holds only what Muniment and the system write there: the
+/// `.muniment` folder at its top, Finder's `.DS_Store` and empty folders. A
+/// link or any other file is the user's.
+fn holds_only_internals(folder: &Path, top: bool) -> bool {
+    let Ok(entries) = fs::read_dir(folder) else {
+        return false;
+    };
+    entries.into_iter().all(|entry| {
+        let Ok(entry) = entry else {
+            return false;
+        };
+        let Ok(kind) = entry.file_type() else {
+            return false;
+        };
+        let name = entry.file_name();
+        if kind.is_symlink() {
+            false
+        } else if kind.is_dir() {
+            (top && name == INTERNAL_FOLDER) || holds_only_internals(&entry.path(), false)
+        } else {
+            kind.is_file() && name == ".DS_Store"
+        }
+    })
+}
+/// Removes an agent's folder that holds only Muniment's own files. Answers
+/// the folder when it stays.
+fn remove_folder(folder: &Path) -> Option<PathBuf> {
+    if folder.is_symlink() || !folder.exists() {
+        return None;
+    }
+    if holds_only_internals(folder, true) && fs::remove_dir_all(folder).is_ok() {
+        return None;
+    }
+    Some(folder.to_path_buf())
+}
+/// Removes each folder under the agents folder that the name index records,
+/// that no agent holds, and that holds only Muniment's own files, as an
+/// agent delete leaves when the folder held run output. A folder with any
+/// other file stays. Answers the names of the removed folders.
+pub fn remove_deleted_folders(profile: &Path) -> Result<Vec<String>, String> {
+    let Some(home) = crate::home::configured_home(profile).map_err(|e| e.to_string())? else {
+        return Ok(Vec::new());
+    };
+    let root = home.join("agents");
+    if !root.is_dir() || root.is_symlink() {
+        return Ok(Vec::new());
+    }
+    let recorded = crate::workspace_names::recorded_names(profile, &root)?;
+    // A save writes `agent.md` under this lock, so a folder without one
+    // holds no agent while the sweep runs.
+    let _lock = lock(profile)?;
+    let mut removed = Vec::new();
+    for entry in fs::read_dir(&root).map_err(|_| "The agents could not be read.")? {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let path = entry.path();
+        if !entry.file_type().is_ok_and(|kind| kind.is_dir())
+            || !recorded.contains(&name)
+            || path.join("agent.md").exists()
+            || path.join("agent.md").is_symlink()
+        {
+            continue;
+        }
+        if remove_folder(&path).is_none() {
+            removed.push(name);
+        }
+    }
+    Ok(removed)
+}
+/// Removes an agent, its routines and its run history, and its folder when
+/// that holds only Muniment's own files. A folder with the user's files
+/// stays, and the answer names it. With `remove_memory`, its private memory
+/// folder goes too; the user confirms that first, since the memory cannot
+/// be recovered.
+pub fn delete_agent(profile: &Path, id: &str, remove_memory: bool) -> Result<Deleted, String> {
+    let deleted = remove_agent(profile, id, remove_memory)?;
     forget_in_messaging(profile, id);
-    Ok(())
+    Ok(deleted)
 }
-fn remove_agent(profile: &Path, id: &str, remove_memory: bool) -> Result<(), String> {
+fn remove_agent(profile: &Path, id: &str, remove_memory: bool) -> Result<Deleted, String> {
     let _lock = lock(profile)?;
     let store = RunStore::open(profile)?;
     if store.active()?.iter().any(|run| run.agent_id == id) {
@@ -1209,7 +1291,7 @@ fn remove_agent(profile: &Path, id: &str, remove_memory: bool) -> Result<(), Str
     }
     fs::remove_file(directory.join("agent.md")).map_err(|_| "The agent could not be deleted.")?;
     crate::agent_replays::remove_all(profile, id)?;
-    let _ = fs::remove_dir(directory);
+    let folder_kept = remove_folder(&directory);
     if remove_memory {
         match fs::remove_dir_all(memory.join(id)) {
             Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
@@ -1235,7 +1317,7 @@ fn remove_agent(profile: &Path, id: &str, remove_memory: bool) -> Result<(), Str
             let _ = crate::creations::remove(profile, &creation.thread_id);
         }
     }
-    Ok(())
+    Ok(Deleted { folder_kept })
 }
 /// Drops a deleted agent from the agents that named it in their messaging
 /// list, so a list naming only that agent does not read as empty. An agent
@@ -1545,8 +1627,14 @@ pub fn operation(
         }
         "agent.delete" => {
             let request: Delete = parse(body)?;
-            delete_agent(profile, &request.id, request.remove_memory)?;
-            Ok(json!({}))
+            let deleted = delete_agent(profile, &request.id, request.remove_memory)?;
+            Ok(match deleted.folder_kept {
+                Some(folder) => json!({
+                    "folder_kept": folder,
+                    "message": "The agent's folder holds your files, so it stays.",
+                }),
+                None => json!({}),
+            })
         }
         "agent.run_now" => {
             let request: RunNow = parse(body)?;
@@ -2588,6 +2676,117 @@ mod tests {
         assert!(!removed_memory.exists());
         assert!(store.latest(&removed.id).unwrap().is_none());
         assert!(list(&profile).unwrap().agents.is_empty());
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    fn saved(profile: &Path, name: &str) -> (Agent, PathBuf) {
+        let agent = save(
+            profile,
+            Agent {
+                name: name.into(),
+                instructions: "Work.".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let folder = folder(profile, &agent.id).unwrap();
+        assert!(folder.join("agent.md").is_file());
+        (agent, folder)
+    }
+
+    /// Writes what a run leaves in an agent's folder.
+    fn run_output(folder: &Path) {
+        let task = folder.join(".muniment/tasks/run-1");
+        fs::create_dir_all(&task).unwrap();
+        fs::write(task.join("output.txt"), "done").unwrap();
+        fs::create_dir_all(folder.join("empty/inner")).unwrap();
+        fs::write(folder.join(".DS_Store"), "finder").unwrap();
+    }
+
+    #[test]
+    fn deleting_an_agent_removes_its_folder_when_it_holds_only_muniment_files() {
+        let (root_dir, profile) = profile();
+        let (agent, folder) = saved(&profile, "Failure Probe");
+        run_output(&folder);
+        let deleted = delete_agent(&profile, &agent.id, false).unwrap();
+        assert_eq!(deleted, Deleted::default());
+        assert!(!folder.exists());
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    #[test]
+    fn deleting_an_agent_keeps_a_folder_with_the_users_files_and_says_so() {
+        let (root_dir, profile) = profile();
+        let (agent, folder) = saved(&profile, "Writer");
+        run_output(&folder);
+        fs::create_dir_all(folder.join("drafts")).unwrap();
+        fs::write(folder.join("drafts/chapter.md"), "mine").unwrap();
+        let answer = operation(
+            &profile,
+            "agent.delete",
+            serde_json::json!({"id": agent.id}),
+        )
+        .unwrap();
+        assert_eq!(answer["folder_kept"], folder.to_string_lossy().as_ref());
+        assert_eq!(
+            answer["message"],
+            "The agent's folder holds your files, so it stays."
+        );
+        assert!(!folder.join("agent.md").exists());
+        assert_eq!(
+            fs::read_to_string(folder.join("drafts/chapter.md")).unwrap(),
+            "mine"
+        );
+        assert!(folder.join(".muniment/tasks/run-1/output.txt").exists());
+        assert!(list(&profile).unwrap().agents.is_empty());
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn deleting_an_agent_keeps_a_folder_that_holds_a_link() {
+        let (root_dir, profile) = profile();
+        let (agent, folder) = saved(&profile, "Linker");
+        let outside = root_dir.join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("keep.txt"), "mine").unwrap();
+        std::os::unix::fs::symlink(&outside, folder.join("link")).unwrap();
+        let deleted = delete_agent(&profile, &agent.id, false).unwrap();
+        assert_eq!(deleted.folder_kept.as_deref(), Some(folder.as_path()));
+        assert!(folder.join("link").is_symlink());
+        assert!(outside.join("keep.txt").exists());
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    #[test]
+    fn the_start_sweep_removes_only_folders_deleted_agents_left_with_muniment_files() {
+        let (root_dir, profile) = profile();
+        // A live agent whose folder holds only run output.
+        let (_, live) = saved(&profile, "Live");
+        run_output(&live);
+        // Folders a delete left after it removed only `agent.md`.
+        let (_, left) = saved(&profile, "Failure Probe");
+        run_output(&left);
+        fs::remove_file(left.join("agent.md")).unwrap();
+        let (_, mine) = saved(&profile, "Kept");
+        run_output(&mine);
+        fs::write(mine.join("notes.md"), "mine").unwrap();
+        fs::remove_file(mine.join("agent.md")).unwrap();
+        // A folder Muniment never named.
+        let unnamed = root(&profile).unwrap().join("Empty-12345678");
+        fs::create_dir_all(unnamed.join(".muniment")).unwrap();
+        let removed = remove_deleted_folders(&profile).unwrap();
+        assert_eq!(
+            removed,
+            [left.file_name().unwrap().to_string_lossy().into_owned()]
+        );
+        assert!(!left.exists());
+        assert!(live.join("agent.md").is_file());
+        assert!(live.join(".muniment/tasks/run-1/output.txt").exists());
+        assert_eq!(fs::read_to_string(mine.join("notes.md")).unwrap(), "mine");
+        assert!(unnamed.is_dir());
+        assert_eq!(list(&profile).unwrap().agents.len(), 1);
+        assert!(remove_deleted_folders(&profile).unwrap().is_empty());
         fs::remove_dir_all(root_dir).unwrap();
     }
 
