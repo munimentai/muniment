@@ -79,6 +79,14 @@ for (const [width, clamped] of [[RAIL_OCCUPANTS.agent.min, true], [RAIL_OCCUPANT
     await expect.poll(() => !!more()).toBe(clamped)
     if (!clamped) return
     expect(more().textContent).toBe('Show all')
+    // The clamp ends in the UI face's ellipsis, three dots wide, never a
+    // mono cell's ellipsis that reads as a period.
+    await document.fonts.ready
+    const style = getComputedStyle(line)
+    expect(style.fontFamily.split(',')[0].replaceAll(/['"]/g, '').trim()).toBe('Schibsted Grotesk')
+    const pen = document.createElement('canvas').getContext('2d')
+    pen.font = `${style.fontSize} ${style.fontFamily}`
+    expect(pen.measureText('\u2026').width).toBeGreaterThan(2.5 * pen.measureText('.').width)
     await userEvent.click(more())
     expect(line.classList.contains('open')).toBe(true)
     expect(line.scrollHeight).toBeLessThanOrEqual(line.clientHeight + 1)

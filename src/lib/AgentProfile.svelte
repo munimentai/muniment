@@ -368,11 +368,12 @@
 
 <!-- The primary machine shows once the fleet has another machine to move to. A pick there starts the move. -->
 <!-- The state line wraps to three lines. A reason those lines clip shows
-     whole behind Show all, so no reason ends unread in an ellipsis. -->
+     whole behind Show all, so no reason ends unread in an ellipsis. A state
+     reads in the UI face, whose ellipsis a mono cell would shrink to a dot. -->
 {#snippet stateLine()}
   {#if activity !== undefined}
     {@const label = activityLabel(activity)}
-    <p class="state record" class:open={stateOpen} data-state={activityState(activity)} use:measureClamp={[label, stateOpen]}>{label}</p>
+    <p class="state" class:open={stateOpen} data-state={activityState(activity)} use:measureClamp={[label, stateOpen]}>{label}</p>
     {#if stateOpen || stateClamped}<button class="more state-more" aria-expanded={stateOpen} onclick={() => { stateOpen = !stateOpen }}>{stateOpen ? 'Show less' : 'Show all'}</button>{/if}
   {/if}
 {/snippet}
@@ -447,7 +448,7 @@
   .link { line-height: 1.4; padding: 2px 4px; }
   .record { font-family: var(--font-mono); font-size: var(--text-12); }
   .muted { color: var(--muted); font-size: var(--text-12); }
-  .state { display: -webkit-box; margin: 0 0 4px; overflow: hidden; color: var(--muted); text-align: center; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+  .state { display: -webkit-box; margin: 0 0 4px; overflow: hidden; color: var(--muted); font: var(--text-12) / 1.5 var(--font-human); text-align: center; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
   .state.open { display: block; }
   .state-more { display: block; margin: 0 auto 4px; }
   .state[data-state="waiting"] { color: var(--warning); }
