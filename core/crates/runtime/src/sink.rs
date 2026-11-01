@@ -668,13 +668,18 @@ impl PiLaunchBoundaries for RuntimeChatEventSink {
         let default = muniment_core::state_root::state_directory()
             .map(|state| muniment_core::state_root::agent_directory(&state))
             .and_then(|agent| muniment_core::launch_facts::read_local_default_model(&agent));
-        let agent = self.agent_launch().and_then(|agent| agent.model);
+        // The agent's own runs answer with its model; a user's message in
+        // its thread answers with the thread's pick.
+        let launch = self.agent_launch();
+        let agent_run = launch.as_ref().is_some_and(|launch| launch.agent_run);
+        let agent = launch.and_then(|agent| agent.model);
         match self.profile_directory() {
             Ok(profile) => muniment_core::thread_settings::run_model(
                 &profile,
                 &self.thread_id,
                 agent.as_ref(),
                 default.as_deref(),
+                agent_run,
             ),
             Err(_) => agent
                 .map(|model| format!("{}/{}", model.provider, model.id))
@@ -706,9 +711,9 @@ impl PiLaunchBoundaries for RuntimeChatEventSink {
                 .get(run_id)
                 .ok()
                 .flatten()
-                .map(|run| run.trigger.kind)
+                .map(|run| run.trigger)
         });
-        match muniment_core::agents::thread_launch(&profile, &self.thread_id, trigger) {
+        match muniment_core::agents::thread_launch(&profile, &self.thread_id, trigger.as_ref()) {
             Ok(launch) => launch,
             Err(error) => {
                 eprintln!("muniment-runtime: agent settings unreadable error={error}");

@@ -1372,6 +1372,7 @@ fn an_agent_launch_runs_with_every_tool_behind_its_gate() {
                 mode: PermissionMode::Manual,
                 ..RunPermissions::default()
             }),
+            agent_run: false,
         },
     };
     let pair = |config: &SidecarConfig, flag: &str| -> Vec<String> {

@@ -572,6 +572,93 @@ fn an_agent_runs_on_its_model_and_thinking_with_every_tool_behind_its_gate() {
 }
 
 #[test]
+fn an_agents_own_runs_use_its_model_while_user_messages_use_the_threads_pick() {
+    let _environment = ENVIRONMENT
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let setup = Setup::new("agent-runs-model-source", true, RuntimeHost::default());
+    let args = setup.temporary.root.join("args.txt");
+    std::env::set_var("PI_RESUME_STUB_ARGS", &args);
+    let agent: Agent = serde_json::from_value(json!({
+        "name": "Reporter",
+        "instructions": "Report.",
+        "model": {"provider": "stub", "id": "stub-model"}
+    }))
+    .unwrap();
+    let agent = agents::save(setup.profile(), agent).unwrap();
+    let model = || {
+        let args = std::fs::read_to_string(&args).unwrap();
+        let mut pairs = args.lines().collect::<Vec<_>>().into_iter();
+        let mut chosen = None;
+        while let Some(arg) = pairs.next() {
+            if arg == "--model" {
+                chosen = pairs.next().map(str::to_owned);
+            }
+        }
+        chosen
+    };
+    let finish = |run: &Run| {
+        setup.tick();
+        assert!(wait(|| setup.live() == 0));
+        setup.tick();
+        let run = setup.run(&run.id);
+        assert_eq!(run.status, RunStatus::Completed, "{:?}", run.error);
+        run
+    };
+
+    // Run now opens the agent's thread on its model.
+    let first = finish(&enqueue(&setup.store(), &agent.id, TriggerKind::Manual));
+    assert_eq!(model().as_deref(), Some("stub-model"));
+    let thread = first.thread_id.clone().unwrap();
+
+    // The user picks another model in the agent's thread. A message the
+    // user sends there, here relayed by another machine, runs on the pick.
+    muniment_core::thread_settings::set_model(
+        setup.profile(),
+        &thread,
+        Some(muniment_core::projects::DefaultModel {
+            provider: "picked".into(),
+            model: "picked-model".into(),
+        }),
+    )
+    .unwrap();
+    let relayed = setup
+        .store()
+        .enqueue(NewRun {
+            agent_id: agent.id.clone(),
+            thread_id: Some(thread.clone()),
+            trigger: RunTrigger {
+                kind: TriggerKind::Manual,
+                routine_id: None,
+                source: Some("swarm:member".into()),
+            },
+            prompt: "What changed?".into(),
+            hop: 0,
+            origin_run_id: None,
+        })
+        .unwrap();
+    finish(&relayed);
+    assert_eq!(model().as_deref(), Some("picked-model"));
+
+    // The agent's scheduled, triggered and Run now runs keep its model.
+    for kind in [TriggerKind::Cron, TriggerKind::Webhook, TriggerKind::Manual] {
+        let _ = std::fs::remove_file(&args);
+        let run = finish(&enqueue(&setup.store(), &agent.id, kind));
+        assert_eq!(run.thread_id.as_deref(), Some(thread.as_str()));
+        // The first leaves the pick's process, and the next ones may take
+        // the idle process that already runs the agent's model.
+        if kind == TriggerKind::Cron {
+            assert!(args.exists());
+        }
+        if args.exists() {
+            assert_eq!(model().as_deref(), Some("stub-model"), "{kind:?}");
+        }
+    }
+    let threads = muniment_core::thread_settings::read(setup.profile(), &thread).unwrap();
+    assert_eq!(threads.model.unwrap().model, "picked-model");
+}
+
+#[test]
 fn an_agent_run_answers_the_permission_mode_its_gate_asks_before_the_prompt_starts() {
     let _environment = ENVIRONMENT
         .lock()

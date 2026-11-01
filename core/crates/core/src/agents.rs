@@ -1434,13 +1434,17 @@ pub struct AgentLaunch {
     pub skills: Vec<String>,
     /// The run's permission gate. Every agent run loads it.
     pub permissions: Option<crate::permission_gate::RunPermissions>,
+    /// The agent started the run itself: a routine, another agent's message
+    /// or Run now. Such a run answers with the agent's model, not the model
+    /// a user picked in the thread.
+    pub agent_run: bool,
 }
 /// The launch settings of the agent that owns `thread`. `trigger` is what
 /// started the run, when the run queue started it.
 pub fn thread_launch(
     profile: &Path,
     thread: &str,
-    trigger: Option<TriggerKind>,
+    trigger: Option<&RunTrigger>,
 ) -> Result<Option<AgentLaunch>, String> {
     let Some(agent) = thread_agent(profile, thread)? else {
         return Ok(None);
@@ -1449,7 +1453,7 @@ pub fn thread_launch(
     let settings = crate::permission_gate::settings::load(profile);
     let permissions = crate::permission_gate::RunPermissions {
         mode: settings.effective(rules.mode.unwrap_or(settings.default_agent_mode)),
-        event_triggered: trigger.is_some_and(TriggerKind::event_triggered),
+        event_triggered: trigger.is_some_and(|trigger| trigger.kind.event_triggered()),
         bypass_enabled: settings.bypass_enabled,
         ..Default::default()
     };
@@ -1458,6 +1462,7 @@ pub fn thread_launch(
         model: agent.model,
         skills: agent.skills.unwrap_or_default(),
         permissions: Some(permissions),
+        agent_run: trigger.is_some_and(RunTrigger::agent_started),
     }))
 }
 /// Adds or replaces one routine. An empty id adds a routine with a new id.

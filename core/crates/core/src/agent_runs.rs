@@ -154,6 +154,19 @@ impl TriggerKind {
     }
 }
 
+impl RunTrigger {
+    /// Whether the agent's own run: a routine, another agent's message or
+    /// Run now. A user's message another machine relays into the agent's
+    /// thread is the user's send.
+    pub fn agent_started(&self) -> bool {
+        !(self.kind == TriggerKind::Manual
+            && self
+                .source
+                .as_deref()
+                .is_some_and(|source| source.starts_with("swarm:")))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunTrigger {
     pub kind: TriggerKind,

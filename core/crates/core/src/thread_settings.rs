@@ -157,17 +157,22 @@ pub fn resolve(
     Ok((settings, resolved))
 }
 
-/// The model a run of `thread` answers with, as `provider/model`.
+/// The model a run of `thread` answers with, as `provider/model`. A user's
+/// message runs the thread's own model, which wins over its agent's. The
+/// agent's own run, `agent_run`, from a routine, another agent's message or
+/// Run now, runs the agent's model, else the default.
 pub fn run_model(
     profile: &Path,
     thread: &str,
     agent: Option<&crate::agents::AgentModel>,
     default: Option<&str>,
+    agent_run: bool,
 ) -> Option<String> {
     let resolved = match resolve(profile, thread, agent, default) {
-        Ok((_, resolved)) => resolved,
-        // Unreadable settings leave the thread on its agent's or the default model.
-        Err(_) => crate::inherit::model(&ThreadSettings::default(), agent, default.and_then(split)),
+        Ok((_, resolved)) if !agent_run => resolved,
+        // Unreadable settings leave the thread on its agent's or the default
+        // model, as an agent's own run is.
+        _ => crate::inherit::model(&ThreadSettings::default(), agent, default.and_then(split)),
     };
     resolved
         .model
@@ -251,6 +256,40 @@ mod tests {
             provider: "openai".into(),
             model: id.into(),
         }
+    }
+
+    #[test]
+    fn a_users_message_runs_the_threads_pick_and_the_agents_own_run_its_model() {
+        let profile =
+            std::env::temp_dir().join(format!("muniment-thread-settings-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&profile).unwrap();
+        let agent = crate::agents::AgentModel {
+            provider: "xai".into(),
+            id: "grok-5".into(),
+            thinking: None,
+        };
+        let run = |agent: Option<&crate::agents::AgentModel>, agent_run| {
+            run_model(
+                &profile,
+                "t-1",
+                agent,
+                Some("openai/gpt-6-astra"),
+                agent_run,
+            )
+        };
+        assert_eq!(run(Some(&agent), false).as_deref(), Some("xai/grok-5"));
+        assert_eq!(run(Some(&agent), true).as_deref(), Some("xai/grok-5"));
+        set_model(&profile, "t-1", Some(model("gpt-6-luna"))).unwrap();
+        // The pick in the thread wins for the user's messages.
+        assert_eq!(
+            run(Some(&agent), false).as_deref(),
+            Some("openai/gpt-6-luna")
+        );
+        // A routine, another agent's message or Run now keeps the agent's model.
+        assert_eq!(run(Some(&agent), true).as_deref(), Some("xai/grok-5"));
+        // An agent without a model runs its own runs on the default.
+        assert_eq!(run(None, true).as_deref(), Some("openai/gpt-6-astra"));
+        fs::remove_dir_all(profile).unwrap();
     }
 
     #[test]
@@ -356,7 +395,7 @@ mod tests {
         assert_eq!(picked["layer"], "thread");
         assert_eq!(read("t-2")["model"]["model"], "gpt-6-luna");
         assert_eq!(
-            run_model(&profile, "t-1", None, default).as_deref(),
+            run_model(&profile, "t-1", None, default, false).as_deref(),
             Some("anthropic/opus")
         );
         let reset = operation(
