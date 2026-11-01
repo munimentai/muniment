@@ -22,6 +22,17 @@ describe('run failure text', () => {
     expect(runFailureRaw('The OpenAI sign-in expired. Sign in again in Models.')).toEqual(['The OpenAI sign-in expired. Sign in again in Models.'])
   })
 
+  it('names a provider\'s lasting refusal and keeps its answer for Show log', () => {
+    const body = '{"code":"invalid-argument","error":"Client-side tools for multi-agent models require beta access"}'
+    const routed = `The model could not complete this reply. No eligible model served this turn. xAI refused this model: it requires beta access. ${body} me answered 400.`
+    expect(runFailureText(routed)).toBe('xAI refused this model: it requires beta access.')
+    expect(runFailureRaw(routed)).toEqual([routed])
+    const stored = `The model could not complete this reply. No eligible model served this turn. ${body} me answered 400.`
+    expect(runFailureText(stored)).toBe('The provider refused this model: it requires beta access.')
+    expect(runFailureRaw(stored)).toEqual([stored])
+    expect(runFailureText(`xai/grok-4.20-multi-agent-0309: ${body}`)).toBe('xAI refused this model: it requires beta access.')
+  })
+
   it('hides any other raw answer behind Show log and keeps the sentences before it once each', () => {
     const stored = 'The model could not complete this reply. No eligible model served this turn. No eligible model served this turn. {"error":{"message":"Overloaded","status":529}}'
     expect(runFailureText(stored)).toBe('The model could not complete this reply. No eligible model served this turn.')

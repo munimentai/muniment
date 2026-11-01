@@ -76,6 +76,25 @@ function credentialStep(text) {
   return `The${provider ? ` ${provider}` : ''}${SIGN_IN_EXPIRED}`
 }
 
+// The sentence that names a provider's lasting refusal of the model: the
+// router's own, such as `xAI refused this model: it requires beta access.`,
+// else a provider's answer that the model requires beta access.
+const MODEL_REFUSED = ' refused this model: '
+function modelRefusal(text) {
+  const at = text.indexOf(MODEL_REFUSED)
+  if (at > 0) {
+    const start = text.lastIndexOf('. ', at)
+    const provider = text.slice(start < 0 ? 0 : start + 2, at).trim()
+    const rest = text.slice(at + MODEL_REFUSED.length)
+    const end = rest.search(/[{[]/)
+    const cause = (end < 0 ? rest : rest.slice(0, end)).trim().replace(/\.$/, '')
+    if (provider && cause) return `${provider}${MODEL_REFUSED}${cause}.`
+  }
+  if (!/beta access/i.test(text)) return ''
+  const provider = PROVIDERS.find(([pattern]) => pattern.test(text))?.[1] ?? 'The provider'
+  return `${provider}${MODEL_REFUSED}it requires beta access.`
+}
+
 // The text before a provider's raw answer, else the message the answer
 // holds when it holds one whole.
 function withoutBody(text) {
@@ -93,7 +112,7 @@ export function runFailureText(reason) {
   if (!recorded) return ''
   const raw = RAW_REJECTION.exec(recorded)
   if (raw) return REJECTIONS[raw[1]] ?? 'The runtime rejected the request.'
-  const step = credentialStep(recorded)
+  const step = credentialStep(recorded) || modelRefusal(recorded)
   if (step) return step
   const text = namedRoutes(uniqueSentences(withoutBody(recorded))).replace(retryGuidance, '').trim()
   if (!text) return ''
@@ -104,5 +123,5 @@ export function runFailureText(reason) {
 export function runFailureRaw(reason) {
   const recorded = recordedText(reason)
   if (!recorded) return []
-  return RAW_REJECTION.test(recorded) || credentialStep(recorded) || RAW_BODY.test(recorded) ? [recorded] : []
+  return RAW_REJECTION.test(recorded) || credentialStep(recorded) || modelRefusal(recorded) || RAW_BODY.test(recorded) ? [recorded] : []
 }
