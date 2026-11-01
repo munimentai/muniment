@@ -52,6 +52,20 @@ describe('run failure text', () => {
     expect(runFailureText('  ')).toBe('')
   })
 
+  it('names a refused model by its display name on every surface and keeps the raw id for Show log', () => {
+    const refusal = 'The router does not serve the model xai/grok-4.20-multi-agent-0309.'
+    expect(runFailureText(refusal)).toBe('The router does not serve the model Grok 4.20 Multi Agent 0309.')
+    expect(runFailureRaw(refusal)).toEqual([refusal])
+    expect(testRunLine({ status: 'failed', error: refusal }).text).toBe('Test run failed. The router does not serve the model Grok 4.20 Multi Agent 0309.')
+    expect(runFailureText('anthropic/claude-sonnet-4-5 and openai/gpt-6.1-sol are busy.')).toBe('Claude Sonnet 4.5 and GPT-6.1 Sol are busy.')
+  })
+
+  it('leaves a file path and a word pair as they are', () => {
+    expect(runFailureText('The file src/lib/run-failure.js and/or ~/docs/v1-notes could not be read.'))
+      .toBe('The file src/lib/run-failure.js and/or ~/docs/v1-notes could not be read.')
+    expect(runFailureRaw('The file src/lib/run-failure.js could not be read.')).toEqual([])
+  })
+
   it('reads a failed test run in the agent draft the same way', () => {
     expect(testRunLine({ status: 'failed', error: STORED_EXPIRED }).text).toBe('Test run failed. The sign-in expired. Sign in again in Models.')
     expect(testRunLine({ status: 'failed' }).text).toBe('Test run failed.')

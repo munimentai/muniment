@@ -1,4 +1,4 @@
-import { modelLabel } from './model-label.js'
+import { modelDisplayName } from './provider-catalog.js'
 
 // How every surface reads a run's recorded failure: a thread reply, a
 // Notifications row, a Needs you item, an agent card, its history, a tooltip
@@ -56,11 +56,20 @@ function uniqueSentences(text) {
   }).join(' ')
 }
 
-// The router opens a refusal with the route's `family/model` id. The reply
-// names the model as the picker does, so a stored reply reads the same.
-const routeId = /(^|[.!?]\s+)[a-z][\w-]*\/(\S+?): /g
-function namedRoutes(text) {
-  return text.replace(routeId, (_, start, model) => `${start}${modelLabel(model)}: `)
+// A failure names a model by its `family/model` id, such as the router's
+// route prefix or its refusal of a model it does not serve. The text names
+// the model as the picker does, so every surface reads the same. A file path
+// or a word pair such as "and/or" stays: the model part carries a digit or a
+// hyphen, and no slash, dot or word joins the id on either side.
+const MODEL_ID = /(?<![\w./~-])([a-z][a-z0-9-]*)\/([a-z0-9][\w.:-]*[a-z0-9])(?![\w/])/gi
+function isModelId(model) {
+  return /[\d-]/.test(model)
+}
+function namedModels(text) {
+  return text.replace(MODEL_ID, (id, family, model) => (isModelId(model) ? modelDisplayName(null, family, id) ?? id : id))
+}
+function namesModel(text) {
+  return [...text.matchAll(MODEL_ID)].some(([, , model]) => isModelId(model))
 }
 
 // The sentence that names a refused credential and the step that fixes it:
@@ -114,7 +123,7 @@ export function runFailureText(reason) {
   if (raw) return REJECTIONS[raw[1]] ?? 'The runtime rejected the request.'
   const step = credentialStep(recorded) || modelRefusal(recorded)
   if (step) return step
-  const text = namedRoutes(uniqueSentences(withoutBody(recorded))).replace(retryGuidance, '').trim()
+  const text = namedModels(uniqueSentences(withoutBody(recorded))).replace(retryGuidance, '').trim()
   if (!text) return ''
   return /[.!?…]$/.test(text) ? text : `${text}.`
 }
@@ -123,5 +132,5 @@ export function runFailureText(reason) {
 export function runFailureRaw(reason) {
   const recorded = recordedText(reason)
   if (!recorded) return []
-  return RAW_REJECTION.test(recorded) || credentialStep(recorded) || modelRefusal(recorded) || RAW_BODY.test(recorded) ? [recorded] : []
+  return RAW_REJECTION.test(recorded) || credentialStep(recorded) || modelRefusal(recorded) || RAW_BODY.test(recorded) || namesModel(recorded) ? [recorded] : []
 }
