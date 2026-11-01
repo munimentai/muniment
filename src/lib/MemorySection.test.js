@@ -176,6 +176,8 @@ it('deletes an unconfirmed fact from its icon after the confirm step', async () 
   await fireEvent.click(within(quick('Fact 3')).getByRole('button', { name: 'Delete memory' }))
   expect(screen.getByRole('button', { name: 'Fact 3 Unconfirmed' })).toHaveAttribute('aria-expanded', 'true')
   expect(invoke).not.toHaveBeenCalledWith('memory_fact_delete', expect.anything())
+  // The confirm takes the danger style every destructive confirm shares.
+  expect(screen.getByRole('button', { name: 'Confirm delete' })).toHaveAttribute('data-variant', 'danger')
   await fireEvent.click(screen.getByRole('button', { name: 'Confirm delete' }))
   await waitFor(() => expect(invoke).toHaveBeenCalledWith('memory_fact_delete', { id: 'f3' }))
   await waitFor(() => expect(screen.queryByRole('button', { name: 'Fact 3 Unconfirmed' })).not.toBeInTheDocument())

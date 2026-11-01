@@ -224,7 +224,7 @@
         <p>This phone loses remote control of this desktop.</p>
         {#if error}<p class="revoke-error" role="alert">{error}</p>{/if}
         <div class="pairing-actions">
-          <button type="button" disabled={revokePending} onclick={() => revokePair(pairing.pair.pair_id)}>{error ? 'Retry revoke' : 'Revoke'}</button>
+          <button type="button" class="danger" disabled={revokePending} onclick={() => revokePair(pairing.pair.pair_id)}>{error ? 'Retry revoke' : 'Revoke'}</button>
           <button type="button" disabled={revokePending} onclick={() => { if (!revokePending) { revoking = false; error = '' } }}>Cancel</button>
         </div>
       </div>
@@ -282,6 +282,8 @@
   .pairing-actions { display: flex; justify-content: flex-end; gap: 5px; margin-top: 6px; }
   .pairing-actions button { padding: 3px 6px; border-color: transparent; background: transparent; color: var(--ink); font: var(--text-12) var(--font-mono); }
   .pairing-actions button:hover:not(:disabled) { background: var(--faint); }
+  .pairing-actions button.danger { color: var(--danger); background: var(--danger-soft); border: 1px solid var(--danger-edge); }
+  .pairing-actions button.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--danger) 20%, var(--surface)); border-color: var(--danger); }
   .revoke-error { margin: 0; padding: 0 0 12px; color: var(--muted); font: var(--text-12) var(--font-mono); }
   button { font: inherit; font-size: var(--text-13); color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 5px 12px; cursor: pointer; min-height: 24px; min-width: 24px; }
   button:hover:not(:disabled) { background: var(--faint); }

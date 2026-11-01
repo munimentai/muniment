@@ -3384,6 +3384,7 @@ describe('thread name', () => {
     // Several rows confirm with explicit actions and a close control.
     const confirm = screen.getByLabelText('Delete 2 threads?')
     expect(within(confirm).getAllByRole('button').map((button) => button.textContent || button.getAttribute('aria-label'))).toEqual(['Close confirmation', 'Cancel', 'Delete 2 threads'])
+    expect(within(confirm).getByRole('button', { name: 'Delete 2 threads' })).toHaveClass('danger')
     await fireEvent.click(within(confirm).getByRole('button', { name: 'Delete 2 threads' }))
     await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'chat_delete_thread')).toHaveLength(2))
     expect(invoke).toHaveBeenCalledWith('chat_delete_thread', { threadId: 'thread-2' })

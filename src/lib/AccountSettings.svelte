@@ -220,7 +220,7 @@
                 <p><strong>{companion.claimed_kind}</strong> must be approved again before it can reconnect.</p>
                 {#if revokeError}<p class="revoke-error" role="alert">{revokeError}</p>{/if}
                 <div class="companion-actions">
-                  <button type="button" disabled={revokePending} onclick={() => revokeCompanion(companion.identity)} onkeydown={revokeConfirmKeydown}>{revokeError ? 'Retry revoke' : 'Revoke'}</button>
+                  <button type="button" class="danger" disabled={revokePending} onclick={() => revokeCompanion(companion.identity)} onkeydown={revokeConfirmKeydown}>{revokeError ? 'Retry revoke' : 'Revoke'}</button>
                   <button type="button" disabled={revokePending} onclick={cancelRevokeCompanion} onkeydown={revokeConfirmKeydown}>Cancel</button>
                 </div>
               </div>
@@ -320,5 +320,7 @@
   .companion-actions { display: flex; justify-content: flex-end; gap: 5px; margin-top: 6px; }
   .companion-actions button { padding: 3px 6px; border-color: transparent; background: transparent; color: var(--ink); font: var(--text-12) var(--font-mono); }
   .companion-actions button:hover:not(:disabled) { background: var(--faint); }
+  .companion-actions button.danger { color: var(--danger); background: var(--danger-soft); border: 1px solid var(--danger-edge); }
+  .companion-actions button.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--danger) 20%, var(--surface)); border-color: var(--danger); }
   .revoke-error { margin-top: 5px !important; color: var(--muted); }
 </style>

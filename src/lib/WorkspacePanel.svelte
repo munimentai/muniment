@@ -116,7 +116,7 @@
     <div class="file-view" class:hidden={selected !== tab.id}><WorkspaceFile {tauri} file={tab.file} {threadId} ondirty={dirty => markDirty(tab.id, dirty)} /></div>
   {/each}
 </aside>
-{#if closing}<ConfirmDialog title="Discard unsaved changes?" cancelLabel="Cancel" confirmLabel="Discard" onDecision={yes => { if (yes) close(closing, true); closing = null }}><p>Your edits to {tabs.find(t => t.id === closing)?.name} have not been saved.</p></ConfirmDialog>{/if}
+{#if closing}<ConfirmDialog title="Discard unsaved changes?" cancelLabel="Cancel" confirmLabel="Discard" destructive onDecision={yes => { if (yes) close(closing, true); closing = null }}><p>Your edits to {tabs.find(t => t.id === closing)?.name} have not been saved.</p></ConfirmDialog>{/if}
 <style>
   /* The tab strip fades the side its tabs clip past and hides its scrollbar. */
   .fade-viewport { scrollbar-width:none; --fade-left:0px; --fade-right:0px; mask-image:linear-gradient(to right, transparent, #000 var(--fade-left), #000 calc(100% - var(--fade-right)), transparent); }

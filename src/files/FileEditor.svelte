@@ -52,7 +52,7 @@
   {#if busy}<p role="status">{ready ? 'Saving file…' : 'Opening file…'}</p>{/if}
   <div class="editor" bind:this={host}></div>
 </section>
-{#if reloadPrompt}<ConfirmDialog title="Discard unsaved changes?" cancelLabel="Cancel" confirmLabel="Reload" onDecision={yes => yes ? reload() : reloadPrompt = false}><p>Reload the file from disk and discard your edits.</p></ConfirmDialog>{/if}
+{#if reloadPrompt}<ConfirmDialog title="Discard unsaved changes?" cancelLabel="Cancel" confirmLabel="Reload" destructive onDecision={yes => yes ? reload() : reloadPrompt = false}><p>Reload the file from disk and discard your edits.</p></ConfirmDialog>{/if}
 <style>
   .file-editor { display:flex; flex-direction:column; flex:1; min-height:0; min-width:0; }
   header { display:flex; align-items:center; gap:8px; padding:6px 10px; border-bottom:1px solid var(--border); }

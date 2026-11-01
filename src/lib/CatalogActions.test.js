@@ -19,6 +19,7 @@ it('confirms deletion and keeps errors visible',async()=>{
  await fireEvent.click(screen.getByRole('button',{name:'Actions for Scout'}))
  await fireEvent.click(screen.getByRole('menuitem',{name:'Delete'}))
  expect(onaction).not.toHaveBeenCalled()
+ expect(screen.getByRole('button',{name:'Confirm delete'})).toHaveClass('danger')
  await fireEvent.click(screen.getByRole('button',{name:'Confirm delete'}))
  expect(await screen.findByRole('alert')).toHaveTextContent('Run is active.')
 })

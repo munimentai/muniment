@@ -4483,7 +4483,7 @@
   {#if reviewing && currentThreadId}{#await loadReviewChanges() then module}{@const Review = module.default}<Review {tauri} runtime={composerRuntime} threadId={currentThreadId} turns={reviewTurns} initialRunId={reviewing.runId} onclose={() => { reviewing = null }} />{/await}{/if}
   {#if rewinding && currentThreadId}{#await loadRewindDialog() then module}{@const Rewind = module.default}<Rewind {tauri} runtime={composerRuntime} threadId={currentThreadId} runId={rewinding.runId} prompt={rewinding.prompt} ondone={finishRewind} onclose={() => { rewinding = null }} />{/await}{/if}
   {#if deletingThreadId}
-    <ConfirmDialog title={deletingThreadIds.length > 1 ? `Delete ${deletingThreadIds.length} threads?` : `Delete ${threadSummaries.find(t => t.threadId === deletingThreadId)?.title || 'this thread'}?`} cancelLabel="Cancel" confirmLabel={deletingThreadIds.length > 1 ? `Delete ${deletingThreadIds.length} threads` : 'Delete'} onDecision={approve => approve ? confirmDeleteThread(deletingThreadId) : cancelDeleteThread()}>
+    <ConfirmDialog title={deletingThreadIds.length > 1 ? `Delete ${deletingThreadIds.length} threads?` : `Delete ${threadSummaries.find(t => t.threadId === deletingThreadId)?.title || 'this thread'}?`} cancelLabel="Cancel" confirmLabel={deletingThreadIds.length > 1 ? `Delete ${deletingThreadIds.length} threads` : 'Delete'} destructive onDecision={approve => approve ? confirmDeleteThread(deletingThreadId) : cancelDeleteThread()}>
       {#if deletingThreadIds.length > 1}
         {@const titles = deletingThreadIds.map(id => threadSummaries.find(t => t.threadId === id)?.title || 'New thread')}
         <p>These threads and their messages will be deleted:</p>

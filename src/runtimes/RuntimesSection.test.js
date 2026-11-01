@@ -68,6 +68,7 @@ describe('Machines page', () => {
     // Remove on the phone's row revokes the pairing.
     await fireEvent.click(within(screen.getByRole('group', { name: 'Phone' })).getByRole('button', { name: 'More for Phone' }))
     await fireEvent.click(screen.getByRole('menuitem', { name: 'Remove' }))
+    expect(screen.getByRole('button', { name: 'Remove' })).toHaveAttribute('data-variant', 'danger')
     await fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
     await waitFor(() => expect(machineRows().map((group) => group.getAttribute('aria-label'))).toEqual(['This computer', 'Studio', 'Build box', 'Windows', 'iOS']))
     expect(await screen.findByText('Removed Phone.')).toBeInTheDocument()

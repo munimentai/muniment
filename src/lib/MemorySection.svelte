@@ -416,7 +416,7 @@
           <div class="fact-actions">
             {#if list === 'deleted'}<Button disabled={busy} aria-label={`Restore ${fact.title}`} onclick={() => restoreFact(fact.id)}>Restore</Button>
             {:else if deleting === fact.id}
-              <Button disabled={busy} onclick={() => removeFact(fact.id)}>Confirm delete</Button>
+              <Button variant="danger" disabled={busy} onclick={() => removeFact(fact.id)}>Confirm delete</Button>
               <Button onclick={() => { deleting = '' }}>Cancel</Button>
             {:else if fact.trust !== 'external'}
               <Button disabled={busy} onclick={() => editFact(fact)}>Edit</Button>

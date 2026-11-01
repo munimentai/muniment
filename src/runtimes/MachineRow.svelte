@@ -64,7 +64,7 @@
   </form>
 {:else if mode === 'remove'}
   <Row title="Remove {row.name}?" description="It leaves your machines and loses access to this computer. Its threads stay on it.">
-    <Button disabled={busy} onclick={remove}>Remove</Button>
+    <Button variant="danger" disabled={busy} onclick={remove}>Remove</Button>
     <button type="button" class="quiet" onclick={() => { mode = 'view' }}>Keep</button>
   </Row>
 {:else}

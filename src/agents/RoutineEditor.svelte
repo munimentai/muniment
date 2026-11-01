@@ -135,7 +135,7 @@
       </div>
       <div class="dialog-actions">
         {#if ondelete && original && !created}
-          {#if confirmDelete}<Button disabled={busy} onclick={remove}>Confirm delete</Button>{:else}<Button disabled={busy} onclick={() => { confirmDelete = true }}>Delete</Button>{/if}
+          {#if confirmDelete}<Button variant="danger" disabled={busy} onclick={remove}>Confirm delete</Button>{:else}<Button disabled={busy} onclick={() => { confirmDelete = true }}>Delete</Button>{/if}
         {/if}
         <span class="spacer"></span>
         {#if created}

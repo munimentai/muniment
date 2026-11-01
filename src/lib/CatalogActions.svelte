@@ -54,7 +54,7 @@
     {:else}
       <header><strong>Delete</strong><PopupClose label="Close delete" disabled={busy} onclick={close} /></header>
       <p>Delete “{name}”?</p><p class="muted">Saved files and chat history stay.</p>
-      <div class="buttons"><button onclick={() => choose('delete')} disabled={busy}>Confirm delete</button><button onclick={close} disabled={busy}>Cancel</button></div>
+      <div class="buttons"><button class="danger" onclick={() => choose('delete')} disabled={busy}>Confirm delete</button><button onclick={close} disabled={busy}>Cancel</button></div>
     {/if}
     {#if error}<p role="alert">{error}</p>{/if}
   </div>
@@ -62,7 +62,7 @@
 <style>
   header { display:flex; align-items:center; justify-content:space-between; padding:6px; font:var(--text-13) var(--font-human); }
   button { display:flex;align-items:center;gap:8px;border:0;border-radius:var(--radius-control);background:transparent;color:var(--ink);font:var(--text-13) var(--font-human);padding:7px 8px;cursor:pointer; }
-  button:hover:not(:disabled), .opened {background:var(--faint)} button:disabled {opacity:.5;cursor:default}
+  button:hover:not(:disabled), .opened {background:var(--faint)} .danger {color: var(--danger); background: var(--danger-soft); border: 1px solid var(--danger-edge);} .danger:hover:not(:disabled) {background: color-mix(in srgb, var(--danger) 20%, var(--surface)); border-color: var(--danger);} button:disabled {opacity:.5;cursor:default}
   .catalog-actions {padding:4px;color:var(--muted);flex:none}
   .catalog-menu {position:fixed;z-index:100;width:220px;padding:6px;box-sizing:border-box;}
   .catalog-menu > button {width:100%;text-align:left}
