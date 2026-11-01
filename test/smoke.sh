@@ -24,6 +24,12 @@ grep -Fq 'name: Desktop compile preflight (${{ matrix.platform }})' "$ci"
 grep -Fq "if: needs.changes.outputs.desktop == 'true'" "$ci"
 grep -Fq "needs.changes.outputs.installer == 'true'" "$ci"
 grep -Fq 'platform: [linux, windows, macos]' "$ci"
+# Windows and macOS check only the changes the classifier routes to them.
+grep -Fq 'windows: ${{ steps.changes.outputs.windows }}' "$ci"
+grep -Fq 'macos: ${{ steps.changes.outputs.macos }}' "$ci"
+grep -Fq "if: matrix.platform == 'linux' || (matrix.platform == 'windows' && needs.changes.outputs.windows == 'true') || (matrix.platform == 'macos' && needs.changes.outputs.macos == 'true')" "$ci"
+grep -Fq 'echo "windows=$windows"' scripts/ci/classify.sh
+grep -Fq 'echo "macos=$macos"' scripts/ci/classify.sh
 grep -Fq "cmd='cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets'" "$ci"
 windows_preflight=$(
   awk '

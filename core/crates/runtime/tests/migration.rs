@@ -10,19 +10,13 @@ use muniment_core::attach::{
 };
 use muniment_runtime_core::{run_migration_takeover, AttachListenerInputs, MigrationTakeoverError};
 use std::collections::HashMap;
-use std::fs;
 use std::io::{Read, Write};
-use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 mod common;
 use common::CI_WAIT;
-
-static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Default)]
 struct TestService;
@@ -37,24 +31,11 @@ impl ThreadListService for TestService {
     }
 }
 
-struct RuntimeDirectory(PathBuf);
+struct RuntimeDirectory(common::socket_path::SocketDirectory);
 
 impl RuntimeDirectory {
     fn new() -> Self {
-        let sequence = NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "muniment-runtime-migration-{}-{sequence}",
-            std::process::id()
-        ));
-        fs::create_dir(&path).unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
-        Self(path)
-    }
-}
-
-impl Drop for RuntimeDirectory {
-    fn drop(&mut self) {
-        fs::remove_dir_all(&self.0).unwrap();
+        Self(common::socket_path::SocketDirectory::new().unwrap())
     }
 }
 
