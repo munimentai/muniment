@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'vitest'
-import { userEvent } from 'vitest/browser'
+import { page, userEvent } from 'vitest/browser'
 import { flushSync, mount, unmount } from 'svelte'
 import '../styles/tokens.css'
 import '../styles/base.css'
@@ -27,21 +27,29 @@ function card(left) {
 
 const overlaps = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom
 
-it('names a rail mark beside the card, clear of the panel labels', async () => {
+it('names a rail mark right of the card, clear of the panel labels and the sidebar at its left', async () => {
+  const sidebar = document.createElement('nav')
+  Object.assign(sidebar.style, { position: 'absolute', left: '0', top: '0', width: '150px', height: '400px' })
+  document.body.append(sidebar)
+  await page.viewport(1000, 600)
   const target = card(160)
-  await userEvent.hover(target.querySelector('[role="tab"][aria-label="Model"]'))
+  await userEvent.hover(target.querySelector('[role="tab"][aria-label="History"]'))
   const tip = document.querySelector('.rail-tip')
-  expect(tip.textContent).toBe('Model')
+  expect(tip.textContent).toBe('History')
   const box = tip.getBoundingClientRect()
-  expect(box.right).toBeLessThanOrEqual(target.querySelector('.agent-card').getBoundingClientRect().left)
+  expect(box.left).toBeGreaterThanOrEqual(target.querySelector('.agent-card').getBoundingClientRect().right)
+  expect(box.right).toBeLessThanOrEqual(window.innerWidth)
+  expect(overlaps(box, sidebar.getBoundingClientRect())).toBe(false)
   for (const label of target.querySelectorAll('dt')) expect(overlaps(box, label.getBoundingClientRect())).toBe(false)
 })
 
-it('names a rail mark beside the right edge of a card at the window edge', async () => {
-  const target = card(0)
+it('names a rail mark beside the left edge of a card at the window\'s right edge', async () => {
+  await page.viewport(1000, 600)
+  const target = card(window.innerWidth - 345)
   await userEvent.hover(target.querySelector('[role="tab"][aria-label="Permissions"]'))
   const box = document.querySelector('.rail-tip').getBoundingClientRect()
-  expect(box.left).toBeGreaterThanOrEqual(target.querySelector('.agent-card').getBoundingClientRect().right)
+  expect(box.right).toBeLessThanOrEqual(target.querySelector('.agent-card').getBoundingClientRect().left)
+  expect(box.left).toBeGreaterThanOrEqual(0)
   for (const label of target.querySelectorAll('dt')) expect(overlaps(box, label.getBoundingClientRect())).toBe(false)
 })
 

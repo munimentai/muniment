@@ -157,18 +157,18 @@
     const rail = event.currentTarget
     void tick().then(() => rail?.querySelector('[aria-selected="true"]')?.focus())
   }
-  // A rail mark's name shows outside the card, left of its rail, so it never
-  // covers a panel's labels. The tip sits on the page, since the card clips
-  // what overflows it.
+  // A rail mark's name shows outside the card, right of it, so it never covers
+  // a panel's labels or the sidebar left of the page. The tip sits on the
+  // page, since the card clips what overflows it.
   let card = $state()
   function showTip(event, entry) {
     const mark = event.currentTarget.getBoundingClientRect()
-    tip = { label: entry.label, top: mark.top + mark.height / 2, right: window.innerWidth - card.getBoundingClientRect().left + 6 }
+    tip = { label: entry.label, top: mark.top + mark.height / 2, left: card.getBoundingClientRect().right + 6 }
   }
-  // A card at the window's left edge shows the tip beside its right edge.
+  // A card at the window's right edge shows the tip beside its left edge.
   function onPage(node) {
     document.body.append(node)
-    if (node.getBoundingClientRect().left < 4) Object.assign(node.style, { right: 'auto', left: `${card.getBoundingClientRect().right + 6}px` })
+    if (node.getBoundingClientRect().right > window.innerWidth - 4) Object.assign(node.style, { left: 'auto', right: `${window.innerWidth - card.getBoundingClientRect().left + 6}px` })
     return { destroy() { node.remove() } }
   }
   const kebabActions = $derived([{ id: 'profile', label: 'Open profile', icon: 'user' }, ...(agent.replica ? [] : [{ id: 'export', label: 'Export', icon: 'download' }])])
@@ -192,7 +192,7 @@
         </button>
       {/each}
     </div>
-    {#if tip}<span class="rail-tip" aria-hidden="true" use:onPage style:top="{tip.top}px" style:right="{tip.right}px">{tip.label}</span>{/if}
+    {#if tip}<span class="rail-tip" aria-hidden="true" use:onPage style:top="{tip.top}px" style:left="{tip.left}px">{tip.label}</span>{/if}
     <div class="panel-list" class:fill={panel === 'model'} id={`agent-${key}-panel`} role="tabpanel" aria-labelledby={`agent-${key}-${panel}-tab`} data-panel-id={panel} use:panelScroll>
       {#if readOnly}<p class="note" role="note"><LucideIcon name={agent.online === false ? 'globe-off' : 'refresh-cw'} variant="action" size={12} />{readOnlyNote}</p>{/if}
       {#if error}<p class="error" role="alert">{error}</p>{/if}
