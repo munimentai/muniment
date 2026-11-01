@@ -123,6 +123,7 @@
   import { createDictationController } from './lib/dictation-controller.js'
   import { ariaKeyShortcut, holdToTalkShortcut, isDictationActive } from './lib/dictation-state.js'
   import { createEntitlementToast } from './lib/entitlement-toast.js'
+  import { DELETED_THREAD_NOTE, markThreadDeleted, rememberDeletedThreads, threadDeleted, threadMissing } from './lib/deleted-threads.svelte.js'
   import { createComposerNotices } from './lib/composer-notices.js'
   import { createChatTranscriptController, transcriptKeys } from './lib/chat-transcript-controller.js'
   import { createTranscriptWindow, tailWindow, windowItems } from './lib/transcript-window.js'
@@ -1846,6 +1847,7 @@
     onThreadListError: (next, action) => { threadListError = next; threadListErrorAction = action },
     onHistoryError: (next, action) => { historyError = next; historyErrorAction = action; if (next) { threadShown = true; threadsListed = true } },
     onThreadSummaries: (next) => { threadSummaries = dedupeThreads(next, swarm); threadsListed = true },
+    onDeletedThreads: rememberDeletedThreads,
     onMoreThreads: (next) => { moreThreads = next },
     readProject: () => selectedProject,
     readAgent: () => selectedAgent,
@@ -3284,6 +3286,8 @@
   // covers it closes, also when it is the open thread already. A run that
   // names no thread yet is read again, since core names the thread once the
   // run starts.
+  // A run whose thread was deleted opens nothing: its row says so, and a
+  // link that does not read the list names the cause.
   async function openRunThread(run) {
     let threadId = run?.thread_id
     if (!threadId && run?.id && run?.agent_id) {
@@ -3291,12 +3295,25 @@
       threadId = runs.find((entry) => entry.id === run.id)?.thread_id
     }
     if (!threadId) throw new Error('The run has not started its thread yet. Try again in a moment.')
-    return showThread(threadId)
+    if (threadDeleted(threadId)) throw new Error(DELETED_THREAD_NOTE)
+    return showThread(threadId, { run: true })
   }
-  async function showThread(threadId) {
+  // A run's open reports its own failure, so the open thread keeps its view.
+  async function showThread(threadId, { run = false } = {}) {
     profileHeldFor = threadId
     profileSide = { shown: null, parked: null }
-    if ((threadId !== currentThreadId || freshThread) && !await chatController.openThread(threadId, true)) return false
+    if (threadId !== currentThreadId || freshThread) {
+      let failure = null
+      const report = run ? (error) => { failure = error } : null
+      if (!await chatController.openThread(threadId, report)) {
+        if (!failure) return false
+        if (threadMissing(failure)) {
+          markThreadDeleted(threadId)
+          throw new Error(DELETED_THREAD_NOTE)
+        }
+        throw new Error(String(failure?.message ?? failure))
+      }
+    }
     await tick()
     fullPage = null; agentsOpen = false; projectsOpen = false; artifactsOpen = false
     agentProfileOpen = false; profileOnlyAgent = null

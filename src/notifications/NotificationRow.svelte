@@ -1,9 +1,11 @@
 <script>
   // One run on the page: a status icon in the state's color, the agent, what
   // started it with its icon, its machine with its stoplight, one line of its
-  // result and its time. The row opens the run's thread.
+  // result and its time. The row opens the run's thread, and a run whose
+  // thread was deleted says so and opens nothing.
   import LucideIcon from '../lib/LucideIcon.svelte'
   import MachineChip from '../runtimes/MachineChip.svelte'
+  import { DELETED_THREAD_NOTE, threadDeleted } from '../lib/deleted-threads.svelte.js'
   import { machineState, runtimeFor } from '../runtimes/runtimes.js'
   import { clockTime, resultLine, runWithMachine, statusMark, triggerIcon, triggerLabel } from './notifications.js'
   let { entry, showMachine = false, runtimeList = null, onopen = () => {} } = $props()
@@ -11,10 +13,11 @@
   const runtime = $derived(showMachine ? runtimeFor(runtimeList, entry.machine) : null)
   const where = $derived(showMachine ? `, on ${entry.machine.name}${runtime ? `, ${machineState(runtime)}` : ''}` : '')
   const at = $derived(entry.run.updated_at)
+  const gone = $derived(threadDeleted(entry.run.thread_id))
 </script>
 
 <li class="notification-row" data-status={entry.status} data-unread={entry.unread ? 'true' : undefined}>
-  <button type="button" disabled={!entry.run.thread_id} onclick={() => onopen(runWithMachine(entry.run, entry.machine))} aria-label={`${entry.agent_name || 'Agent'}, ${mark.label}${entry.unread ? ', unread' : ''}${where}: ${resultLine(entry)}`}>
+  <button type="button" disabled={!entry.run.thread_id || gone} onclick={() => onopen(runWithMachine(entry.run, entry.machine))} aria-label={`${entry.agent_name || 'Agent'}, ${mark.label}${entry.unread ? ', unread' : ''}${where}: ${resultLine(entry)}${gone ? ` ${DELETED_THREAD_NOTE}` : ''}`}>
     <span class="status"><LucideIcon name={mark.icon} size={16} variant="action" /></span>
     <span class="main">
       <span class="line">
@@ -23,6 +26,7 @@
         {#if showMachine}<MachineChip machine={entry.machine} {runtimeList} />{/if}
       </span>
       <span class="result">{resultLine(entry)}</span>
+      {#if gone}<span class="gone">{DELETED_THREAD_NOTE}</span>{/if}
     </span>
     <time datetime={at}>{clockTime(at)}</time>
   </button>
@@ -45,5 +49,6 @@
   [data-unread="true"] strong::after { content: ''; display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: var(--radius-chip); background: var(--ink); vertical-align: middle; }
   .chip { display: inline-flex; align-items: center; gap: 4px; padding: 0 6px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--muted); font-size: var(--text-12); line-height: 18px; }
   .result { overflow: hidden; color: var(--muted); font-size: var(--text-13); text-overflow: ellipsis; white-space: nowrap; }
+  .gone { color: var(--muted); font-size: var(--text-12); }
   time { flex: none; color: var(--muted); font-size: var(--text-12); }
 </style>

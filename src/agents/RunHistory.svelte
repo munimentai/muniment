@@ -23,6 +23,7 @@
   import { runOutcome, runTimeLabel, runTitle } from '../lib/agent-labels.js'
   import { runFailureText } from '../lib/run-failure.js'
   import { agentRequest } from './agent-runtime.js'
+  import { DELETED_THREAD_NOTE, threadDeleted } from '../lib/deleted-threads.svelte.js'
   import { loadReplays, replayRun } from './replays.js'
 
   let { tauri, agent, runs = [], limit = 20, complete = false, embedded = false, disabled = false, onopen = null, onrun = () => {} } = $props()
@@ -107,10 +108,11 @@
       {@const outcome = runOutcome(run)}
       {@const replay = replayFor(run)}
       {@const when = `${runTimeLabel(startedAt(run), now)}${outcome ? ` · ${outcome}` : ''}`}
+      {@const gone = threadDeleted(run.thread_id)}
       <li class="run" data-light={runLight(run)}>
-        <button type="button" class="open" aria-label={`${title}, ${when}`} disabled={!onopen} onclick={() => onopen(run)}>
+        <button type="button" class="open" aria-label={`${title}, ${when}${gone ? `. ${DELETED_THREAD_NOTE}` : ''}`} disabled={!onopen || gone} onclick={() => onopen(run)}>
           <span class="light"><LucideIcon name={runIcon(run)} variant="action" size={14} /></span>
-          <span class="text"><span class="title">{title}</span><time datetime={startedAt(run)}>{when}</time>{#if run.status === 'failed' && runFailureText(run.error)}<span class="reason">{runFailureText(run.error)}</span>{/if}</span>
+          <span class="text"><span class="title">{title}</span><time datetime={startedAt(run)}>{when}</time>{#if run.status === 'failed' && runFailureText(run.error)}<span class="reason">{runFailureText(run.error)}</span>{/if}{#if gone}<span class="reason">{DELETED_THREAD_NOTE}</span>{/if}</span>
         </button>
         {#if replay}<button type="button" class="retry" aria-label={`Retry ${title}`} disabled={disabled || !!busy} onclick={() => retry(replay)}><LucideIcon name={busy === replay.replay_id ? 'loader-circle' : 'refresh-cw'} variant="action" size={14} /></button>{/if}
       </li>

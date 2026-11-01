@@ -105,6 +105,29 @@ function setup(invoke = vi.fn(), { threadId = null, summaries = [], projectId = 
   }
 }
 
+describe('deleted threads', () => {
+  it('passes on the threads the first page names as deleted', async () => {
+    const onDeletedThreads = vi.fn()
+    const invoke = vi.fn(async (command) => command === 'chat_thread_summaries' ? { summaries: [], nextCursor: null, deletedThreadIds: ['gone'] } : null)
+    const controller = createChatController({ invoke, listen: vi.fn(async () => vi.fn()), readMessages: () => [], readActive: () => null, readAnnounced: () => null, readDraft: () => '', readFiles: () => [], onMessages: vi.fn(), onActive: vi.fn(), onAnnounce: vi.fn(), onHistoryError: vi.fn(), onDeletedThreads })
+    await controller.refreshThreads()
+    await controller.loadHistory()
+    expect(onDeletedThreads.mock.calls).toEqual([[['gone']], [['gone']]])
+    controller.cleanup()
+  })
+
+  it('reports a failed open to its caller and leaves the open thread\'s view alone', async () => {
+    const missing = 'Muniment cannot find this thread. Open another thread.'
+    const invoke = vi.fn((command) => command === 'chat_select_thread' ? Promise.reject(missing) : Promise.resolve(null))
+    const context = setup(invoke, { threadId: 'thread-1' })
+    const onFailure = vi.fn()
+    await expect(context.controller.openThread('thread-gone', onFailure)).resolves.toBe(false)
+    expect(onFailure).toHaveBeenCalledWith(missing)
+    expect(context.onHistoryError).not.toHaveBeenCalledWith(expect.stringMatching(/./), expect.anything(), true)
+    context.controller.cleanup()
+  })
+})
+
 describe('submission admission', () => {
   const busy = 'Muniment is busy with another request. Try again.'
 

@@ -16,6 +16,7 @@
   import NotificationRow from './NotificationRow.svelte'
   import MachineChip from '../runtimes/MachineChip.svelte'
   import { machineRefs } from '../usage/usage.js'
+  import { threadDeleted } from '../lib/deleted-threads.svelte.js'
   import { NOTIFICATION_VIEWS, dayLabel, markAllRead, readNotifications, runWithMachine, scheduleTime } from './notifications.js'
 
   let { tauri, runtimeList = null, agents = [], swarm = null, refreshKey = 0, read = null, onopen = () => {}, onapprovalopen = null, onread = () => {}, onmodels = null } = $props()
@@ -112,7 +113,7 @@
         <Group heading="Running" count={page.running.length} plain>
           <ul class="running" aria-label="Running now">
             {#each page.running as entry (`${entry.machine.id}:${entry.run.id}`)}
-              <li><button type="button" disabled={!entry.run.thread_id} onclick={() => onopen(runWithMachine(entry.run, entry.machine))}>
+              <li><button type="button" disabled={!entry.run.thread_id || threadDeleted(entry.run.thread_id)} onclick={() => onopen(runWithMachine(entry.run, entry.machine))}>
                 <span class="live"><LucideIcon name="loader-circle" size={14} variant="action" /></span>
                 <AgentAvatar agent={agentFor(entry.run.agent_id)} size={18} tooltip={false} />
                 <span>{entry.agent_name || 'Agent'}</span>

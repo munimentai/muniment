@@ -5,8 +5,10 @@ import NotificationsPage from './NotificationsPage.svelte'
 import SidebarActions from '../lib/SidebarActions.svelte'
 import { DEFAULT_NOTIFY, isNotificationsShortcut, notifyAllowed, notifyPreferences, pointsToModels, resultLine, triggerIcon, triggerLabel } from './notifications.js'
 import { machineLight } from '../lib/status-tone.js'
+import { forgetDeletedThreads, rememberDeletedThreads } from '../lib/deleted-threads.svelte.js'
 
 afterEach(cleanup)
+afterEach(forgetDeletedThreads)
 
 const at = (minutes) => new Date(Date.now() - minutes * 60_000).toISOString()
 const run = (id, status, extra = {}) => ({ id, agent_id: 'scout', thread_id: `thread-${id}`, trigger: { kind: 'cron' }, status, created_at: at(5), updated_at: at(4), result_summary: null, silent: false, error: null, ...extra })
@@ -187,6 +189,20 @@ describe('Notifications page', () => {
     const failed = screen.getByRole('button', { name })
     expect(failed.querySelector('.machine-chip')).toHaveTextContent('This computer')
     expect(markup(failed)).toBe(drawn)
+  })
+
+  it('says a run\'s thread was deleted and offers no way to open it', async () => {
+    rememberDeletedThreads(['thread-r5', 'thread-r6'])
+    const failed = { kind: 'failed', id: 'r6', machine: local, agent_id: 'scout', agent_name: 'Tauri Morning', run: run('r6', 'failed'), detail: 'The log was missing.', at: at(2) }
+    render(NotificationsPage, { tauri: { invoke: vi.fn(async () => page({ needs_you: [failed] })) }, runtimeList: null })
+    const item = await screen.findByRole('article', { name: 'Run failed: Tauri Morning' })
+    expect(item).toHaveTextContent("This run's thread was deleted.")
+    expect(within(item).getByRole('button', { name: 'Open thread' })).toBeDisabled()
+    const row = screen.getByRole('button', { name: "Lead scout, Failed: The log was missing. This run's thread was deleted." })
+    expect(row).toBeDisabled()
+    expect(row.querySelector('.gone')).toHaveTextContent("This run's thread was deleted.")
+    // A run whose thread stays opens as before.
+    expect(screen.getByRole('button', { name: 'Lead scout, Done, unread: Found 4 leads.' })).not.toBeDisabled()
   })
 
   it('asks again for the failed view', async () => {

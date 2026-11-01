@@ -496,8 +496,9 @@ it('lists runs in one history with stoplight colors, retries a failed run core k
   // A failed row names why the run failed.
   expect(failed).toHaveTextContent(/· FailedThe model could not complete this reply\.$/)
   expect(history).not.toHaveTextContent(/UTC|GMT/)
+  // A run opens through its run, which names a thread that was deleted.
   await fireEvent.click(failed)
-  expect(onopen).toHaveBeenCalledWith('t-fail')
+  expect(onopenrun).toHaveBeenCalledWith(expect.objectContaining({ id: 'rp1', thread_id: 't-fail' }))
 
   await fireEvent.click(within(history).getByRole('button', { name: 'Retry Build finished' }))
   await waitFor(() => expect(requests).toContainEqual({ runtime: 'local', operation: 'agent.replay', body: { id: 'scout', replay_id: 'rp1' } }))
@@ -511,7 +512,8 @@ it('lists runs in one history with stoplight colors, retries a failed run core k
   expect(onopenrun).toHaveBeenCalledWith(expect.objectContaining({ id: 'run-r' }))
   await view.rerender({ runs: [{ ...run, runtimeId: 'local', status: 'running', thread_id: 'thread-r' }, done] })
   await fireEvent.click(within(history).getByRole('button', { name: /^Retry, Today at/ }))
-  expect(onopen).toHaveBeenCalledWith('thread-r')
+  expect(onopenrun).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'run-r', thread_id: 'thread-r' }))
+  expect(onopen).not.toHaveBeenCalled()
 })
 
 it('says when the agent has no runs yet and shows its activity', async () => {

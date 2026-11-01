@@ -182,9 +182,11 @@
     void closeMenu()
     void action(() => exportAgent(tauri, agent, format))
   }
+  // A run opens through `onopenrun` when the host gives one, which names a
+  // deleted thread, else by its thread id.
   function openRun(entry) {
-    if (entry.thread_id && onopen) return action(() => onopen(entry.thread_id))
     if (onopenrun) return action(() => onopenrun(entry))
+    if (entry.thread_id && onopen) return action(() => onopen(entry.thread_id))
   }
 </script>
 <aside data-panel="agent" class="profile" aria-label="Agent profile" bind:this={panel}>

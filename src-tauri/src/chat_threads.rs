@@ -355,7 +355,8 @@ fn thread_runtimes(
 }
 
 /// Merges the pages that answered and records where each listed thread
-/// lives, which later actions on a thread read.
+/// lives, which later actions on a thread read. `deletedThreadIds` names the
+/// threads deleted here, so a run whose thread is gone says so in the window.
 #[cfg(any(unix, target_os = "windows"))]
 fn record_thread_list(attach: &AttachCompanionState, pages: Vec<RuntimePage>) -> serde_json::Value {
     if let Some(deleted) = local_deleted_threads(&pages) {
@@ -365,7 +366,11 @@ fn record_thread_list(attach: &AttachCompanionState, pages: Vec<RuntimePage>) ->
         attach.remember_local_fleet_id(id);
     }
     let local_answered = pages.iter().any(|page| page.runtime_id == LOCAL_RUNTIME);
-    let merged = merge_thread_pages(pages, &attach.deleted_threads());
+    let deleted = attach.deleted_threads();
+    let mut merged = merge_thread_pages(pages, &deleted);
+    let mut deleted: Vec<String> = deleted.into_iter().collect();
+    deleted.sort();
+    merged["deletedThreadIds"] = deleted.into();
     if let Some(listed) = merged["summaries"].as_array() {
         let runtimes = thread_runtimes(listed, attach.local_fleet_id().as_deref());
         // A list without this computer's runtime moves none of its threads
@@ -1696,5 +1701,6 @@ mod tests {
             ],
         );
         assert_eq!(merged["summaries"], serde_json::json!([]));
+        assert_eq!(merged["deletedThreadIds"], serde_json::json!(["gone"]));
     }
 }

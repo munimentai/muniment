@@ -3,7 +3,9 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import '@testing-library/jest-dom/vitest'
 import AgentCard from './AgentCard.svelte'
 import { saveTimeSetting } from '../lib/time-format.svelte.js'
+import { forgetDeletedThreads, rememberDeletedThreads } from '../lib/deleted-threads.svelte.js'
 afterEach(cleanup)
+afterEach(forgetDeletedThreads)
 // Times read in one zone on a 24-hour clock, whatever the computer uses.
 beforeEach(() => saveTimeSetting(null, { zone: 'UTC', clock: '24h' }))
 afterEach(() => saveTimeSetting(null, { zone: '', clock: '' }))
@@ -290,6 +292,11 @@ it('lists runs in its History as the profile does and opens a run\'s conversatio
   expect(machineCore.tauri.invoke).toHaveBeenCalledWith('agent_request', { runtime: 'box', operation: 'agent.runs', body: { agent_id: 'scout', limit: 20 } })
   await fireEvent.click(row)
   expect(onopenrun).toHaveBeenCalledWith(expect.objectContaining({ id: 'r1', thread_id: 't1', runtimeId: 'box' }))
+  // A run whose thread was deleted says so and opens nothing.
+  rememberDeletedThreads(['t0'])
+  await waitFor(() => expect(rows[1]).toBeDisabled())
+  expect(rows[1]).toHaveTextContent("This run's thread was deleted.")
+  expect(rows[1]).toHaveAccessibleName(/This run's thread was deleted\.$/)
 })
 
 it('pages its History: Show older reads the runs before the oldest one listed', async () => {

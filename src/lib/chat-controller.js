@@ -72,6 +72,8 @@ export function createChatController({
   onHistoryError: publishHistoryError,
   onHistoryStart = () => {},
   onThreadSummaries = () => {},
+  // The threads the local runtime names as deleted, from each first page.
+  onDeletedThreads = () => {},
   onMoreThreads = () => {},
   onThreadListError = () => {},
   readProject = () => null,
@@ -298,6 +300,7 @@ export function createChatController({
         invoke('chat_current_thread'),
       ])
       if (destroyed || sequence !== threadRefreshSequence) return false
+      onDeletedThreads(firstPage.deletedThreadIds ?? [])
       const refreshedThreadIds = new Set(firstPage.summaries.map((summary) => summary.threadId))
       // A machine that did not answer, such as one that revoked this device, leaves its threads out.
       const answered = Array.isArray(firstPage.runtimeIds) ? new Set(firstPage.runtimeIds) : null
@@ -453,8 +456,9 @@ export function createChatController({
     onHistoryStart()
     onAnnounce(null)
     try {
-      const { summaries, nextCursor } = await invoke('chat_thread_summaries', { limit: 20 })
+      const { summaries, nextCursor, deletedThreadIds } = await invoke('chat_thread_summaries', { limit: 20 })
       if (destroyed) return
+      onDeletedThreads(deletedThreadIds ?? [])
       historyLoadFailed = false
       threadPageCount = 1
       nextThreadCursor = nextCursor
@@ -530,8 +534,9 @@ export function createChatController({
     }
   }
 
-  // A quiet open reports no failure, since its caller falls back to another thread.
-  async function openThread(threadId, select = false, restoreSelection = false, quiet = false) {
+  // A quiet open reports no failure, since its caller falls back to another
+  // thread or names the failure itself through `onFailure`.
+  async function openThread(threadId, select = false, restoreSelection = false, quiet = false, onFailure = null) {
     if (switchingThread || holdsThread()) return
     threadRefreshSequence += 1
     switchingThread = true
@@ -624,6 +629,7 @@ export function createChatController({
         // The transcript stays on the run the user left, so it takes the
         // events that landed while the other thread loaded.
         drainVisibleRun()
+        if (quiet) onFailure?.(error)
         if (!quiet) onHistoryError(historyReadError(error), {
           label: 'Restore history',
           run: () => openThread(threadId, select || switchBlocked, restoreSelection),
@@ -1108,5 +1114,5 @@ export function createChatController({
     liveText.clear()
   }
 
-  return { start, loadHistory, loadOlderThreads, openThread: (threadId) => openThread(threadId, true), refreshOpenThread, refreshThreads, recoverChatEvents, historyReadFailed: () => historyLoadFailed, newThread: () => newThread(), sendNewThread, renameThread, deleteThread, send, cancel, resume, queue, cleanup }
+  return { start, loadHistory, loadOlderThreads, openThread: (threadId, onFailure) => typeof onFailure === 'function' ? openThread(threadId, true, false, true, onFailure) : openThread(threadId, true), refreshOpenThread, refreshThreads, recoverChatEvents, historyReadFailed: () => historyLoadFailed, newThread: () => newThread(), sendNewThread, renameThread, deleteThread, send, cancel, resume, queue, cleanup }
 }

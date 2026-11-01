@@ -14,6 +14,7 @@
   import { resetsIn } from '../usage/usage.js'
   import { runFailureRaw, runFailureText } from '../lib/run-failure.js'
   import { clockTime, needsMark, pointsToModels, runWithMachine } from './notifications.js'
+  import { DELETED_THREAD_NOTE, threadDeleted } from '../lib/deleted-threads.svelte.js'
 
   let { tauri, item, agents = [], swarm = null, runtimeList = null, showMachine = false, now = Date.now(), onopen = () => {}, onanswered = () => {}, onapprovalopen = null, onmodels = null } = $props()
   const mark = $derived(needsMark(item.kind))
@@ -21,6 +22,8 @@
   // A failed run reads as its thread reply reads, with a stored raw answer behind Show log.
   const failure = $derived(item.kind === 'failed' ? runFailureText(item.detail) : '')
   const failureLog = $derived(item.kind === 'failed' ? runFailureRaw(item.detail) : [])
+  // A run whose thread was deleted keeps its item, says so, and turns Open thread off.
+  const gone = $derived(threadDeleted(item.run?.thread_id))
   const resetPassed = $derived(Number.isFinite(item.resets_at_ms) && item.resets_at_ms <= now)
   let reply = $state('')
   let busy = $state(false)
@@ -77,23 +80,24 @@
         <p class="detail">{Number.isFinite(item.resets_at_ms) ? (resetPassed ? 'The allowance reset.' : `${resetsIn(item.resets_at_ms, now)}.`) : 'Wait for the reset or add an account.'}</p>
         <div class="actions">
           <Button icon="play" disabled={busy || (Number.isFinite(item.resets_at_ms) && !resetPassed)} onclick={runAgain}>{resetPassed || !Number.isFinite(item.resets_at_ms) ? 'Run again' : 'Run again at reset'}</Button>
-          <Button onclick={() => onopen(runWithMachine(item.run, item.machine))}>Open thread</Button>
+          <Button disabled={gone} onclick={() => onopen(runWithMachine(item.run, item.machine))}>Open thread</Button>
         </div>
       {:else if item.kind === 'failed'}
         <p class="detail">{failure || 'The run failed.'}</p>
         {#if failureLog.length}<details class="log"><summary>Show log</summary>{#each failureLog as entry, index (index)}<pre>{entry}</pre>{/each}</details>{/if}
         <div class="actions">
           {#if onmodels && pointsToModels(failure)}<Button icon="settings" onclick={() => onmodels()}>Open Models</Button>{/if}
-          <Button disabled={!item.run?.thread_id} onclick={() => onopen(runWithMachine(item.run, item.machine))}>Open thread</Button>
+          <Button disabled={!item.run?.thread_id || gone} onclick={() => onopen(runWithMachine(item.run, item.machine))}>Open thread</Button>
         </div>
       {:else}
         {#if item.detail}<p class="detail">{item.detail}</p>{/if}
         <form class="reply" onsubmit={(event) => { event.preventDefault(); void send() }}>
           <input aria-label={`Reply to ${item.agent_name || 'the agent'}`} placeholder="Reply" bind:value={reply} disabled={busy} />
           <Button type="submit" disabled={busy || !reply.trim()}>Send</Button>
-          <Button onclick={() => onopen(runWithMachine(item.run, item.machine))}>Open thread</Button>
+          <Button disabled={gone} onclick={() => onopen(runWithMachine(item.run, item.machine))}>Open thread</Button>
         </form>
       {/if}
+      {#if gone}<p class="note">{DELETED_THREAD_NOTE}</p>{/if}
       {#if note}<p class="note" role="status">{note}</p>{/if}
     </div>
   </article>

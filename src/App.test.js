@@ -16,6 +16,7 @@ import { historyMessages } from './lib/chat-state.js'
 import { SCAN_RETRY_DELAYS } from './lib/first-run-providers.js'
 import { cronLabel } from './agents/cron.js'
 import { shown } from './lib/focus-landing.js'
+import { forgetDeletedThreads } from './lib/deleted-threads.svelte.js'
 
 const extensionInstances = vi.hoisted(() => [])
 vi.mock('./extend/ComposerExtensions.svelte', async (importOriginal) => {
@@ -10180,6 +10181,40 @@ it('names the Usage or Notifications page in the title bar and clears the thread
   // Leaving the page shows the thread again.
   await fireEvent.click(screen.getByRole('button', { name: 'Usage' }))
   await waitFor(() => expect(document.querySelector('.active-thread')).toHaveTextContent('Until Midnight'))
+})
+
+it('names a run whose thread was deleted in its Notifications row instead of opening nothing', async () => {
+  onTestFinished(forgetDeletedThreads)
+  const fallback = invoke.getMockImplementation()
+  const local = { id: 'local', name: 'This computer' }
+  const run = (id) => ({ id, agent_id: 'scout', thread_id: `thread-${id}`, trigger: { kind: 'cron' }, status: 'failed', created_at: new Date().toISOString(), updated_at: new Date().toISOString(), result_summary: null, silent: false, error: 'The log was missing.' })
+  const entry = (id) => ({ status: 'failed', machine: local, agent_name: 'Tauri Morning', run: run(id), unread: false })
+  const page = { needs_you: [], running: [], days: [{ day: 'today', entries: [entry('gone'), entry('listed')] }], upcoming: [], counts: { needs_you: 0, running: 0, failed: 2, unread: 0 }, machines: [local], agents: [] }
+  invoke.mockImplementation((command, args) => {
+    if (command === 'notifications_list') return Promise.resolve(page)
+    if (command === 'chat_select_thread' && args.threadId === 'thread-gone') return Promise.reject('Muniment cannot find this thread. Open another thread.')
+    return fallback(command, args)
+  })
+  // The local runtime's thread list names the threads deleted here.
+  const shell = window.__TAURI__.core.invoke
+  window.__TAURI__.core.invoke = (command, ...args) => command === 'chat_thread_summaries'
+    ? shell(command, ...args).then((answer) => ({ ...answer, deletedThreadIds: ['thread-listed'] }))
+    : shell(command, ...args)
+  render(App)
+  await findReadyWorkspaceComposer()
+  await fireEvent.click(within(screen.getByRole('toolbar', { name: 'Settings, usage and notifications' })).getByRole('button', { name: 'Notifications' }))
+  const today = await screen.findByRole('region', { name: 'Today' })
+  // A thread the runtime's list names as deleted is off from the start.
+  const listed = within(today).getByRole('button', { name: /^Tauri Morning, Failed: .*This run's thread was deleted\.$/ })
+  expect(listed).toBeDisabled()
+  expect(listed).toHaveTextContent("This run's thread was deleted.")
+  // A thread the runtime no longer finds turns its row off once clicked.
+  const gone = within(today).getAllByRole('button', { name: /^Tauri Morning, Failed/ }).find((button) => !button.disabled)
+  await fireEvent.click(gone)
+  await waitFor(() => expect(gone).toBeDisabled())
+  expect(gone).toHaveTextContent("This run's thread was deleted.")
+  expect(document.querySelector('.catalog-title')).toHaveTextContent('Notifications')
+  expect(screen.queryByRole('button', { name: 'Restore history' })).toBeNull()
 })
 
 it('keeps the foot row on the Settings side, where Settings is the current page', async () => {
