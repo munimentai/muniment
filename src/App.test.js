@@ -3587,6 +3587,40 @@ describe('thread name', () => {
     expect(screen.getByPlaceholderText('Ask anything')).toHaveFocus()
   })
 
+  it('opens the newest remaining thread after the open thread is deleted from its menu, and Back to threads keeps it', async () => {
+    threadSummaryResult = [
+      { threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' },
+      { threadId: 'thread-2', title: 'Garden plan', updatedAt: '' },
+    ]
+    const pages = {
+      'thread-1': [{ runId: 'run-1', phase: 'complete', prompt: 'Question', text: 'Answer', toolActivity: [] }],
+      'thread-2': [{ runId: 'run-2', phase: 'complete', prompt: 'Plant what?', text: 'Tomatoes', toolActivity: [] }],
+    }
+    const fallback = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, payload) => {
+      if (command === 'chat_thread_open') return pages[payload.threadId] ?? []
+      if (command === 'chat_delete_thread' || command === 'chat_select_thread') return undefined
+      return fallback(command, payload)
+    })
+    render(App)
+    await screen.findByText('Answer')
+    await sidebarRows()
+
+    await openDeleteMenu('Lease renewal')
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+
+    expect(await screen.findByText('Tomatoes')).toBeInTheDocument()
+    expect(invoke).toHaveBeenCalledWith('chat_delete_thread', { threadId: 'thread-1' })
+    expect(screen.queryByText('Answer')).not.toBeInTheDocument()
+    expect(document.querySelector('[data-fresh-thread]')).toBeNull()
+
+    await openSettings()
+    await fireEvent.click(screen.getByRole('button', { name: 'Back to threads' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument())
+    expect(screen.getByText('Tomatoes')).toBeInTheDocument()
+    expect(invoke.mock.calls.filter(([command, payload]) => command === 'chat_thread_open' && payload.threadId === 'thread-1')).toHaveLength(1)
+  })
+
   it('keeps the row and reports a failed delete', async () => {
     threadSummaryResult = [{ threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' }]
     let deleteAttempts = 0

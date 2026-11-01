@@ -2545,12 +2545,16 @@
     if (deletePending) return
     deletePending = true
     const targets = deletingThreadIds.length ? deletingThreadIds : [threadId]
+    // Deleting the thread on screen clears the selection, so the thread it
+    // showed is read first, and the newest remaining thread takes its place,
+    // as after an agent delete.
+    const shown = freshThread ? null : currentThreadId ?? threadSummaries[0]?.threadId ?? null
     const removed = []
     for (const id of targets) {
       if (!(await chatController.deleteThread(id))) break
       removed.push(id)
     }
-    await leaveThreads(removed)
+    await leaveThreads(removed, { ownsView: !!shown && removed.includes(shown) })
     // Core deletes a creation chat's record with its thread.
     if (targets.some((id) => creations.some((item) => item.threadId === id))) void refreshCreations()
     deletePending = false
