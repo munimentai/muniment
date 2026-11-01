@@ -61,9 +61,10 @@ pub struct RuntimeAttachState {
     session_names: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
-/// The pass over Home at start: it removes the folders deleted agents left
-/// that hold only Muniment's own files and the memory indexes they left, and
-/// names legacy session folders.
+/// The pass over Home at start: it removes the folders deleted agents and
+/// deleted threads left that hold only Muniment's own files and the memory
+/// indexes deleted agents left, forgets name records whose folder is gone,
+/// and names legacy session folders.
 fn tidy_home(profile: &Path) -> Result<(), String> {
     match muniment_core::agents::remove_deleted_folders(profile) {
         Ok(removed) if !removed.is_empty() => muniment_core::runtime_eprintln!(
@@ -83,6 +84,16 @@ fn tidy_home(profile: &Path) -> Result<(), String> {
         Ok(_) => {}
         Err(error) => muniment_core::runtime_eprintln!(
             "muniment-runtime: agent_memory outcome=failed error={error}"
+        ),
+    }
+    match muniment_core::projects::remove_deleted_thread_folders(profile) {
+        Ok(removed) if !removed.is_empty() => muniment_core::runtime_eprintln!(
+            "muniment-runtime: thread_folders removed={}",
+            removed.len()
+        ),
+        Ok(_) => {}
+        Err(error) => muniment_core::runtime_eprintln!(
+            "muniment-runtime: thread_folders outcome=failed error={error}"
         ),
     }
     muniment_core::projects::migrate_session_names(profile)

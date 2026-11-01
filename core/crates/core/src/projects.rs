@@ -464,6 +464,56 @@ pub fn name_thread_workspace(
     crate::workspace_names::resolve(config, &sessions, thread, Some(title), None).map(Some)
 }
 
+/// The Home's session folder, when Home is set and the folder reads as one.
+fn sessions_root(profile: &Path) -> Result<Option<PathBuf>, String> {
+    let Some(home) = crate::home::configured_home(profile).map_err(|e| e.to_string())? else {
+        return Ok(None);
+    };
+    let root = home.join("sessions");
+    Ok((root.is_dir() && !root.is_symlink()).then_some(root))
+}
+
+/// Removes a deleted thread's own session folder when it holds only
+/// Muniment's own files, and its name record with it. A folder with the
+/// user's files stays, and the answer names it.
+pub fn remove_thread_folder(profile: &Path, thread: &str) -> Result<Option<PathBuf>, String> {
+    let Some(root) = sessions_root(profile)? else {
+        return Ok(None);
+    };
+    crate::workspace_names::remove_recorded(profile, &root, thread, crate::agents::remove_folder)
+}
+
+/// The pass at start over the session folders: it removes each folder of a
+/// thread the journal deleted that holds only Muniment's own files, and
+/// forgets each name record whose folder is gone. It never removes a folder
+/// that holds the user's files. Answers the names of the removed folders.
+pub fn remove_deleted_thread_folders(profile: &Path) -> Result<Vec<String>, String> {
+    let mut removed = Vec::new();
+    if let (Some(root), true) = (
+        sessions_root(profile)?,
+        profile.join("runs.sqlite3").exists(),
+    ) {
+        let mut journal = crate::journal::RunJournal::open(profile.join("runs.sqlite3"))
+            .map_err(|e| e.to_string())?;
+        for thread in crate::workspace_names::recorded_ids(profile, &root)? {
+            if !journal.thread_deleted(&thread).map_err(|e| e.to_string())? {
+                continue;
+            }
+            let Some(name) = crate::workspace_names::recorded(profile, &root, &thread)? else {
+                continue;
+            };
+            if remove_thread_folder(profile, &thread)?.is_none() {
+                removed.push(name);
+            }
+        }
+    }
+    let forgotten = crate::workspace_names::forget_missing(profile)?;
+    if forgotten > 0 {
+        crate::runtime_eprintln!("muniment-runtime: workspace_names forgot_missing={forgotten}");
+    }
+    Ok(removed)
+}
+
 /// Converts legacy session directories using the journal's visible thread titles.
 pub fn migrate_session_names(profile: &Path) -> Result<(), String> {
     let Some(home) = crate::home::configured_home(profile).map_err(|e| e.to_string())? else {
@@ -631,6 +681,42 @@ mod tests {
             folder(&profile, &project).unwrap()
         );
     }
+    #[test]
+    fn a_deleted_threads_folder_goes_unless_it_holds_the_users_files() {
+        let fixture = Fixture::new();
+        let profile = fixture.profile();
+        let only_tasks = workspace(&profile, "thread-one").unwrap();
+        fs::create_dir_all(only_tasks.join(".muniment/tasks/run-1")).unwrap();
+        fs::write(only_tasks.join(".muniment/tasks/run-1/output.txt"), "done").unwrap();
+        fs::write(only_tasks.join(".DS_Store"), "finder").unwrap();
+        assert_eq!(remove_thread_folder(&profile, "thread-one").unwrap(), None);
+        assert!(!only_tasks.exists());
+        let root = only_tasks.parent().unwrap().to_path_buf();
+        assert_eq!(
+            crate::workspace_names::recorded(&profile, &root, "thread-one").unwrap(),
+            None
+        );
+
+        let mine = workspace(&profile, "thread-two").unwrap();
+        fs::create_dir_all(mine.join(".muniment/tasks")).unwrap();
+        fs::write(mine.join("report.md"), "mine").unwrap();
+        assert_eq!(
+            remove_thread_folder(&profile, "thread-two").unwrap(),
+            Some(mine.clone())
+        );
+        assert_eq!(fs::read_to_string(mine.join("report.md")).unwrap(), "mine");
+        assert!(
+            crate::workspace_names::recorded(&profile, &root, "thread-two")
+                .unwrap()
+                .is_some()
+        );
+        // A thread with no folder of its own leaves the rest alone.
+        assert_eq!(
+            remove_thread_folder(&profile, "thread-three").unwrap(),
+            None
+        );
+    }
+
     #[test]
     fn the_startup_pass_removes_empty_untitled_folders_no_thread_names() {
         let fixture = Fixture::new();

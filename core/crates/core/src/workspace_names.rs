@@ -219,6 +219,119 @@ pub fn remove_unused_untitled(profile: &Path, root: &Path) -> Result<usize, Stri
     Ok(removed)
 }
 
+/// Holds the name index's lock while it lives.
+fn lock(profile: &Path) -> Result<fs::File, String> {
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(profile.join("workspace-names.lock"))
+        .map_err(io_text)?;
+    lock.lock_exclusive().map_err(io_text)?;
+    Ok(lock)
+}
+
+fn read_index(profile: &Path) -> Result<BTreeMap<String, String>, String> {
+    match fs::read(profile.join("workspace-names.json")) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| e.to_string()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(BTreeMap::new()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+fn write_index(profile: &Path, names: &BTreeMap<String, String>) -> Result<(), String> {
+    crate::state_root::guard_owner_data(profile, "the workspace name index");
+    let index = profile.join("workspace-names.json");
+    let temp = index.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+    let result = fs::write(&temp, serde_json::to_vec(names).map_err(|e| e.to_string())?)
+        .map_err(io_text)
+        .and_then(|()| crate::atomic_file::replace(&temp, &index).map_err(io_text));
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    result
+}
+
+/// Whether `path` is gone: a read that answers anything but not found, such
+/// as a refused one, leaves it in place.
+fn gone(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+}
+
+/// Offers the folder the index records for `id` under `root` to `remove`,
+/// under the index's lock, and forgets the record once the folder is gone.
+/// `remove` answers the folder when it stays. Answers the folder that stays.
+pub fn remove_recorded(
+    profile: &Path,
+    root: &Path,
+    id: &str,
+    remove: impl FnOnce(&Path) -> Option<PathBuf>,
+) -> Result<Option<PathBuf>, String> {
+    let _lock = lock(profile)?;
+    let mut names = read_index(profile)?;
+    let key = format!("{}:{id}", root.display());
+    let Some(leaf) = names.get(&key).cloned() else {
+        return Ok(None);
+    };
+    let mut components = Path::new(&leaf).components();
+    if !matches!(
+        (components.next(), components.next()),
+        (Some(std::path::Component::Normal(_)), None)
+    ) {
+        return Err("Invalid workspace folder name.".into());
+    }
+    let folder = root.join(&leaf);
+    let kept = if gone(&folder) { None } else { remove(&folder) };
+    if kept.is_none() && gone(&folder) {
+        names.remove(&key);
+        write_index(profile, &names)?;
+    }
+    Ok(kept)
+}
+
+/// The thread or agent ids the index records under `root`.
+pub fn recorded_ids(profile: &Path, root: &Path) -> Result<Vec<String>, String> {
+    let prefix = format!("{}:", root.display());
+    Ok(read_index(profile)?
+        .into_keys()
+        .filter_map(|key| key.strip_prefix(&prefix).map(str::to_owned))
+        .filter(|id| !id.contains(':'))
+        .collect())
+}
+
+/// Forgets each record whose folder is gone from a folder that still reads,
+/// under the index's lock. It never removes a folder, and a root that does
+/// not read, such as an unmounted Home, keeps its records. Answers the count.
+pub fn forget_missing(profile: &Path) -> Result<usize, String> {
+    if !profile.join("workspace-names.json").exists() {
+        return Ok(0);
+    }
+    let _lock = lock(profile)?;
+    let mut names = read_index(profile)?;
+    let before = names.len();
+    names.retain(|key, leaf| {
+        let Some((root, _)) = key.rsplit_once(':') else {
+            return true;
+        };
+        let root = Path::new(root);
+        let readable = fs::read_dir(root).is_ok();
+        let single = matches!(
+            Path::new(leaf.as_str())
+                .components()
+                .collect::<Vec<_>>()
+                .as_slice(),
+            [std::path::Component::Normal(_)]
+        );
+        !(readable && single && gone(&root.join(leaf.as_str())))
+    });
+    let forgotten = before - names.len();
+    if forgotten > 0 {
+        write_index(profile, &names)?;
+    }
+    Ok(forgotten)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -295,6 +408,51 @@ mod tests {
             remove_unused_untitled(&dir, &dir.join("missing")).unwrap(),
             0
         );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_index_forgets_only_records_whose_folder_is_gone() {
+        let dir = std::env::temp_dir().join(format!("workspace-names-{}", uuid::Uuid::new_v4()));
+        let sessions = dir.join("sessions");
+        let agents = dir.join("agents");
+        let live = resolve(&dir, &sessions, "live-1", Some("Live"), None).unwrap();
+        let gone_folder = resolve(&dir, &sessions, "gone-1", Some("Gone"), None).unwrap();
+        let agent = resolve(&dir, &agents, "agent-1", Some("Agent"), None).unwrap();
+        // A record under a Home that does not read stays.
+        let mut names = read_index(&dir).unwrap();
+        names.insert(
+            format!("{}:away-1", dir.join("unmounted").display()),
+            "Away-away1".into(),
+        );
+        write_index(&dir, &names).unwrap();
+        fs::remove_dir(&gone_folder).unwrap();
+        fs::remove_dir(&agent).unwrap();
+        assert_eq!(forget_missing(&dir).unwrap(), 2);
+        assert!(live.is_dir());
+        assert_eq!(recorded_ids(&dir, &sessions).unwrap(), ["live-1"]);
+        assert!(recorded_ids(&dir, &agents).unwrap().is_empty());
+        assert_eq!(
+            recorded_ids(&dir, &dir.join("unmounted")).unwrap(),
+            ["away-1"]
+        );
+        assert_eq!(forget_missing(&dir).unwrap(), 0);
+
+        // A removed folder leaves the index; a kept one keeps its record.
+        let kept = remove_recorded(&dir, &sessions, "live-1", |folder| {
+            Some(folder.to_path_buf())
+        })
+        .unwrap();
+        assert_eq!(kept.as_deref(), Some(live.as_path()));
+        assert_eq!(recorded_ids(&dir, &sessions).unwrap(), ["live-1"]);
+        let kept = remove_recorded(&dir, &sessions, "live-1", |folder| {
+            fs::remove_dir_all(folder).unwrap();
+            None
+        })
+        .unwrap();
+        assert_eq!(kept, None);
+        assert!(!live.exists());
+        assert!(recorded_ids(&dir, &sessions).unwrap().is_empty());
         fs::remove_dir_all(dir).unwrap();
     }
 }

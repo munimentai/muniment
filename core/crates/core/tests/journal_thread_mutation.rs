@@ -484,3 +484,75 @@ fn deletes_an_agent_creation_chat_that_holds_no_run() {
     .is_err());
     std::fs::remove_dir_all(profile).unwrap();
 }
+
+#[test]
+fn a_deleted_threads_session_folder_goes_unless_it_holds_the_users_files() {
+    let root = muniment_core::state_root::test_root()
+        .join(format!("muniment-thread-folder-delete-{}", Uuid::new_v4()));
+    let profile = root.join("profile");
+    std::fs::create_dir_all(&profile).unwrap();
+    muniment_core::home::confirm_home(&profile, &root.join("muniment")).unwrap();
+    let mut journal = RunJournal::open(profile.join("runs.sqlite3")).unwrap();
+    let mut thread = || {
+        let thread = journal
+            .append_new_run("workspace-a", &run_started(Some("owner")))
+            .unwrap();
+        let folder = muniment_core::projects::workspace(&profile, &thread).unwrap();
+        std::fs::create_dir_all(folder.join(".muniment/tasks/run-1")).unwrap();
+        std::fs::write(folder.join(".muniment/tasks/run-1/output.txt"), "done").unwrap();
+        (thread, folder)
+    };
+    let (internal, internal_folder) = thread();
+    let (mine, mine_folder) = thread();
+    std::fs::write(mine_folder.join("report.md"), "mine").unwrap();
+    let (swept, swept_folder) = thread();
+    let (live, live_folder) = thread();
+
+    // A delete removes the folder that holds only Muniment's files.
+    for thread in [&internal, &mine] {
+        delete_thread_with_creation_now(
+            &mut journal,
+            &profile,
+            Some("owner"),
+            thread,
+            &provenance(Some("owner")),
+        )
+        .unwrap();
+    }
+    assert!(!internal_folder.exists());
+    assert_eq!(
+        std::fs::read_to_string(mine_folder.join("report.md")).unwrap(),
+        "mine"
+    );
+
+    // A delete that left its folder, such as one a synced machine sent, is
+    // swept at start, and a live thread's folder stays.
+    append_thread_delete_now(
+        &mut journal,
+        Some("owner"),
+        &swept,
+        &provenance(Some("owner")),
+    )
+    .unwrap();
+    assert!(swept_folder.exists());
+    drop(journal);
+    let removed = muniment_core::projects::remove_deleted_thread_folders(&profile).unwrap();
+    assert_eq!(
+        removed,
+        [swept_folder
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned()]
+    );
+    assert!(!swept_folder.exists());
+    assert!(mine_folder.join("report.md").exists());
+    assert!(live_folder
+        .join(".muniment/tasks/run-1/output.txt")
+        .exists());
+    assert_eq!(
+        muniment_core::projects::workspace(&profile, &live).unwrap(),
+        live_folder
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}

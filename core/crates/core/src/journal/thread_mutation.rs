@@ -125,6 +125,18 @@ pub fn delete_thread_with_creation_now(
     if creation {
         crate::creations::remove(profile, thread_id).map_err(ThreadMutationError::Creation)?;
     }
+    // The thread's own session folder goes when it holds only Muniment's
+    // files. A folder with the user's files stays, and the log says so.
+    match crate::projects::remove_thread_folder(profile, thread_id) {
+        Ok(None) => {}
+        Ok(Some(folder)) => crate::runtime_eprintln!(
+            "thread_delete: folder kept thread={thread_id} folder={} reason=holds_user_files",
+            folder.display()
+        ),
+        Err(error) => crate::runtime_eprintln!(
+            "thread_delete: folder not removed thread={thread_id} error={error}"
+        ),
+    }
     // An agent whose primary thread the user deletes starts a new one on its
     // next run. The delete is committed, so a state error only logs.
     let agent_thread = crate::agents::state(profile).is_ok_and(|state| {

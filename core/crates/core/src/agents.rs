@@ -1221,9 +1221,9 @@ fn holds_only_internals(folder: &Path, top: bool) -> bool {
         }
     })
 }
-/// Removes an agent's folder that holds only Muniment's own files. Answers
-/// the folder when it stays.
-fn remove_folder(folder: &Path) -> Option<PathBuf> {
+/// Removes an agent's or a thread's folder that holds only Muniment's own
+/// files. Answers the folder when it stays.
+pub(crate) fn remove_folder(folder: &Path) -> Option<PathBuf> {
     if folder.is_symlink() || !folder.exists() {
         return None;
     }
