@@ -3686,8 +3686,8 @@ describe('thread name', () => {
     })
     render(App)
 
-    const current = await screen.findByText('Lease renewal')
-    expect(current.closest('.thread-row')).toHaveAttribute('aria-current', 'true')
+    await screen.findByText('Lease renewal')
+    await waitFor(() => expect(document.querySelector('#sidebar .thread-row[data-thread-id="thread-1"]')).toHaveAttribute('aria-current', 'true'))
     expect(document.querySelectorAll('.thread-row')).toHaveLength(3)
     for (const summary of threadSummaryResult) {
       expect(document.querySelector(`time[datetime="${summary.updatedAt}"]`)).not.toHaveAttribute('title')
@@ -3764,8 +3764,9 @@ describe('thread name', () => {
   it('marks the open row with the accent edge in place of a dot, so its text takes the width', async () => {
     threadSummaryResult = [{ threadId: 'thread-1', title: 'Lease renewal', updatedAt: '2026-07-28T11:55:00Z', runtimeId: 'local' }]
     render(App)
-    const row = (await screen.findByText('Lease renewal')).closest('.thread-row')
-    expect(row).toHaveAttribute('aria-current', 'true')
+    await screen.findByText('Lease renewal')
+    await waitFor(() => expect(document.querySelector('#sidebar .thread-row[data-thread-id="thread-1"]')).toHaveAttribute('aria-current', 'true'))
+    const row = document.querySelector('#sidebar .thread-row[data-thread-id="thread-1"]')
     expect(row).toHaveAttribute('data-accent-edge')
     // A normal thread takes the theme accent: no agent color is set.
     expect(row.style.getPropertyValue('--edge-color')).toBe('')
@@ -3860,6 +3861,32 @@ describe('thread name', () => {
     expect(shown).toEqual([])
     await fireEvent.click(within(screen.getByRole('list', { name: 'Projects list' })).getByText('Tauri Morning').closest('.thread-row'))
     await waitFor(() => expect(localStorage.getItem('muniment.open-thread')).toBe('morning'))
+  })
+
+  it('marks no row current and keeps the header neutral until launch settles on the thread open at quit', async () => {
+    localStorage.setItem('muniment.open-thread', 'lease')
+    threadSummaryResult = [{ threadId: 'morning', title: 'Tauri Morning', updatedAt: '2026-07-28T11:55:00Z', runtimeId: 'local' }, { threadId: 'lease', title: 'Lease renewal', updatedAt: '2026-07-27T11:55:00Z', runtimeId: 'local' }]
+    const held = deferred()
+    let opening = false
+    const core = window.__TAURI__.core.invoke
+    window.__TAURI__.core.invoke = (command, ...args) => command === 'chat_thread_open' && args[0]?.threadId === 'lease'
+      ? (opening = true, held.promise.then(() => core(command, ...args)))
+      : core(command, ...args)
+    onTestFinished(() => { window.__TAURI__.core.invoke = core })
+    const current = []
+    const observer = new MutationObserver(() => { for (const row of document.querySelectorAll('#sidebar [aria-current="true"][data-thread-id]')) current.push(row.dataset.threadId) })
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['aria-current'] })
+    onTestFinished(() => observer.disconnect())
+    render(App)
+    const list = await screen.findByRole('list', { name: 'Projects list' })
+    await within(list).findByText('Tauri Morning')
+    await waitFor(() => expect(opening).toBe(true))
+    expect(list.querySelector('[aria-current="true"]')).toBeNull()
+    expect(screen.getByRole('heading', { level: 1, name: 'Loading threads…' })).toHaveAttribute('aria-busy', 'true')
+    held.resolve()
+    expect(await screen.findByRole('heading', { level: 1, name: 'Lease renewal' })).not.toHaveAttribute('aria-busy', 'true')
+    await waitFor(() => expect(list.querySelector('[aria-current="true"]')?.dataset.threadId).toBe('lease'))
+    expect(current).not.toContain('morning')
   })
 
   it('opens the newest thread on launch when the thread open at quit is gone', async () => {

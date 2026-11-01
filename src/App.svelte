@@ -3810,7 +3810,7 @@
 {#snippet sidebarThread(summary)}
                 {@const creation = creations.find((item) => item.threadId === summary.threadId)}
                 {@const title = creation?.kind === 'agent' && creation.turns?.length ? agentChatTitle(creation) : creation ? creationTitle(creation, [summary]) : summary.title || summary.row?.title || 'New thread'}
-                {@const current = (!freshThread || listedThreadId === summary.threadId) && summary.threadId === (currentThreadId ?? threadSummaries[0]?.threadId)}
+                {@const current = (!freshThread || listedThreadId === summary.threadId) && summary.threadId === (currentThreadId ?? (threadShown ? threadSummaries[0]?.threadId : null))}
                 {@const rowTitle = current && !creation ? summary.title || currentThreadTitle : title}
                 {@const rowPosition = shortcutThreads.findIndex((item) => item.threadId === summary.threadId) + 1}
                 {@const selected = selectedThreadIds.has(summary.threadId)}
