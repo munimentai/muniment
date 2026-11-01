@@ -3,15 +3,20 @@
   // and usage, named by `menu`. At rest it is muted with no fill. Hovered or
   // open, it takes the hover fill in ink. `chevrons` adds the closed and open
   // arrows. A narrow composer shows the icon alone, `compact` when given, and
-  // the accessible name and a hover label keep the full label.
+  // the accessible name and a hover label keep the full label. The model chip
+  // gives way first when the composer row runs short: its name ends in an
+  // ellipsis, and a name it clips shows whole in the hover label.
   import LucideIcon from '../lib/LucideIcon.svelte'
   let { menu, open = false, label, text, icon, compact = null, chevrons = false, haspopup = 'menu', element = $bindable(), ...rest } = $props()
+  let labelElement = $state()
+  let clipped = $state(false)
+  const measure = () => { clipped = !!labelElement && labelElement.scrollWidth > labelElement.clientWidth }
 </script>
 
-<button type="button" class="composer-menu-button" class:model-chip={menu === 'model'} data-menu={menu} data-open={open ? 'true' : undefined} data-tooltip={label} aria-haspopup={haspopup} aria-expanded={open} aria-label={label} bind:this={element} {...rest}>
+<button type="button" class="composer-menu-button" class:model-chip={menu === 'model'} data-menu={menu} data-open={open ? 'true' : undefined} data-clipped={clipped ? 'true' : undefined} data-tooltip={label} aria-haspopup={haspopup} aria-expanded={open} aria-label={label} bind:this={element} onpointerenter={measure} onfocus={measure} {...rest}>
   <span class="icon" class:wide={!!compact}>{@render icon()}</span>
   {#if compact}<span class="icon narrow">{@render compact()}</span>{/if}
-  <span class="label">{text}</span>
+  <span class="label" bind:this={labelElement}>{text}</span>
   {#if chevrons}<span class="chevrons"><LucideIcon name={open ? 'chevrons-down-up' : 'chevrons-up-down'} variant="action" size={12} /></span>{/if}
 </button>
 
@@ -28,9 +33,14 @@
   /* The hover label shows only while the button shows its icon alone. */
   .composer-menu-button::after { content: attr(data-tooltip); position: absolute; left: 0; bottom: calc(100% + 6px); display: none; padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-12) var(--font-human); white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity 80ms ease; }
   .composer-menu-button:hover::after, .composer-menu-button:focus-visible::after { opacity: 1; transition-delay: 350ms; }
+  /* The model chip shrinks to its icon and chevrons before the row wraps. */
+  .model-chip { flex: 0 1 auto; min-width: 46px; max-width: 200px; }
+  .composer-menu-button[data-clipped="true"]::after { display: block; }
+  .composer-menu-button[data-clipped="true"][data-open="true"]::after { display: none; }
   /* A narrow composer keeps each control to its icon. */
   @container composer (max-width: 480px) {
     .label, .chevrons, .wide { display: none; }
+    .model-chip { min-width: 24px; }
     .narrow { display: inline-flex; }
     .composer-menu-button::after { display: block; }
     .composer-menu-button[data-open="true"]::after { display: none; }

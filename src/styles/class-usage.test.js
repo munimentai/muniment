@@ -5,11 +5,7 @@ import path from 'node:path'
 // Classes may be exempted only when markup intentionally exposes a class for a
 // non-CSS consumer. Each entry must explain that consumer; the stale-entry test
 // below keeps this from becoming a graveyard for removed markup.
-const EXCEPTIONS = {
-  'src/composer/ComposerMenuButton.svelte': {
-    'model-chip': 'End-to-end specs and the subscription probe select the model button.',
-  },
-}
+const EXCEPTIONS = {}
 
 // Repo root: `npm test` runs vitest with `--root .`.
 const root = process.cwd()

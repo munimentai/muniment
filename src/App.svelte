@@ -5133,10 +5133,12 @@
   textarea { display: block; width: 100%; resize: none; padding: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; }
   /* The input no longer keeps a spare empty row once it grows, so the action
      row carries the gap itself, matching the owner mockup's 8px .comprow rhythm. */
-  .composer-row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; margin-top: 8px; color: var(--muted); font-size: var(--text-12); }
-  .composer-meta { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  /* The band keeps one line: the meta side shrinks, its model chip first, so Voice and Send never drop to a second row. */
+  .composer-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 8px; color: var(--muted); font-size: var(--text-12); }
+  .composer-meta { flex: 1 1 auto; display: flex; align-items: center; gap: 8px; min-width: 0; }
   .composer-meta > span { flex-basis: max-content; }
-  .composer-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; max-width: 100%; margin-left: auto; }
+  .composer-meta > #composer-hint { min-width: 0; }
+  .composer-actions { flex: none; display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; max-width: 100%; margin-left: auto; }
   .composer-actions button { flex-shrink: 0; white-space: nowrap; }
   .composer-icon { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; min-height: 24px; padding: 4px; line-height: 0; color: var(--muted); }
   .composer-icon:hover:not(:disabled), .composer-icon[aria-pressed="true"] { color: var(--ink); background: var(--faint); }
