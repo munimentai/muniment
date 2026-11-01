@@ -408,19 +408,25 @@ fn apply_schedule(agent: &mut Agent) -> Result<(), String> {
 pub fn list(profile: &Path) -> Result<AgentList, String> {
     let mut agents = Vec::new();
     let mut errors = Vec::new();
-    for entry in fs::read_dir(root(profile)?).map_err(|_| "The agents could not be read.")? {
-        let Ok(entry) = entry else {
-            continue;
-        };
-        let path = entry.path().join("agent.md");
-        if entry.path().is_symlink() || !path.is_file() {
-            continue;
-        }
-        let folder = entry.file_name().to_string_lossy().into_owned();
-        match load_entry(profile, &entry.path(), &path) {
-            Ok(Some(agent)) => agents.push(agent),
-            Ok(None) => {}
-            Err(error) => errors.push(AgentLoadError { folder, error }),
+    {
+        // Each entry names its folder after the name in its file. A save
+        // renames the folder first, so the scan waits for it and never reads
+        // the old name back into the folder.
+        let _lock = lock(profile)?;
+        for entry in fs::read_dir(root(profile)?).map_err(|_| "The agents could not be read.")? {
+            let Ok(entry) = entry else {
+                continue;
+            };
+            let path = entry.path().join("agent.md");
+            if entry.path().is_symlink() || !path.is_file() {
+                continue;
+            }
+            let folder = entry.file_name().to_string_lossy().into_owned();
+            match load_entry(profile, &entry.path(), &path) {
+                Ok(Some(agent)) => agents.push(agent),
+                Ok(None) => {}
+                Err(error) => errors.push(AgentLoadError { folder, error }),
+            }
         }
     }
     agents.sort_by(|a, b| a.name.cmp(&b.name));
@@ -1711,6 +1717,40 @@ mod tests {
         drop(locked);
         write(&path, b"replacement").unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"replacement");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_rename_saves_while_another_thread_lists_the_agents() {
+        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        fs::create_dir_all(&root).unwrap();
+        let profile = root.join("private");
+        crate::home::confirm_home(&profile, &root.join("muniment")).unwrap();
+        let mut agent = save(
+            &profile,
+            Agent {
+                name: "Scout".into(),
+                instructions: "Find sources.".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let lister = {
+            let (profile, done) = (profile.clone(), std::sync::Arc::clone(&done));
+            std::thread::spawn(move || {
+                while !done.load(std::sync::atomic::Ordering::SeqCst) {
+                    list(&profile).unwrap();
+                }
+            })
+        };
+        for round in 0..100 {
+            agent.name = format!("Scout {round}");
+            agent = save(&profile, agent).unwrap();
+        }
+        done.store(true, std::sync::atomic::Ordering::SeqCst);
+        lister.join().unwrap();
+        assert_eq!(get(&profile, &agent.id).unwrap().name, "Scout 99");
         fs::remove_dir_all(root).unwrap();
     }
 
