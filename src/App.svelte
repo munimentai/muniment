@@ -3013,10 +3013,13 @@
     followNewContent()
   })
 
+  // The window names the page that shows: Settings, a catalog or a full page
+  // such as Agents or Usage, and the thread only while a thread shows.
   $effect(() => {
     const inWorkspace = workspaceMode() && onboarding.name === 'complete'
     const hasConversation = currentThreadId !== null || messages.some(({ role }) => role === 'user')
-    void windowTitle.set(inWorkspace && hasConversation ? currentThreadTitle : undefined)
+    const page = settingsOpen ? 'Settings' : catalogTitle
+    void windowTitle.set(!inWorkspace ? undefined : page || (hasConversation ? currentThreadTitle : undefined))
   })
 
   $effect(() => {

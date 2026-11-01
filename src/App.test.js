@@ -1735,6 +1735,29 @@ describe('workspace composer entry', () => {
     hide.remove()
   })
 
+  it('titles the window by the page that shows, and by the thread only while a thread shows', async () => {
+    localModeStatus = true
+    threadSummaryResult = [{ threadId: 'final', title: 'Final Verification Thread', updatedAt: '2026-07-28T11:55:00Z', runtimeId: 'local' }]
+    const fallback = invoke.getMockImplementation()
+    const notifications = { needs_you: [], running: [], days: [], upcoming: [], counts: { needs_you: 0, running: 0, failed: 0, unread: 0 }, machines: [], agents: [] }
+    invoke.mockImplementation((command, args) => command === 'notifications_list' ? Promise.resolve(notifications) : fallback(command, args))
+    const setTitle = vi.fn(async () => {})
+    window.__TAURI__.window = { getCurrentWindow: () => ({ setTitle }) }
+    onTestFinished(() => { delete window.__TAURI__.window })
+    render(App)
+    await findWorkspaceComposer()
+    await waitFor(() => expect(setTitle).toHaveBeenLastCalledWith('Final Verification Thread | muniment'))
+    const sidebar = document.getElementById('sidebar')
+    for (const [name, title] of [['Agents', 'Agents | muniment'], ['Usage', 'Usage | muniment'], ['Notifications', 'Notifications | muniment']]) {
+      await fireEvent.click(within(sidebar).getAllByRole('button', { name: new RegExp(`^${name}`) }).find((node) => node.closest('.side-action, .sidebar-actions')))
+      await waitFor(() => expect(setTitle).toHaveBeenLastCalledWith(title))
+      await fireEvent.click(document.querySelector('#sidebar .thread-row[data-thread-id="final"]'))
+      await waitFor(() => expect(setTitle).toHaveBeenLastCalledWith('Final Verification Thread | muniment'))
+    }
+    await openSettings('Data')
+    await waitFor(() => expect(setTitle).toHaveBeenLastCalledWith('Settings | muniment'))
+  })
+
   it('lands focus on the Agents page after launch when the hidden composer keeps it', async () => {
     localModeStatus = true
     const hide = document.head.appendChild(document.createElement('style'))
