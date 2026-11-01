@@ -291,12 +291,7 @@ pub fn stage_pi_stub(temporary_root: &Path) -> PiArtifactDescriptor {
     fs::create_dir_all(staged_stub.parent().unwrap()).unwrap();
 
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let mut workspace_hasher = DefaultHasher::new();
-    manifest_dir.hash(&mut workspace_hasher);
-    let build_root = std::env::temp_dir().join(format!(
-        "muniment-runtime-sidecar-test-stub-{:x}",
-        workspace_hasher.finish()
-    ));
+    let build_root = stub_build_root(manifest_dir);
     let status = Command::new(env!("CARGO"))
         .args([
             "build",
@@ -344,6 +339,33 @@ pub fn stage_pi_stub(temporary_root: &Path) -> PiArtifactDescriptor {
         sha256: "758b0db8f6304639edfca2b779e886f3006afeb006417e49dd6bce53ff2a65ab",
         executable: PI_SELECTED_ARTIFACT.executable,
     }
+}
+
+/// The target directory the sidecar test stub builds in: one per workspace
+/// under Cargo's temporary directory in the target directory, never the
+/// system temporary folder, so `cargo clean` removes it. Each build also
+/// removes the directory of a workspace that no longer exists, such as a
+/// removed git worktree, so stale builds never pile up.
+fn stub_build_root(manifest_dir: &Path) -> PathBuf {
+    let stubs = Path::new(env!("CARGO_TARGET_TMPDIR")).join("sidecar-test-stub");
+    if let Ok(entries) = fs::read_dir(&stubs) {
+        for entry in entries.flatten() {
+            let owner = fs::read_to_string(entry.path().join("workspace"));
+            if owner.is_ok_and(|owner| !Path::new(&owner).exists()) {
+                let _ = fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+    let mut workspace_hasher = DefaultHasher::new();
+    manifest_dir.hash(&mut workspace_hasher);
+    let build_root = stubs.join(format!("{:x}", workspace_hasher.finish()));
+    fs::create_dir_all(&build_root).unwrap();
+    fs::write(
+        build_root.join("workspace"),
+        manifest_dir.to_string_lossy().as_bytes(),
+    )
+    .unwrap();
+    build_root
 }
 
 /// Points the state root at the given test directory unless the test already

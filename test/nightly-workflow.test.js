@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -189,7 +189,7 @@ describe('nightly Windows E2E workflow', () => {
   const windowsE2e = workflow.slice(start, workflow.indexOf('  macos-e2e:', start))
 
   it.skipIf(process.platform === 'win32')('publishes a parseable infrastructure failure when an extracted failure has no JUnit', () => {
-    const artifacts = fs.mkdtempSync(path.join(os.tmpdir(), 'muniment-junit-'))
+    const artifacts = artifactFolder()
     fs.writeFileSync(path.join(artifacts, 'desktop-ci.log'), 'setup failed')
 
     runReportFallback(artifacts, 'installed-windows', 1, 0)
@@ -300,7 +300,7 @@ describe('nightly E2E JUnit fallback', () => {
 
   it.skipIf(process.platform === 'win32')('covers Linux and macOS setup failures with valid artifact envelopes', () => {
     for (const suite of ['installed-linux', 'installed-macos']) {
-      const artifacts = fs.mkdtempSync(path.join(os.tmpdir(), 'muniment-junit-'))
+      const artifacts = artifactFolder()
       fs.writeFileSync(path.join(artifacts, 'diagnostics.log'), 'retained')
       runReportFallback(artifacts, suite, 1, 0)
       const report = fs.readFileSync(path.join(artifacts, 'junit-infrastructure.xml'), 'utf8')
@@ -314,7 +314,7 @@ describe('nightly E2E JUnit fallback', () => {
   })
 
   it.skipIf(process.platform === 'win32').each([0, 1])('uses the cause with extraction status %s', (extractStatus) => {
-    const artifacts = fs.mkdtempSync(path.join(os.tmpdir(), 'muniment-junit-'))
+    const artifacts = artifactFolder()
     try {
       const cause = 'lookup <failed> & "stopped" at \'nightly\''
       fs.writeFileSync(path.join(artifacts, 'runner-failure.txt'), `\ufeff${cause}\r\n`)
@@ -331,7 +331,7 @@ describe('nightly E2E JUnit fallback', () => {
   })
 
   it.skipIf(process.platform === 'win32').each([999, 1000, 1001])('caps a %s-character cause without splitting XML entities', (length) => {
-    const artifacts = fs.mkdtempSync(path.join(os.tmpdir(), 'muniment-junit-'))
+    const artifacts = artifactFolder()
     try {
       const cause = '界'.repeat(length - 1) + '&'
       fs.writeFileSync(path.join(artifacts, 'runner-failure.txt'), cause)
@@ -345,7 +345,7 @@ describe('nightly E2E JUnit fallback', () => {
   })
 
   it.skipIf(process.platform === 'win32').each([undefined, '', '\r\n \t'])('uses the generic envelope failure without a cause: %s', (cause) => {
-    const artifacts = fs.mkdtempSync(path.join(os.tmpdir(), 'muniment-junit-'))
+    const artifacts = artifactFolder()
     try {
       if (cause !== undefined) fs.writeFileSync(path.join(artifacts, 'runner-failure.txt'), cause)
       runReportFallback(artifacts, 'installed-windows', 1, 1)
@@ -357,7 +357,7 @@ describe('nightly E2E JUnit fallback', () => {
   })
 
   it.skipIf(process.platform === 'win32')('retains an existing JUnit report instead of replacing it', () => {
-    const artifacts = fs.mkdtempSync(path.join(os.tmpdir(), 'muniment-junit-'))
+    const artifacts = artifactFolder()
     const existing = path.join(artifacts, 'junit-results.xml')
     fs.writeFileSync(existing, '<testsuites/>')
     runReportFallback(artifacts, 'installed-linux', 1, 0)
@@ -366,7 +366,7 @@ describe('nightly E2E JUnit fallback', () => {
   })
 
   it.skipIf(process.platform === 'win32')('creates the macOS smoke report required on a successful run', () => {
-    const artifacts = fs.mkdtempSync(path.join(os.tmpdir(), 'muniment-junit-'))
+    const artifacts = artifactFolder()
     runReportFallback(artifacts, 'installed-macos', 0, 0, true)
     const report = fs.readFileSync(path.join(artifacts, 'junit-smoke.xml'), 'utf8')
     const xml = new DOMParser().parseFromString(report, 'application/xml')
@@ -466,3 +466,14 @@ it('keeps the scheduled nightly copies aligned and watches every core check inpu
     ])
   }
 })
+
+// Each test's artifact folders go when the test ends.
+const artifactFolders = []
+afterEach(() => {
+  for (const folder of artifactFolders.splice(0)) fs.rmSync(folder, { recursive: true, force: true })
+})
+function artifactFolder() {
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'muniment-junit-'))
+  artifactFolders.push(folder)
+  return folder
+}

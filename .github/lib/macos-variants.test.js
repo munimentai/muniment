@@ -7,7 +7,7 @@ import { macosVariants, nativeFiles, packageMacosDmg, prepareMacosVariants } fro
 const directories = [];
 afterEach(() => { for (const dir of directories.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 const temporary = () => { const dir = mkdtempSync(join(tmpdir(), 'muniment-variant-test-')); directories.push(dir); return dir; };
-const run = (cmd, args) => execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+const run = (cmd, args, env = process.env) => execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env }).trim();
 
 it('gives each architecture its own downloads and keeps the app bundle name', () => {
   const variants = macosVariants('/bundle');
@@ -43,7 +43,8 @@ describe.skipIf(process.platform !== 'darwin')('native Mac packaging', () => {
     const root = temporary(); const [universal] = macosVariants(root);
     const source = join(root, 'fixture.c'); writeFileSync(source, 'int main(void) { return 0; }\n');
     const binary = join(universal.app, 'Contents/MacOS/fixture'); mkdirSync(dirname(binary), { recursive: true });
-    run('clang', ['-arch', 'arm64', '-arch', 'x86_64', source, '-o', binary]);
+    // A universal build leaves an empty `fixture-*` folder in TMPDIR, so it gets the test's own.
+    run('clang', ['-arch', 'arm64', '-arch', 'x86_64', source, '-o', binary], { ...process.env, TMPDIR: root });
     const nested = join(universal.app, 'Contents/Frameworks/helper'); mkdirSync(dirname(nested), { recursive: true }); copyFileSync(binary, nested);
     writeFileSync(join(universal.app, 'Contents/Info.plist'), '<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>fixture</string><key>CFBundleIdentifier</key><string>ai.muniment.packaging-test</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>');
     writeFileSync(join(universal.app, 'Contents/resource.txt'), 'preserved');
