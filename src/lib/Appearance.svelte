@@ -209,7 +209,8 @@
   </div>
   </Row>
   <div class="mark-preview" aria-label="Thinking indicator preview">
-    <RunMark stage={previewStage} {mark} size={40} />
+    <!-- The preview never settles: it leaves with its page at once, so its fade never holds Settings over the thread. -->
+    <RunMark stage={previewStage} {mark} size={40} settled={false} />
   </div>
   </Group>
 </section>

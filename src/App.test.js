@@ -10230,6 +10230,28 @@ it('returns to the thread view from Settings opened over Notifications, by Back 
   }
 })
 
+it('swaps Settings > General for the thread in one frame on Back to threads or Escape', async () => {
+  render(App)
+  await findReadyWorkspaceComposer()
+  const workspace = document.querySelector('.workspace')
+  for (const leave of [() => fireEvent.click(screen.getByRole('button', { name: 'Back to threads' })), () => fireEvent.keyDown(document, { key: 'Escape' })]) {
+    const dialog = await openSettings('General')
+    // The thinking indicator preview on General is a run mark, whose settle fade must not hold the page.
+    expect(within(dialog).getByLabelText('Thinking indicator preview').querySelector('.thinking')).not.toBeNull()
+    // Each frame after the press holds Settings or the thread, never the thread's title over the Settings pane.
+    const frames = []
+    const observer = new MutationObserver(() => frames.push({ settings: !!document.querySelector('[data-panel="settings"]'), threadShown: !workspace.classList.contains('settings-open') }))
+    observer.observe(document.body, { subtree: true, childList: true, attributes: true })
+    await leave()
+    await tick()
+    expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument()
+    await new Promise((resolve) => setTimeout(resolve, 250))
+    observer.disconnect()
+    expect(frames.filter((frame) => frame.settings && frame.threadShown)).toEqual([])
+    expect(workspace).not.toHaveClass('settings-open')
+  }
+})
+
 // A transcript box whose scroll obeys layout: a hidden thread (the catalog
 // pages hide it with display none) ignores a scroll, as a real one does.
 // The agent profile beside the thread narrows it, so its content grows taller.
