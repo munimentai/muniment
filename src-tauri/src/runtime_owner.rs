@@ -73,6 +73,22 @@ struct Lifecycle {
     retry_at: Option<Instant>,
     /// Set while an automatic start runs, so its request keeps the failure on screen.
     retrying: bool,
+    /// The child runs because Login Items keeps the service off, so the
+    /// service takes the runtime over once the user turns it on.
+    #[cfg(any(test, target_os = "macos"))]
+    child_until_approval: bool,
+}
+
+/// Why a start ran the runtime as the desktop's child.
+#[cfg(any(test, target_os = "macos"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Child {
+    /// The service runs the runtime, or nothing does.
+    None,
+    /// The service never registers or never stays running.
+    ServiceUnavailable,
+    /// The user turned the service off in Login Items.
+    LoginItemsOff,
 }
 
 /// How long the owner waits before its automatic start after `retries` earlier ones.
@@ -94,30 +110,52 @@ fn start_requested(event: RuntimeEvent) -> bool {
 
 /// Starts the runtime through the background service, and runs it as the
 /// desktop's child when the service never registers, never stays running, or
-/// is turned off in Login Items. The flag is true when that child started,
-/// since the runtime then stops with the desktop.
+/// is turned off in Login Items. The second value names why that child
+/// started, since the runtime then stops with the desktop.
 #[cfg(any(test, all(target_os = "macos", not(feature = "local-runtime"))))]
 fn start_with_fallback(
     service: impl FnOnce() -> RuntimeEvent,
     child: impl FnOnce() -> RuntimeEvent,
-) -> (RuntimeEvent, bool) {
-    match service() {
-        RuntimeEvent::RegistrationFailed
-        | RuntimeEvent::ServiceInactive
-        | RuntimeEvent::RequiresApproval => {
-            let event = child();
-            (event, event == RuntimeEvent::ChildStarted)
+) -> (RuntimeEvent, Child) {
+    let reason = match service() {
+        RuntimeEvent::RequiresApproval => Child::LoginItemsOff,
+        RuntimeEvent::RegistrationFailed | RuntimeEvent::ServiceInactive => {
+            Child::ServiceUnavailable
         }
-        event => (event, false),
+        event => return (event, Child::None),
+    };
+    match child() {
+        RuntimeEvent::ChildStarted => (RuntimeEvent::ChildStarted, reason),
+        event => (event, Child::None),
     }
 }
 
 impl Lifecycle {
     /// Records a start and whether its runtime lives only as long as the desktop.
     #[cfg(any(test, target_os = "macos"))]
-    fn service_started(&mut self, event: RuntimeEvent, foreground_only: bool) {
-        self.snapshot.foreground_only = foreground_only;
+    fn service_started(&mut self, event: RuntimeEvent, child: Child) {
+        self.snapshot.foreground_only = child != Child::None;
+        self.child_until_approval = child == Child::LoginItemsOff;
         self.started(event);
+    }
+
+    /// Claims the handover from a child that runs because Login Items keeps
+    /// the service off, once the user turns the service on and no agent run is
+    /// in progress. The claim marks the owner busy until the service start ends.
+    #[cfg(any(test, target_os = "macos"))]
+    fn claim_handover(&mut self, run_in_progress: bool) -> bool {
+        if !self.child_until_approval || run_in_progress || !self.start_attempt() {
+            return false;
+        }
+        self.child_until_approval = false;
+        true
+    }
+
+    /// Restores the child's state after a handover that could not stop it.
+    #[cfg(any(test, target_os = "macos"))]
+    fn handover_failed(&mut self) {
+        self.child_until_approval = true;
+        self.snapshot.busy = false;
     }
 
     fn change(&mut self, event: RuntimeEvent, visible: bool) {
@@ -324,18 +362,33 @@ impl Lifecycle {
 }
 
 impl RuntimeOwner {
+    /// Reads whether Login Items keeps the service off. Answers true when
+    /// the user turned the service on while the desktop's child runs, and the
+    /// owner has claimed the handover to the service.
     #[cfg(any(test, target_os = "macos"))]
     fn poll_approval<R: tauri::Runtime>(
         &self,
         app: &tauri::AppHandle<R>,
         query: impl FnOnce() -> Option<bool>,
-    ) {
-        let revision = self.state.lock().unwrap().snapshot.revision;
+        run_in_progress: impl FnOnce() -> bool,
+    ) -> bool {
+        let (revision, waiting) = {
+            let state = self.state.lock().unwrap();
+            (state.snapshot.revision, state.child_until_approval)
+        };
         let requires_approval = query();
+        // launchd starts the service as soon as the user turns it on. That
+        // runtime finds the child's endpoint live and exits, so the child
+        // stops and the service starts again in its place.
+        if waiting && requires_approval == Some(false) {
+            let busy = run_in_progress();
+            let mut claimed = false;
+            self.update(app, |state| claimed = state.claim_handover(busy));
+            return claimed;
+        }
         self.update(app, |state| {
             // A child runtime serves the app while Login Items keeps the
             // service off, so the approval is a notice, not a blocking screen.
-            // An approval takes effect at the next start.
             if state.snapshot.revision != revision
                 || state.snapshot.busy
                 || state.snapshot.foreground_only
@@ -351,6 +404,7 @@ impl RuntimeOwner {
                 state.change(RuntimeEvent::Approved, true);
             }
         });
+        false
     }
 
     fn update<R: tauri::Runtime>(
@@ -455,14 +509,25 @@ fn start<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 }
 
 fn finish_start<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    finish_start_with(app, false);
+}
+
+/// Finishes a claimed start. With `restart_service`, launchd restarts a
+/// service instance that already runs, since one that found the child's
+/// endpoint live is on its way out.
+#[cfg_attr(
+    any(not(target_os = "macos"), feature = "local-runtime"),
+    allow(unused_variables)
+)]
+fn finish_start_with<R: tauri::Runtime>(app: &tauri::AppHandle<R>, restart_service: bool) {
     let owner = app.state::<RuntimeOwner>();
     #[cfg(all(target_os = "macos", feature = "local-runtime"))]
     let event = crate::macos_runtime_service::start_child(&owner);
     #[cfg(all(target_os = "macos", feature = "local-runtime"))]
-    let event = (event, false);
+    let event = (event, Child::None);
     #[cfg(all(target_os = "macos", not(feature = "local-runtime")))]
     let event = start_with_fallback(
-        || crate::macos_runtime_service::start(&owner),
+        || crate::macos_runtime_service::start(&owner, restart_service),
         || crate::macos_runtime_service::start_child(&owner),
     );
     #[cfg(target_os = "windows")]
@@ -557,10 +622,13 @@ pub(crate) fn setup<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
         // Native service queries can block. They must not delay client observations.
         std::thread::spawn(move || loop {
             let owner = approval_app.state::<RuntimeOwner>();
-            owner.poll_approval(
+            if owner.poll_approval(
                 &approval_app,
                 crate::macos_runtime_service::requires_approval,
-            );
+                run_in_progress,
+            ) {
+                hand_over_to_service(&approval_app);
+            }
             std::thread::sleep(Duration::from_secs(1));
         });
     }
@@ -620,6 +688,41 @@ pub(crate) fn setup<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     });
 }
 
+/// Whether an agent run is in progress, from core's agent state. A state that
+/// cannot be read counts as a run, so the handover waits.
+#[cfg(target_os = "macos")]
+fn run_in_progress() -> bool {
+    muniment_runtime::profile_directory()
+        .ok()
+        .and_then(|profile| muniment_core::agents::state(&profile).ok())
+        .is_none_or(|state| runs_active(&state))
+}
+
+/// Whether an agent run is running or queued.
+#[cfg(any(test, target_os = "macos"))]
+fn runs_active(state: &muniment_core::agents::State) -> bool {
+    state
+        .runs
+        .values()
+        .any(|run| matches!(run.status.as_str(), "running" | "queued"))
+}
+
+/// Stops the desktop's child and starts the runtime through the service the
+/// user turned on, after the owner claimed the handover. The child removes its
+/// endpoint as it stops, so the service binds it.
+#[cfg(target_os = "macos")]
+fn hand_over_to_service<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    let owner = app.state::<RuntimeOwner>();
+    if owner.stop_child().is_err() {
+        owner.update(app, Lifecycle::handover_failed);
+        return;
+    }
+    if let Ok(home) = muniment_core::user_diagnostics::effective_user_home() {
+        crate::macos_runtime_service::record_handover(&home.join("Library/Logs/Muniment"));
+    }
+    finish_start_with(app, true);
+}
+
 /// How far ahead a routine counts as due when the desktop quits, in seconds.
 #[cfg(any(test, target_os = "macos"))]
 const QUIT_ROUTINE_WINDOW: i64 = 60 * 60;
@@ -632,11 +735,7 @@ pub(crate) const QUIT_MENU_ID: &str = "muniment-quit";
 /// progress, or a routine due within the hour, from core's agent state.
 #[cfg(any(test, target_os = "macos"))]
 fn quit_warning(state: &muniment_core::agents::State, now: i64) -> Option<&'static str> {
-    if state
-        .runs
-        .values()
-        .any(|run| matches!(run.status.as_str(), "running" | "queued"))
-    {
+    if runs_active(state) {
         return Some("An agent is running. Quitting Muniment stops it.");
     }
     state
@@ -874,18 +973,16 @@ mod tests {
         let app = tauri::test::mock_app();
         app.manage(RuntimeOwner::default());
         let owner = app.state::<RuntimeOwner>();
-        let (event, foreground_only) = start_with_fallback(
+        let (event, child) = start_with_fallback(
             || RuntimeEvent::RequiresApproval,
             || RuntimeEvent::ChildStarted,
         );
-        assert_eq!((event, foreground_only), (RuntimeEvent::ChildStarted, true));
-        owner.update(app.handle(), |state| {
-            state.service_started(event, foreground_only)
-        });
+        assert_eq!((event, child), (RuntimeEvent::ChildStarted, Child::LoginItemsOff));
+        owner.update(app.handle(), |state| state.service_started(event, child));
         let now = Instant::now();
         // Approval queries keep reporting the switch as off. Neither the
         // starting child nor the connected one turns into the approval screen.
-        owner.poll_approval(app.handle(), || Some(true));
+        assert!(!owner.poll_approval(app.handle(), || Some(true), || false));
         assert_eq!(
             runtime_state(app.state()).last_event,
             RuntimeEvent::ChildStarted
@@ -897,23 +994,86 @@ mod tests {
         assert_eq!(connected.last_event, RuntimeEvent::Connected);
         assert!(!connected.visible);
         assert!(connected.foreground_only);
-        owner.poll_approval(app.handle(), || Some(true));
+        assert!(!owner.poll_approval(app.handle(), || Some(true), || false));
         assert_eq!(runtime_state(app.state()), connected);
         // A child that exits shows the outage, not the approval screen.
         owner.update(app.handle(), |state| {
             state.observe_endpoint_clients((false, false), now, None, None, |_| vec![]);
         });
-        owner.poll_approval(app.handle(), || Some(true));
+        assert!(!owner.poll_approval(app.handle(), || Some(true), || false));
         let outage = runtime_state(app.state());
         assert_eq!(outage.last_event, RuntimeEvent::Disconnected);
         assert!(outage.foreground_only);
-        // An approval while the child runs waits for the next start.
-        owner.poll_approval(app.handle(), || Some(false));
-        assert_eq!(runtime_state(app.state()), outage);
         assert_eq!(
-            serde_json::to_value(runtime_state(app.state())).unwrap()["foregroundOnly"],
+            serde_json::to_value(&outage).unwrap()["foregroundOnly"],
             true
         );
+    }
+
+    #[test]
+    fn turning_the_service_on_hands_the_child_over_once_no_run_is_in_progress() {
+        let app = tauri::test::mock_app();
+        app.manage(RuntimeOwner::default());
+        let owner = app.state::<RuntimeOwner>();
+        let (event, child) = start_with_fallback(
+            || RuntimeEvent::RequiresApproval,
+            || RuntimeEvent::ChildStarted,
+        );
+        owner.update(app.handle(), |state| state.service_started(event, child));
+        owner.update(app.handle(), |state| {
+            state.observe_endpoint_clients((true, true), Instant::now(), None, None, |_| vec![]);
+        });
+        let connected = runtime_state(app.state());
+        // An unreadable status or a switch still off keeps the child.
+        let unasked = std::cell::Cell::new(true);
+        for requires_approval in [None, Some(true)] {
+            assert!(!owner.poll_approval(
+                app.handle(),
+                || requires_approval,
+                || {
+                    unasked.set(false);
+                    false
+                }
+            ));
+        }
+        assert!(unasked.get());
+        // A run in progress keeps the child until the run ends.
+        assert!(!owner.poll_approval(app.handle(), || Some(false), || true));
+        assert_eq!(runtime_state(app.state()), connected);
+        // With no run, the owner claims the start, and only once.
+        assert!(owner.poll_approval(app.handle(), || Some(false), || false));
+        assert!(runtime_state(app.state()).busy);
+        assert!(!owner.poll_approval(app.handle(), || Some(false), || false));
+        // A child that could not stop stays, and the next poll claims again.
+        owner.update(app.handle(), Lifecycle::handover_failed);
+        assert!(!runtime_state(app.state()).busy);
+        assert!(owner.poll_approval(app.handle(), || Some(false), || false));
+        // The service takes the start, and the runtime no longer stops with the desktop.
+        let (event, child) = start_with_fallback(
+            || RuntimeEvent::Starting,
+            || panic!("A service the user turned on must not start a child."),
+        );
+        owner.update(app.handle(), |state| state.service_started(event, child));
+        let handed_over = runtime_state(app.state());
+        assert_eq!(handed_over.last_event, RuntimeEvent::Starting);
+        assert!(!handed_over.busy);
+        assert!(!handed_over.foreground_only);
+        assert!(!owner.poll_approval(app.handle(), || Some(false), || false));
+    }
+
+    #[test]
+    fn a_child_for_an_unavailable_service_is_never_handed_over() {
+        let app = tauri::test::mock_app();
+        app.manage(RuntimeOwner::default());
+        let owner = app.state::<RuntimeOwner>();
+        for service in [RuntimeEvent::ServiceInactive, RuntimeEvent::RegistrationFailed] {
+            let (event, child) = start_with_fallback(|| service, || RuntimeEvent::ChildStarted);
+            assert_eq!(child, Child::ServiceUnavailable);
+            owner.update(app.handle(), |state| state.service_started(event, child));
+            // A job launchd cannot keep running may still read as enabled.
+            assert!(!owner.poll_approval(app.handle(), || Some(false), || false));
+            assert!(runtime_state(app.state()).foreground_only);
+        }
     }
 
     #[test]
@@ -927,7 +1087,7 @@ mod tests {
         });
         let connected = runtime_state(app.state());
         for requires_approval in [Some(true), Some(true), None, Some(false), Some(true)] {
-            owner.poll_approval(app.handle(), || requires_approval);
+            owner.poll_approval(app.handle(), || requires_approval, || false);
             assert_eq!(runtime_state(app.state()), connected);
             owner.update(app.handle(), |state| {
                 state.observe_endpoint_clients((true, true), now, None, None, |_| vec![]);
@@ -938,13 +1098,13 @@ mod tests {
         owner.update(app.handle(), |state| {
             state.observe_endpoint_clients((false, false), now, None, None, |_| vec![]);
         });
-        owner.poll_approval(app.handle(), || Some(true));
+        owner.poll_approval(app.handle(), || Some(true), || false);
         let approval = runtime_state(app.state());
         assert_eq!(approval.last_event, RuntimeEvent::RequiresApproval);
         assert!(approval.visible);
-        owner.poll_approval(app.handle(), || None);
+        owner.poll_approval(app.handle(), || None, || false);
         assert_eq!(runtime_state(app.state()), approval);
-        owner.poll_approval(app.handle(), || Some(false));
+        owner.poll_approval(app.handle(), || Some(false), || false);
         assert_eq!(
             runtime_state(app.state()).last_event,
             RuntimeEvent::Approved
@@ -953,7 +1113,7 @@ mod tests {
             assert!(state.start_attempt());
         });
         let busy = runtime_state(app.state());
-        owner.poll_approval(app.handle(), || Some(true));
+        owner.poll_approval(app.handle(), || Some(true), || false);
         assert_eq!(runtime_state(app.state()), busy);
     }
 
@@ -1049,11 +1209,15 @@ mod tests {
         let query = std::thread::spawn(move || {
             query_app
                 .state::<RuntimeOwner>()
-                .poll_approval(&query_app, || {
+                .poll_approval(
+                &query_app,
+                || {
                     entered.send(()).unwrap();
                     release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
                     Some(true)
-                });
+                },
+                || false,
+            );
         });
         entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
         owner.update(app.handle(), |state| {
@@ -1604,11 +1768,12 @@ mod tests {
                     RuntimeEvent::ChildStarted
                 },
             );
-            assert_eq!(started, (RuntimeEvent::ChildStarted, true));
+            assert_eq!(started.0, RuntimeEvent::ChildStarted);
+            assert_ne!(started.1, Child::None);
         }
         assert_eq!(child_calls.get(), 3);
         let mut state = Lifecycle::default();
-        state.service_started(RuntimeEvent::ChildStarted, true);
+        state.service_started(RuntimeEvent::ChildStarted, Child::ServiceUnavailable);
         state.observe(true, false, Instant::now());
         // The connected workspace stays on screen and the flag outlives the connection.
         assert_eq!(state.snapshot.last_event, RuntimeEvent::Connected);
@@ -1618,11 +1783,11 @@ mod tests {
             true
         );
         // A later start that the service takes clears the flag.
-        let (event, foreground_only) = start_with_fallback(
+        let (event, child) = start_with_fallback(
             || RuntimeEvent::Starting,
             || panic!("A running service must not start a child."),
         );
-        state.service_started(event, foreground_only);
+        state.service_started(event, child);
         assert!(!state.snapshot.foreground_only);
         // A child that does not start leaves the failure, not the flag.
         assert_eq!(
@@ -1630,7 +1795,7 @@ mod tests {
                 || RuntimeEvent::ServiceInactive,
                 || RuntimeEvent::RegistrationFailed
             ),
-            (RuntimeEvent::RegistrationFailed, false)
+            (RuntimeEvent::RegistrationFailed, Child::None)
         );
     }
 

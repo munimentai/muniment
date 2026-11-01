@@ -442,20 +442,23 @@ fn start_scoped_runtime<T>(
     Ok(if profile? { child() } else { login_service() })
 }
 
+/// Starts the runtime. With `restart`, launchd ends a service instance that
+/// already runs and starts a new one.
 #[cfg(target_os = "macos")]
 pub(crate) fn start(
     owner: &crate::runtime_owner::RuntimeOwner,
+    restart: bool,
 ) -> crate::runtime_owner::RuntimeEvent {
     start_scoped_runtime(
         process_profile_runtime(),
         || start_child(owner),
-        start_login_service,
+        || start_login_service(restart),
     )
     .unwrap_or(crate::runtime_owner::RuntimeEvent::StartFailed)
 }
 
 #[cfg(target_os = "macos")]
-fn start_login_service() -> crate::runtime_owner::RuntimeEvent {
+fn start_login_service(restart: bool) -> crate::runtime_owner::RuntimeEvent {
     let log_directory = muniment_core::user_diagnostics::effective_user_home()
         .ok()
         .map(|home| home.join("Library/Logs/Muniment"));
@@ -463,6 +466,7 @@ fn start_login_service() -> crate::runtime_owner::RuntimeEvent {
     let start = muniment_runtime::profile_directory().ok().map(|directory| {
         let mut adapter = MacosRuntimeStartAdapter::new(directory);
         adapter.force_request = true;
+        adapter.restart = restart;
         adapter
     });
     let record = muniment_runtime::profile_directory()
@@ -754,6 +758,24 @@ fn wait_for_start_command(
     }
 }
 
+/// The `launchctl` arguments that start the service. With `restart`, `-k`
+/// ends an instance that already runs, such as one that found the endpoint
+/// held by the desktop's child and is exiting.
+fn kickstart_arguments(target: &str, restart: bool) -> Vec<&str> {
+    let mut arguments = vec!["kickstart"];
+    if restart {
+        arguments.push("-k");
+    }
+    arguments.push(target);
+    arguments
+}
+
+/// Records that the desktop stopped its child so the service the user turned
+/// on in Login Items runs the runtime.
+pub(crate) fn record_handover(log_directory: &Path) {
+    let _ = write_child_diagnostic(log_directory, "event=runtime_service_handover\n");
+}
+
 // A socket file can remain after a killed runtime. Only a listener proves activity.
 // This readiness connection closes without a handshake. macOS can report ENOTCONN
 // when the listener reads its peer PID. The desktop client uses a separate connection.
@@ -765,6 +787,8 @@ fn runtime_endpoint_accepts_connections(endpoint: &Path) -> bool {
 struct MacosRuntimeStartAdapter {
     endpoint: PathBuf,
     force_request: bool,
+    /// Whether the start request ends a running instance first.
+    restart: bool,
     /// Whether a refused spawn waits for launchd's next spawn, which first
     /// asks for the registration's launch constraint again.
     await_repair: bool,
@@ -777,6 +801,7 @@ impl MacosRuntimeStartAdapter {
         Self {
             endpoint: profile_directory.join("muniment/attach-v1.sock"),
             force_request: false,
+            restart: false,
             await_repair: false,
             failure: std::cell::RefCell::new(None),
             constraint_violation: std::cell::Cell::new(false),
@@ -829,7 +854,7 @@ impl RuntimeStartAdapter for MacosRuntimeStartAdapter {
         let effective_uid = unsafe { libc::geteuid() };
         let target = format!("gui/{effective_uid}/ai.muniment.runtime");
         let child = Command::new("/bin/launchctl")
-            .args(["kickstart", target.as_str()])
+            .args(kickstart_arguments(&target, self.restart))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -1463,6 +1488,7 @@ mod tests {
         let profile_directory = PathBuf::from("/profiles/current");
         let adapter = MacosRuntimeStartAdapter::new(profile_directory);
         assert!(!adapter.force_request);
+        assert!(!adapter.restart);
 
         assert_eq!(
             adapter.endpoint,
@@ -1738,6 +1764,23 @@ mod tests {
             )
         );
         assert_eq!(diagnostic_record(RuntimeServiceActivation::Enabled), None);
+    }
+
+    #[test]
+    fn a_handover_restarts_the_service_and_records_the_handover() {
+        let target = "gui/501/ai.muniment.runtime";
+        assert_eq!(kickstart_arguments(target, false), ["kickstart", target]);
+        assert_eq!(
+            kickstart_arguments(target, true),
+            ["kickstart", "-k", target]
+        );
+        let root = directory();
+        let logs = root.join("Library/Logs/Muniment");
+        fs::create_dir_all(root.join("Library/Logs")).unwrap();
+        fs::set_permissions(root.join("Library/Logs"), fs::Permissions::from_mode(0o700)).unwrap();
+        record_handover(&logs);
+        assert!(runtime_log(&logs).ends_with("event=runtime_service_handover\n"));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

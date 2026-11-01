@@ -23,8 +23,11 @@ denial leaves the service inactive, and the app runs the bundled runtime as its
 own child, which stops when the app quits. A `requiresApproval` status writes
 `event=runtime_service_requires_approval` to `runtime.log`. A notice over the
 composer says scheduled agents run only while Muniment is open and opens System
-Settings > General > Login Items on request. An approval takes effect at the
-next launch. A `notFound` status or another registration error also leaves the
+Settings > General > Login Items on request. launchd starts the service as
+soon as the user turns it on. That runtime finds the child's endpoint live and
+exits. The app reads the `enabled` status within a second, waits until no agent
+run is in progress, stops the child, writes `event=runtime_service_handover`
+and restarts the service with `launchctl kickstart -k`. A `notFound` status or another registration error also leaves the
 service inactive.
 
 `launchd` applies a launch constraint to the bundle's `BundleProgram`.
