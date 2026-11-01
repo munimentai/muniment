@@ -194,6 +194,9 @@ async function stopClickCapture(voice) {
   await fireEvent.click(voice)
 }
 
+// The sidebar fills once the first thread page and the agent listing are in.
+const sidebarRows = () => waitFor(() => expect(document.querySelector('#sidebar .thread-row')).not.toBeNull())
+
 function deferred() {
   let resolve
   let reject
@@ -3157,7 +3160,7 @@ describe('thread name', () => {
 
     expect(heading).toContainElement(screen.getByRole('button', { name: 'Rename thread' }))
     expect(listHeading).toBeInTheDocument()
-    expect(within(list).getAllByRole('listitem')).toHaveLength(2)
+    await waitFor(() => expect(within(list).getAllByRole('listitem')).toHaveLength(2))
     expect(screen.getByRole('region', { name: 'Transcript: Lease renewal' })).toBeInTheDocument()
   })
 
@@ -3462,6 +3465,7 @@ describe('thread name', () => {
     })
     render(App)
     await screen.findByText('Answer')
+    await sidebarRows()
     const open = document.querySelector('.thread-row[aria-current="true"]')
     expect(open.querySelector('.select-mark')).toBeNull()
     await fireEvent.click(screen.getByRole('button', { name: 'Archive review' }), { shiftKey: true })
@@ -3492,6 +3496,7 @@ describe('thread name', () => {
     })
     render(App)
     await screen.findByText('Answer')
+    await sidebarRows()
     const current = document.querySelector('.thread-row[aria-current="true"]')
     expect(current).toHaveTextContent('Lease renewal')
     await fireEvent.click(current, { metaKey: true })
@@ -3540,6 +3545,7 @@ describe('thread name', () => {
     })
     render(App)
     await screen.findByText('Answer')
+    await sidebarRows()
 
     await openDeleteMenu('Lease renewal')
     await fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
@@ -3737,6 +3743,7 @@ describe('thread name', () => {
     })
     render(App)
     await screen.findByText('The renewal date is September 1.')
+    await sidebarRows()
 
     const titlebarName = document.querySelector('.thread-title')
     const sidebarName = document.querySelector('.thread-row')
@@ -3777,7 +3784,7 @@ describe('thread name', () => {
   it('lays a row on one line, the title and then the time, while this computer is the only machine', async () => {
     threadSummaryResult = [{ threadId: 'thread-1', title: 'Lease renewal', updatedAt: '2026-07-28T11:55:00Z', runtimeId: 'local' }]
     render(App)
-    const row = (await screen.findByText('Lease renewal')).closest('.thread-row')
+    const row = (await screen.findByText('Lease renewal', { selector: '.thread-row-title' })).closest('.thread-row')
     const body = row.querySelector('.thread-row-body')
     expect(body).toHaveAttribute('data-layout', 'single')
     expect(row.querySelector('.thread-row-meta')).toBeNull()
@@ -3867,7 +3874,7 @@ describe('thread name', () => {
     expect(screen.queryByRole('region', { name: 'Start with' })).not.toBeInTheDocument()
     summaries.resolve()
     expect(await screen.findByRole('heading', { level: 1, name: 'Tauri Morning' })).not.toHaveAttribute('aria-busy', 'true')
-    expect(within(sidebar).queryByText('Loading threads…')).not.toBeInTheDocument()
+    await waitFor(() => expect(within(sidebar).queryByText('Loading threads…')).not.toBeInTheDocument())
     expect(within(sidebar).queryByText('No threads yet.')).not.toBeInTheDocument()
   })
 
@@ -3884,7 +3891,7 @@ describe('thread name', () => {
     expect(invoke).toHaveBeenCalledWith('chat_select_thread', { threadId: 'lease', runtimeId: 'local' })
     expect(invoke).not.toHaveBeenCalledWith('chat_thread_open', expect.objectContaining({ threadId: 'morning' }))
     expect(shown).toEqual([])
-    await fireEvent.click(within(screen.getByRole('list', { name: 'Projects list' })).getByText('Tauri Morning').closest('.thread-row'))
+    await fireEvent.click((await within(screen.getByRole('list', { name: 'Projects list' })).findByText('Tauri Morning')).closest('.thread-row'))
     await waitFor(() => expect(localStorage.getItem('muniment.open-thread')).toBe('morning'))
   })
 
@@ -3926,6 +3933,48 @@ describe('thread name', () => {
     expect(await screen.findByRole('heading', { level: 1, name: 'Tauri Morning' })).toBeInTheDocument()
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     await waitFor(() => expect(localStorage.getItem('muniment.open-thread')).toBe('morning'))
+  })
+
+  it.each(['agents first', 'threads first'])('fills the sidebar in one step at launch with the %s', async (order) => {
+    threadSummaryResult = [
+      { threadId: 'morning-thread', title: 'Tauri Morning', updatedAt: '2026-07-28T11:55:00Z', runtimeId: 'local' },
+      { threadId: 'plain-thread', title: 'Lease renewal', updatedAt: '2026-07-27T11:55:00Z', runtimeId: 'local' },
+    ]
+    const summaries = deferred()
+    const agents = deferred()
+    const fallback = invoke.getMockImplementation()
+    // The first runtime list asks for the agents while the thread page is still out.
+    const machines = { appVersion: '0.2.0', deviceName: 'Laptop', selected: 'local', runtimes: [{ id: 'local', name: 'This computer', kind: 'local', status: 'online', local: true, active: true, scopes: [] }] }
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args) ? agents.promise : command === 'runtime_list' ? machines : fallback(command, args))
+    const core = window.__TAURI__.core.invoke
+    window.__TAURI__.core.invoke = (command, ...args) => command === 'chat_thread_summaries' && !args[0]?.cursor
+      ? summaries.promise.then(() => core(command, ...args))
+      : core(command, ...args)
+    onTestFinished(() => { window.__TAURI__.core.invoke = core })
+    const seen = new Set()
+    const observer = new MutationObserver(() => {
+      const rows = [...document.querySelectorAll('#sidebar .thread-row-title')].map((title) => title.textContent)
+      if (rows.length) seen.add(rows.join('|'))
+    })
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true })
+    onTestFinished(() => observer.disconnect())
+    render(App)
+    const answer = () => agents.resolve(agentListAnswer([{ id: 'agent-1', name: 'Morning', instructions: '', projectId: null, schedule: null, routines: [] }], { 'agent-1': 'morning-thread' }))
+    if (order === 'agents first') {
+      answer()
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', expect.objectContaining({ operation: 'agent.list' })))
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      summaries.resolve()
+    } else {
+      summaries.resolve()
+      await screen.findByRole('heading', { level: 1, name: 'Tauri Morning' })
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(document.querySelector('#sidebar .thread-row')).toBeNull()
+      expect(within(document.getElementById('sidebar')).getByRole('status')).toHaveTextContent('Loading threads…')
+      answer()
+    }
+    await waitFor(() => expect(document.querySelectorAll('#sidebar .thread-row-title')).toHaveLength(2))
+    expect([...seen]).toEqual(['Tauri Morning|Lease renewal'])
   })
 
   it('names an empty thread list once the first read finds no threads', async () => {
@@ -4120,7 +4169,8 @@ describe('launch rows', () => {
 
   it('names no machine on a row before the agent list arrives, and no offline dot before the runtime connects', async () => {
     const { seen, answerAgents } = launch({ connected: true })
-    await waitFor(() => expect(rowMeta('Tauri Morning')).toBeTruthy())
+    // A slow agent listing holds the list for at most a second.
+    await waitFor(() => expect(rowMeta('Tauri Morning')).toBeTruthy(), { timeout: 3000 })
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', expect.objectContaining({ operation: 'agent.list' })))
     // Before the agent list answers, each row holds its meta line to its time.
     expect(rowMeta('Tauri Morning')).not.toHaveTextContent('This computer')
@@ -9834,6 +9884,7 @@ describe('a run on another thread', () => {
     await screen.findByText('Blue light scatters')
     expect(await screen.findByRole('button', { name: 'Stop' })).toBeInTheDocument()
     await waitFor(() => expect(chatListener).toBeTypeOf('function'))
+    await sidebarRows()
     return pages
   }
 

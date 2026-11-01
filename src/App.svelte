@@ -1115,12 +1115,26 @@
     query: threadSearch,
     machineOf: (runtimeId) => pairedRuntimes(runtimeList).length ? machineName(runtimeList.runtimes.find(runtime => runtime.id === (runtimeId ?? LOCAL_RUNTIME_ID)) ?? { id: runtimeId }) : null,
   }))
+  // Whether the first thread page answered or failed. Core arranges the
+  // sidebar only once it and the first agent listing are in, so launch fills
+  // the list in one step and never shows the agents' rows alone.
+  let threadsListed = $state(false)
+  let sidebarArranged = $state(false)
+  // A slow machine never holds the list: past this wait, the first thread
+  // page arranges without the agent listing.
+  const AGENT_LIST_WAIT_MS = 1000
+  let agentWaitOver = $state(false)
+  $effect(() => {
+    if (!threadsListed || agentsListed || agentWaitOver) return
+    const timer = setTimeout(() => { agentWaitOver = true }, AGENT_LIST_WAIT_MS)
+    return () => clearTimeout(timer)
+  })
   // Core answers identical input with the same sections, so the same input is not asked twice in a row.
   let sidebarAsked = ''
   $effect(() => {
     const input = sidebarFeed
     const listed = agentsListed
-    if (!tauri) return
+    if (!tauri || !threadsListed || !(listed || agentWaitOver)) return
     const asked = `${listed}:${JSON.stringify(input)}`
     if (asked === sidebarAsked) return
     sidebarAsked = asked
@@ -1129,6 +1143,7 @@
       if (request !== sidebarRequest || !next) return
       sidebarArrangement = next
       arrangedWithAgents = listed
+      sidebarArranged = true
     }).catch(() => { if (request === sidebarRequest) sidebarAsked = '' })
   })
   // The thread that shows is the one launch opens again, and a new thread
@@ -1813,8 +1828,8 @@
     onCancelError: (next) => { cancelError = next },
     onQueueError: (next) => { queueError = next },
     onThreadListError: (next, action) => { threadListError = next; threadListErrorAction = action },
-    onHistoryError: (next, action) => { historyError = next; historyErrorAction = action; if (next) threadShown = true },
-    onThreadSummaries: (next) => { threadSummaries = dedupeThreads(next, swarm) },
+    onHistoryError: (next, action) => { historyError = next; historyErrorAction = action; if (next) { threadShown = true; threadsListed = true } },
+    onThreadSummaries: (next) => { threadSummaries = dedupeThreads(next, swarm); threadsListed = true },
     onMoreThreads: (next) => { moreThreads = next },
     readProject: () => selectedProject,
     readAgent: () => selectedAgent,
@@ -3979,7 +3994,7 @@
               onretryprojects={() => refreshProjects()}>
               {#snippet footer()}
                 {#if threadSearch.trim() && !sidebarArrangement.results.length}<p class="side-empty">{loadingOlderThreads ? 'Searching threads…' : 'No matching threads.'}</p>{/if}
-                {#if !threadSearch.trim() && !sidebarArrangement.projects.length && !showFreshThread}<p class="side-empty" role="status">{threadShown ? 'No threads yet.' : 'Loading threads…'}</p>{/if}
+                {#if !threadSearch.trim() && !sidebarArrangement.projects.length && !showFreshThread}<p class="side-empty" role="status">{threadShown && sidebarArranged ? 'No threads yet.' : 'Loading threads…'}</p>{/if}
                 {#if threadListError}<p class="side-empty" role="alert">{threadListError} {#if threadListErrorAction}<button disabled={loadingOlderThreads} onclick={loadOlderThreads}>Retry</button>{/if}</p>{/if}
                 {#if moreThreads && !threadListError}
                   <button type="button" class="older-threads" disabled={loadingOlderThreads} onclick={loadOlderThreads}>Older threads</button>
