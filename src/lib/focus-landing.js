@@ -96,41 +96,53 @@ export function inputMarkSettler(invoke, throttle = INPUT_MARK_THROTTLE_MS) {
 // - code puts focus on a text field, as at launch, on "Open agent" or on a
 //   thread switch, which a click inside that field does not,
 // - the window becomes active again over a focused text field,
-// - a menu, list box, dialog or popover opens over a focused text field, or
-//   a control expands one.
-// A click into a field from no other field asks nothing. Answers the
-// function that stops listening.
+// - code or a key moves focus from a text field to an element that takes no
+//   text, as a menu that focuses its first item, since WebKit leaves the mark
+//   at the old caret then,
+// - a menu, list box, dialog or popover opens or closes, or a control expands
+//   or collapses one, over a focused text field or over a caret that focus
+//   left that way, as when Escape closes the machine menu onto its button.
+// A click into a field from no other field asks nothing, and so does a click
+// that moves focus off a text field. Answers the function that stops
+// listening.
 const OVERLAY = '[role="menu"], [role="listbox"], [role="dialog"], [popover], dialog'
 export function settleInputMark(target, settler) {
   const view = target.defaultView ?? window
   let last = null
   let pressed = null
+  // A caret that code or a key moved focus away from, whose mark WebKit may
+  // still draw. A text field taking focus ends it.
+  let left = false
   const focused = () => takesText(target.activeElement)
   const press = (event) => { pressed = event.target }
   const moved = (event) => {
     const field = event.target
     const clicked = pressed instanceof Node && field.contains(pressed)
     pressed = null
-    if (!takesText(field)) return
+    if (!takesText(field)) {
+      if (!clicked && takesText(event.relatedTarget)) { left = true; settler.poke() }
+      return
+    }
+    left = false
     const from = takesText(event.relatedTarget) ? event.relatedTarget : last
     last = field
     if ((from && from !== field) || !clicked) settler.poke()
   }
   const active = () => { if (focused()) settler.poke() }
   const visible = () => { if (target.visibilityState !== 'hidden') active() }
-  const opens = (node) => node.nodeType === 1 && (node.matches(OVERLAY) || !!node.querySelector(OVERLAY))
+  const overlay = (node) => node.nodeType === 1 && (node.matches(OVERLAY) || !!node.querySelector(OVERLAY))
   const observer = new MutationObserver((records) => {
-    if (!focused()) return
-    const opened = records.some((record) => record.type === 'attributes'
-      ? record.target.getAttribute('aria-expanded') === 'true'
-      : [...record.addedNodes].some(opens))
-    if (opened) settler.poke()
+    if (!focused() && !left) return
+    const changed = records.some((record) => record.type === 'attributes'
+      ? [record.oldValue, record.target.getAttribute('aria-expanded')].filter((value) => value === 'true').length === 1
+      : [...record.addedNodes, ...record.removedNodes].some(overlay))
+    if (changed) settler.poke()
   })
   target.addEventListener('pointerdown', press, true)
   target.addEventListener('focusin', moved)
   target.addEventListener('visibilitychange', visible)
   view.addEventListener('focus', active)
-  observer.observe(target.body ?? target, { childList: true, subtree: true, attributes: true, attributeFilter: ['aria-expanded'] })
+  observer.observe(target.body ?? target, { childList: true, subtree: true, attributes: true, attributeOldValue: true, attributeFilter: ['aria-expanded'] })
   // A field that took focus before this listener, as the composer at launch.
   if (focused()) { last = target.activeElement; settler.poke() }
   return () => {

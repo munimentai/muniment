@@ -1,4 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest'
+import { mount, tick, unmount } from 'svelte'
+import MachinePicker from '../runtimes/MachinePicker.svelte'
 import { INPUT_MARK_THROTTLE_MS, inputMarkSettler, landFocus, settleInputMark, shown, takesText } from './focus-landing.js'
 
 const SKIP = '#sidebar, .titlebar, [data-panel="workspace"]'
@@ -229,7 +231,7 @@ it('asks to hide the mark when the window becomes active over a focused text fie
     document.dispatchEvent(new Event('visibilitychange'))
     expect(watches()).toBe(2)
     vi.advanceTimersByTime(INPUT_MARK_THROTTLE_MS)
-    machines.focus()
+    click(machines)
     window.dispatchEvent(new FocusEvent('focus'))
     vi.advanceTimersByTime(5000)
     expect(watches()).toBe(2)
@@ -252,11 +254,95 @@ it('asks to hide the mark when a menu opens over a focused text field', async ()
     vi.advanceTimersByTime(INPUT_MARK_THROTTLE_MS)
     // Plain content, such as a streamed reply, asks nothing.
     document.querySelector('main').insertAdjacentHTML('beforeend', '<p>Reply</p>')
+    await Promise.resolve()
+    vi.advanceTimersByTime(5000)
+    expect(watches()).toBe(2)
+    // The menu closing over the composer asks again.
     machines.setAttribute('aria-expanded', 'false')
     await Promise.resolve()
-    // A menu that opens with focus off any text field asks nothing.
-    machines.focus()
+    expect(watches()).toBe(3)
+    vi.advanceTimersByTime(INPUT_MARK_THROTTLE_MS)
+    // A menu that opens after a click moved focus off any text field asks nothing.
+    click(composer)
+    click(machines)
     document.querySelector('aside').insertAdjacentHTML('beforeend', '<div role="listbox"></div>')
+    await Promise.resolve()
+    vi.advanceTimersByTime(5000)
+    expect(watches()).toBe(3)
+  } finally { stop(); vi.useRealTimers() }
+})
+
+// The composer's machine menu, mounted for real beside a focused composer.
+// Opening it moves focus to its first item, and Escape closes it onto its button.
+async function machineMenu(props) {
+  const { invoke, watches, composer, settler } = markWatch()
+  document.querySelector('aside').replaceChildren()
+  const here = { id: 'local', name: 'This computer', kind: 'local', local: true, active: true, status: 'online' }
+  const pod = { id: 'pod', name: 'Pod', kind: 'container', status: 'online' }
+  const picker = mount(MachinePicker, { target: document.querySelector('aside'), props: { list: { selected: 'local', runtimes: [here, pod] }, ...props } })
+  await tick()
+  const chip = document.querySelector('[data-menu="machine"]')
+  const settle = async () => { for (let round = 0; round < 3; round += 1) { await tick(); await Promise.resolve() } }
+  return { invoke, watches, composer, settler, chip, settle, picker }
+}
+
+for (const [state, props] of [['a new thread', {}], ['an open thread', { locked: 'local' }]]) {
+  it(`asks to hide the mark when the machine menu of ${state} opens from a focused composer and when Escape closes it`, async () => {
+    const { watches, composer, settler, chip, settle, picker } = await machineMenu(props)
+    const stop = settleInputMark(document, settler)
+    try {
+      click(composer)
+      expect(watches()).toBe(0)
+      // WebKit gives the clicked chip no focus, and the menu then focuses its first item.
+      chip.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, composed: true }))
+      chip.click()
+      await settle()
+      const menu = document.querySelector('[role="menu"][aria-label="Machines"]')
+      expect(menu).toBeTruthy()
+      expect(menu.contains(document.activeElement)).toBe(true)
+      expect(watches()).toBe(1)
+      // The menu opening and its first item taking focus share one request
+      // and one more at the throttle's end. The menu then stays open with
+      // nothing more to ask: the watch hid the mark.
+      vi.advanceTimersByTime(INPUT_MARK_THROTTLE_MS)
+      const opened = watches()
+      vi.advanceTimersByTime(20_000)
+      expect(watches()).toBe(opened)
+      document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      await settle()
+      expect(document.querySelector('[role="menu"][aria-label="Machines"]')).toBeNull()
+      expect(document.activeElement).toBe(chip)
+      expect(watches()).toBe(opened + 1)
+      vi.advanceTimersByTime(20_000)
+      expect(watches()).toBe(opened + 1)
+      // Back in the composer by a click, the menu asks again as it opens.
+      click(composer)
+      chip.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, composed: true }))
+      chip.click()
+      await settle()
+      expect(watches()).toBe(opened + 2)
+    } finally { stop(); unmount(picker); vi.useRealTimers() }
+  })
+}
+
+it('asks to hide the mark when a menu closes back to a composer that kept focus', async () => {
+  const { watches, composer, machines, settler } = markWatch()
+  const stop = settleInputMark(document, settler)
+  try {
+    click(composer)
+    machines.setAttribute('aria-expanded', 'true')
+    document.querySelector('aside').insertAdjacentHTML('beforeend', '<div role="menu" aria-label="Machines"></div>')
+    await Promise.resolve()
+    expect(watches()).toBe(1)
+    vi.advanceTimersByTime(5000)
+    machines.setAttribute('aria-expanded', 'false')
+    document.querySelector('[role="menu"]').remove()
+    await Promise.resolve()
+    expect(document.activeElement).toBe(composer)
+    expect(watches()).toBe(2)
+    vi.advanceTimersByTime(5000)
+    // An unchanged aria-expanded asks nothing.
+    machines.setAttribute('aria-expanded', 'false')
     await Promise.resolve()
     vi.advanceTimersByTime(5000)
     expect(watches()).toBe(2)
