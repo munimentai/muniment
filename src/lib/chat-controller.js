@@ -51,6 +51,9 @@ export function createChatController({
   readMentions = () => [],
   onMentions = () => {},
   readThreadId = () => null,
+  // The thread open when the app last quit, which launch opens again while it
+  // still exists, or null.
+  readLaunchThreadId = () => null,
   readThreadSummaries = () => [],
   // The machine the composer sends to. A run left running on one machine
   // does not hold a send to another.
@@ -476,6 +479,13 @@ export function createChatController({
       // A reload keeps the run the user watches on screen.
       if (active()) return
       const newest = summaries[0].threadId
+      // At launch the shell holds no thread yet. The thread open at quit opens
+      // again, and one that is gone falls through to the newest with no error.
+      const launchThreadId = openThreadId ? null : readLaunchThreadId()
+      if (launchThreadId && launchThreadId !== newest) {
+        if (await openThread(launchThreadId, switchBlocked, !switchBlocked, true) !== false) return
+        if (destroyed) return
+      }
       if (openThreadId && openThreadId !== newest) {
         // Retention can prune the open thread, and a sign-in under another
         // subject leaves the shell holding an id it no longer owns. Fall back to
@@ -518,7 +528,8 @@ export function createChatController({
     }
   }
 
-  async function openThread(threadId, select = false, restoreSelection = false) {
+  // A quiet open reports no failure, since its caller falls back to another thread.
+  async function openThread(threadId, select = false, restoreSelection = false, quiet = false) {
     if (switchingThread || holdsThread()) return
     threadRefreshSequence += 1
     switchingThread = true
@@ -611,7 +622,7 @@ export function createChatController({
         // The transcript stays on the run the user left, so it takes the
         // events that landed while the other thread loaded.
         drainVisibleRun()
-        onHistoryError(historyReadError(error), {
+        if (!quiet) onHistoryError(historyReadError(error), {
           label: 'Restore history',
           run: () => openThread(threadId, select || switchBlocked, restoreSelection),
         }, true)

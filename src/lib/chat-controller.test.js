@@ -12,7 +12,7 @@ function deferred() {
   return { promise, resolve, reject }
 }
 
-function setup(invoke = vi.fn(), { threadId = null, summaries = [], projectId = null, agentId = null, thinkingLevel = null, permissionMode = null } = {}) {
+function setup(invoke = vi.fn(), { threadId = null, summaries = [], projectId = null, agentId = null, thinkingLevel = null, permissionMode = null, launchThreadId = null } = {}) {
   let messages = []
   let active = null
   let announced = null
@@ -49,6 +49,7 @@ function setup(invoke = vi.fn(), { threadId = null, summaries = [], projectId = 
     readThinkingLevel: () => thinkingLevel,
     readPermissionMode: () => permissionMode,
     readThreadId: () => openThreadId,
+    readLaunchThreadId: () => launchThreadId,
     readProject: () => projectId,
     readAgent: () => agentId,
     readThreadSummaries: () => threadSummaries,
@@ -1093,6 +1094,38 @@ describe('chat controller', () => {
       ['chat_select_thread', { threadId: 'thread-3' }],
     ])
     expect(context.onThreadSelected).toHaveBeenLastCalledWith('thread-3')
+  })
+
+  it('opens the thread open at quit on launch, not the newest', async () => {
+    const invoke = vi.fn(async (command) => command === 'chat_thread_summaries'
+      ? { summaries: [{ threadId: 'thread-3' }, { threadId: 'thread-1' }], nextCursor: null }
+      : { entries: [], nextCursor: null })
+    const context = setup(invoke, { launchThreadId: 'thread-1' })
+
+    await context.controller.loadHistory()
+
+    expect(invoke.mock.calls).toEqual([
+      ['chat_thread_summaries', { limit: 20 }],
+      ['chat_thread_open', { threadId: 'thread-1', limit: 100 }],
+      ['chat_select_thread', { threadId: 'thread-1' }],
+    ])
+    expect(context.onThreadSelected).toHaveBeenLastCalledWith('thread-1')
+  })
+
+  it('opens the newest thread on launch with no error when the thread open at quit is gone', async () => {
+    const invoke = vi.fn(async (command, payload) => {
+      if (command === 'chat_thread_summaries') return { summaries: [{ threadId: 'thread-3' }, { threadId: 'thread-1' }], nextCursor: null }
+      if (command === 'chat_thread_open' && payload.threadId === 'deleted-thread') throw new Error('thread not found')
+      return { entries: [], nextCursor: null }
+    })
+    const context = setup(invoke, { launchThreadId: 'deleted-thread' })
+
+    await context.controller.loadHistory()
+
+    expect(invoke.mock.calls.filter(([command]) => command === 'chat_select_thread')).toEqual([['chat_select_thread', { threadId: 'thread-3' }]])
+    expect(context.onThreadSelected).toHaveBeenCalledTimes(1)
+    expect(context.onThreadSelected).toHaveBeenLastCalledWith('thread-3')
+    expect(context.onHistoryError.mock.calls.every(([message]) => !message)).toBe(true)
   })
 
   it('restores the backend selection and four replies after a desktop relaunch', async () => {

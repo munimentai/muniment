@@ -3845,6 +3845,37 @@ describe('thread name', () => {
     expect(within(sidebar).queryByText('No threads yet.')).not.toBeInTheDocument()
   })
 
+  it('reopens the thread open at quit on launch, with no empty list on the way, and keeps the next one opened', async () => {
+    const at = '2026-07-28T11:55:00Z'
+    localStorage.setItem('muniment.open-thread', 'lease')
+    threadSummaryResult = [{ threadId: 'morning', title: 'Tauri Morning', updatedAt: at, runtimeId: 'local' }, { threadId: 'lease', title: 'Lease renewal', updatedAt: '2026-07-27T11:55:00Z', runtimeId: 'local' }]
+    const shown = []
+    const observer = new MutationObserver(() => { const sidebar = document.getElementById('sidebar'); if (sidebar && /No threads yet\./.test(sidebar.textContent)) shown.push('empty') })
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true })
+    onTestFinished(() => observer.disconnect())
+    render(App)
+    expect(await screen.findByRole('heading', { level: 1, name: 'Lease renewal' })).not.toHaveAttribute('aria-busy', 'true')
+    expect(invoke).toHaveBeenCalledWith('chat_select_thread', { threadId: 'lease', runtimeId: 'local' })
+    expect(invoke).not.toHaveBeenCalledWith('chat_thread_open', expect.objectContaining({ threadId: 'morning' }))
+    expect(shown).toEqual([])
+    await fireEvent.click(within(screen.getByRole('list', { name: 'Projects list' })).getByText('Tauri Morning').closest('.thread-row'))
+    await waitFor(() => expect(localStorage.getItem('muniment.open-thread')).toBe('morning'))
+  })
+
+  it('opens the newest thread on launch when the thread open at quit is gone', async () => {
+    localStorage.setItem('muniment.open-thread', 'deleted')
+    threadSummaryResult = [{ threadId: 'morning', title: 'Tauri Morning', updatedAt: '2026-07-28T11:55:00Z', runtimeId: 'local' }]
+    const core = window.__TAURI__.core.invoke
+    window.__TAURI__.core.invoke = (command, ...args) => command === 'chat_thread_open' && args[0]?.threadId === 'deleted'
+      ? Promise.reject(new Error('thread not found'))
+      : core(command, ...args)
+    onTestFinished(() => { window.__TAURI__.core.invoke = core })
+    render(App)
+    expect(await screen.findByRole('heading', { level: 1, name: 'Tauri Morning' })).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    await waitFor(() => expect(localStorage.getItem('muniment.open-thread')).toBe('morning'))
+  })
+
   it('names an empty thread list once the first read finds no threads', async () => {
     threadSummaryResult = []
     render(App)

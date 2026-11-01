@@ -19,7 +19,7 @@
   import { landFocus, takesText } from './lib/focus-landing.js'
   import { panelScroll } from './lib/panel-scroll.js'
   import UserQuestion from './lib/UserQuestion.svelte'
-  import { THREAD_ORGANIZATION_KEY, readThreadOrganization, listedThreads } from './lib/thread-organization.js'
+  import { THREAD_ORGANIZATION_KEY, keepOpenThread, readOpenThread, readThreadOrganization, listedThreads } from './lib/thread-organization.js'
   import ComposerReferences from './composer/ComposerReferences.svelte'
   import FileMentions from './composer/FileMentions.svelte'
   import { mentionQuery, insertMention, composerParts } from './composer/composer-references.js'
@@ -1119,6 +1119,12 @@
       sidebarArrangement = next
     }).catch(() => { if (request === sidebarRequest) sidebarAsked = '' })
   })
+  // The thread that shows is the one launch opens again, and a new thread
+  // leaves launch to the newest. A history that fails to load keeps the last one.
+  $effect(() => {
+    const threadId = freshThread ? null : currentThreadId
+    if (threadShown && (freshThread || threadId)) untrack(() => keepOpenThread(threadId))
+  })
   // The open thread is read while it shows, and again as its replies and runs land.
   $effect(() => {
     const threadId = listedThreadId
@@ -1782,6 +1788,7 @@
     onMentions: (outcomes) => { const refused = outcomes.filter((outcome) => !outcome.sent).map((outcome) => outcome.error).filter(Boolean); if (refused.length) submitError = refused.join(' ') },
     readPendingModel: () => currentThreadId ? null : pendingModel,
     readThreadId: () => currentThreadId,
+    readLaunchThreadId: () => readOpenThread(),
     readThreadSummaries: () => threadSummaries,
     readRuntime: () => composerRuntime,
     blocked: () => dictationBusy() || runtimeUpgradePending() || !!unreachableMachine || modelChoicePending || compacting || !!retryReview?.chooseModel,

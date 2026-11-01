@@ -1,4 +1,18 @@
 export const THREAD_ORGANIZATION_KEY = 'muniment.thread-organization'
+// The thread open at quit, which launch opens again. Absent while a new
+// thread or no thread shows.
+export const OPEN_THREAD_KEY = 'muniment.open-thread'
+
+export function readOpenThread(storage = localStorage) {
+  try { return storage.getItem(OPEN_THREAD_KEY) || null } catch (_) { return null }
+}
+
+export function keepOpenThread(threadId, storage = localStorage) {
+  try {
+    if (threadId) storage.setItem(OPEN_THREAD_KEY, threadId)
+    else storage.removeItem(OPEN_THREAD_KEY)
+  } catch (_) {}
+}
 
 export function readThreadOrganization(storage = localStorage) {
   try {
