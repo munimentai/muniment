@@ -46,13 +46,21 @@ pub fn thread_summaries(
     .map_err(journal_error)
 }
 
-/// Reports whether one subject owns a thread.
+/// Reports whether one subject owns a thread. A deleted thread is owned by
+/// no one, so its select answers that the thread is not found.
 pub fn select_thread(
     storage: SharedStorage,
     subject: Option<String>,
     thread_id: String,
 ) -> Result<bool, String> {
     let mut storage = storage.lock().map_err(lock_error)?;
+    if storage
+        .journal
+        .thread_deleted(&thread_id)
+        .map_err(journal_error)?
+    {
+        return Ok(false);
+    }
     subject_owns_first_run(&mut storage.journal, &thread_id, subject.as_deref())
         .map_err(journal_error)
 }

@@ -377,7 +377,9 @@ fn selects_only_an_owned_accessible_thread() {
         env!("CARGO_PKG_VERSION"),
     )
     .unwrap();
-    assert!(select_thread(storage, Some("owner".into()), thread_id).is_err());
+    // A deleted thread answers not found, which the client names, rather
+    // than a journal failure.
+    assert!(!select_thread(storage, Some("owner".into()), thread_id).unwrap());
 }
 
 #[test]
