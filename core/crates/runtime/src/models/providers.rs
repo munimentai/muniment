@@ -731,7 +731,12 @@ fn provider_inventory_with(
                             .map(str::to_owned);
                         Some((id, name))
                     })
-                    .filter(|(id, _)| !id.trim().is_empty())
+                    .filter(|(id, _)| {
+                        !id.trim().is_empty()
+                            && muniment_core::model_router::model_catalog::runs_with_tools(
+                                provider, id,
+                            )
+                    })
                     .map(|(id, name)| InventoryModel {
                         id: id.to_owned(),
                         name,
@@ -768,7 +773,10 @@ fn provider_inventory_with(
             decision_models: Vec::new(),
         });
     }
-    for row in models {
+    // A model that refuses the tools every turn sends never reaches a picker.
+    for row in models.iter().filter(|row| {
+        muniment_core::model_router::model_catalog::runs_with_tools(&row.provider, &row.id)
+    }) {
         if let Some(known) = providers.iter_mut().find(|known| known.id == row.provider) {
             let mut model = InventoryModel::from(row);
             if let Some(existing) = known.models.iter_mut().find(|entry| entry.id == model.id) {
@@ -1509,6 +1517,40 @@ llama     qwen3              32K      16.4K    yes       no\n";
         assert_eq!(inventory.providers[0].models.len(), 1);
         assert_eq!(inventory.providers[0].models[0].context, "128K");
         assert!(inventory.providers[0].models[0].images);
+    }
+
+    #[test]
+    fn the_picker_never_offers_a_model_that_refuses_tools() {
+        let agent = temporary_directory();
+        fs::write(
+            agent.join("models.json"),
+            serde_json::json!({
+                "providers": {"muniment-router": {"baseUrl": "http://127.0.0.1:1/v1", "models": [
+                    {"id": "xai/grok-4.20-multi-agent-0309"},
+                    {"id": "xai/grok-4.7"}
+                ]}}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fs::write(
+            agent.join("auth.json"),
+            r#"{"xai":{"type":"api_key","key":"k"}}"#,
+        )
+        .unwrap();
+        let rows = [
+            row("xai", "grok-4.20-multi-agent-0309", "2M"),
+            row("xai", "grok-4.7", "256K"),
+            row("muniment-router", "xai/grok-4.20-multi-agent-0309", "2M"),
+        ];
+        let inventory = provider_inventory(&agent, &rows, &[]).unwrap();
+        let ids: Vec<_> = inventory
+            .providers
+            .iter()
+            .flat_map(|provider| provider.models.iter().map(|model| model.id.as_str()))
+            .collect();
+        assert_eq!(ids, ["grok-4.7", "xai/grok-4.7"]);
+        fs::remove_dir_all(agent).unwrap();
     }
 
     #[test]

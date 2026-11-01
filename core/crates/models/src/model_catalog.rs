@@ -80,6 +80,16 @@ pub fn entry(family: &str, model: &str) -> Option<&'static ModelEntry> {
         .find(|entry| entry.family == family && entry.model == model)
 }
 
+/// Whether a turn can run on the model. Every turn sends client-side tools,
+/// and xAI refuses them on its multi-agent models without beta access, so a
+/// picker never offers those models. `model` is a bare id or a route key such
+/// as `xai/grok-4.20-multi-agent-0309`.
+pub fn runs_with_tools(family: &str, model: &str) -> bool {
+    let model = model.to_ascii_lowercase();
+    let xai = family.eq_ignore_ascii_case("xai") || model.contains("grok");
+    !(xai && model.contains("multi-agent"))
+}
+
 /// One model as the catalog file writes it.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -268,6 +278,18 @@ impl Reloader {
 mod tests {
     use super::*;
     use crate::family::FAMILIES;
+
+    #[test]
+    fn a_multi_agent_model_cannot_run_with_tools() {
+        assert!(!runs_with_tools("xai", "grok-4.20-multi-agent-0309"));
+        assert!(!runs_with_tools(
+            "muniment-router",
+            "xai/grok-4.20-multi-agent-0309"
+        ));
+        assert!(!runs_with_tools("openrouter", "x-ai/Grok-4.20-Multi-Agent"));
+        assert!(runs_with_tools("xai", "grok-4.20-0309-reasoning"));
+        assert!(runs_with_tools("openai", "gpt-6-astra"));
+    }
 
     #[test]
     fn every_catalog_model_belongs_to_a_family_the_router_pools() {
