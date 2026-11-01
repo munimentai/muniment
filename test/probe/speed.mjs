@@ -84,6 +84,7 @@ async function checkStart(browser, baseUrl, report) {
       const sent = actionRequests(await commands(page))
       const counts = tally(sent)
       report[`start ${fixture}`] = { total: sent.length, ...counts }
+      assert.equal(counts.home_folder_state ?? 0, 1, `${fixture} reads Home folder-access status exactly once at start`)
       assert.ok(sent.length <= budget.total, `${fixture} sent ${sent.length} requests at start, budget ${budget.total}: ${JSON.stringify(counts)}`)
       for (const [command, cap] of Object.entries(budget)) {
         if (command === 'total') continue

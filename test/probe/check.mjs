@@ -426,7 +426,9 @@ async function checkComposerActions(browser, baseUrl) {
 // starter sends one message, the user's own words, as a plain message does,
 // so the thread takes their title and no question loop runs first.
 async function checkCreationBudget(browser, baseUrl) {
-  const page = await browser.newPage({ viewport: { width: 1100, height: 720 } })
+  // The browser runs in the draft routine's zone with a 24-hour locale, so the
+  // schedule shows its zone-free wall time whatever the host or the season.
+  const page = await browser.newPage({ viewport: { width: 1100, height: 720 }, timezoneId: 'America/New_York', locale: 'en-GB' })
   const commands = () => page.evaluate(() => window.__PROBE__.invokedCommands.map(({ command, payload }) => ({ command, operation: payload?.operation, body: payload?.body, prompt: payload?.prompt })))
   const draftStarts = async () => (await commands()).filter(({ command, operation, body }) => command === 'agent_request' && operation === 'agent.draft' && !body?.draft_id)
   const replies = (count) => page.waitForFunction((count) => document.querySelectorAll('.agent-chat article').length === count && !document.querySelector('.agent-chat [role="status"]'), count)
@@ -437,8 +439,8 @@ async function checkCreationBudget(browser, baseUrl) {
     assert.deepEqual(first.map(({ body }) => body.message), ['Every weekday at 9am, summarize my inbox and list what needs a reply.'])
     assert.ok(first[0].body.chat_id)
     const reply = page.getByRole('article', { name: 'Draft: Inbox brief' })
-    // The schedule shows in the viewer's time zone and clock.
-    assert.match(await reply.textContent(), /Weekdays at \d{1,2}:00( [AP]M)?/)
+    // The schedule reads exactly, with no conversion, padding loss or AM/PM suffix.
+    assert.equal(await reply.locator('dt').filter({ hasText: /^When$/ }).locator('xpath=following-sibling::dd[1]').textContent(), 'Weekdays at 09:00')
     // A change is one more message and one more round trip, and its reply returns within the budget.
     const started = Date.now()
     await page.locator('#composer-message').fill('Group the summary by sender.')
