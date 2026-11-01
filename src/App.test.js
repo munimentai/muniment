@@ -4599,6 +4599,40 @@ describe('sidebar collapse', () => {
     expect(screen.queryByRole('complementary', { name: 'Agent profile' })).not.toBeInTheDocument()
   })
 
+  it('moves off a deleted agent\'s run thread to the newest remaining thread, and Back to threads and launch never reopen it', async () => {
+    const original = invoke.getMockImplementation()
+    let deleted = false
+    const scout = { id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null }
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args) ? agentListAnswer(deleted ? [] : [scout], deleted ? {} : { 'agent-1': 'agent-thread' })
+      : command === 'agent_request' && args?.operation === 'agent.delete' ? (deleted = true, {})
+      : command === 'chat_thread_open' ? []
+      : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
+    threadSummaryResult = [
+      { threadId: 'agent-thread', title: 'Carry out your saved agent instructions', updatedAt: '2026-01-02T00:00:00Z' },
+      { threadId: 'plain-thread', title: 'Lease renewal', updatedAt: '2026-01-01T00:00:00Z' },
+    ]
+    render(App)
+    await openSidebarPage('Agents')
+    await fireEvent.click(within(await within(await screen.findByRole('region', { name: 'Agents', exact: true })).findByRole('article', { name: 'Scout' })).getByRole('button', { name: 'Open chat' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'agent-thread', limit: 100 }))
+    await waitFor(() => expect(localStorage.getItem('muniment.open-thread')).toBe('agent-thread'))
+    await openSidebarPage('Agents')
+    await fireEvent.click(await within(await screen.findByRole('region', { name: 'Agents', exact: true })).findByRole('button', { name: 'Actions for Scout' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
+    await fireEvent.click(within(await screen.findByRole('group', { name: 'Delete agent' })).getByRole('button', { name: 'Confirm delete' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', expect.objectContaining({ operation: 'agent.delete' })))
+    // The main pane leaves the agent's run thread for the newest thread the sidebar lists.
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'plain-thread', limit: 100 }))
+    await waitFor(() => expect(localStorage.getItem('muniment.open-thread')).toBe('plain-thread'))
+    const opened = () => invoke.mock.calls.filter(([command, args]) => command === 'chat_thread_open' && args?.threadId === 'agent-thread').length
+    const before = opened()
+    await openSettings()
+    await fireEvent.click(screen.getByRole('button', { name: 'Back to threads' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument())
+    expect(opened()).toBe(before)
+    expect(screen.queryByText('Carry out your saved agent instructions', { selector: '#sidebar .thread-row-title' })).toBeNull()
+  })
+
   it('lands an agent chat opened from its card at the newest message', async () => {
     const original = invoke.getMockImplementation()
     const history = Array.from({ length: 6 }, (_, index) => ({ role: index % 2 ? 'assistant' : 'user', content: `Message ${index}` }))

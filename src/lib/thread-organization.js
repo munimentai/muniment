@@ -14,6 +14,19 @@ export function keepOpenThread(threadId, storage = localStorage) {
   } catch (_) {}
 }
 
+// Launch never reopens a thread the user deleted.
+export function forgetOpenThread(threadIds, storage = localStorage) {
+  const open = readOpenThread(storage)
+  if (open && threadIds.includes(open)) keepOpenThread(null, storage)
+}
+
+// The thread that shows after `threadIds` are deleted: the newest other
+// thread in `summaries` that is not archived, else null for a new thread.
+export function threadAfterDelete(summaries, threadIds, organization = {}) {
+  const gone = new Set(threadIds)
+  return summaries.find((thread) => !gone.has(thread.threadId) && !organization[thread.threadId]?.archived)?.threadId ?? null
+}
+
 export function readThreadOrganization(storage = localStorage) {
   try {
     const value = JSON.parse(storage.getItem(THREAD_ORGANIZATION_KEY) || '{}')

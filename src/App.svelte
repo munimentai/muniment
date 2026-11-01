@@ -19,7 +19,7 @@
   import { inputMarkSettler, landFocus, settleInputMark, takesText } from './lib/focus-landing.js'
   import { panelScroll } from './lib/panel-scroll.js'
   import UserQuestion from './lib/UserQuestion.svelte'
-  import { THREAD_ORGANIZATION_KEY, keepOpenThread, readOpenThread, readThreadOrganization, listedThreads } from './lib/thread-organization.js'
+  import { THREAD_ORGANIZATION_KEY, forgetOpenThread, keepOpenThread, readOpenThread, readThreadOrganization, listedThreads, threadAfterDelete } from './lib/thread-organization.js'
   import ComposerReferences from './composer/ComposerReferences.svelte'
   import FileMentions from './composer/FileMentions.svelte'
   import { mentionQuery, insertMention, composerParts } from './composer/composer-references.js'
@@ -348,7 +348,22 @@
       }
       for (const plan of plans) await tauri.invoke('creation_delete',{threadId:plan.threadId})
       await Promise.all([refreshCreations(),refreshAgents()])
+      await leaveThreads([...threadIds,...plans.map(plan=>plan.threadId)])
     }
+  }
+  // A deleted thread, or an archived thread of a deleted agent or artifact,
+  // never stays on screen: the newest other thread opens, else a new thread,
+  // and launch and Back to threads never open it again.
+  const leftThreads = new Set()
+  async function leaveThreads(threadIds) {
+    const gone = threadIds.filter(Boolean)
+    if (!gone.length) return
+    for (const id of gone) leftThreads.add(id)
+    forgetOpenThread(gone)
+    if (freshThread || !gone.includes(currentThreadId)) return
+    const next = threadAfterDelete(regularThreads, gone, threadOrganization)
+    if (next && await chatController.openThread(next)) return
+    await chatController.newThread()
   }
   let creationsRevision = 0
   async function refreshCreations() {
@@ -706,15 +721,16 @@
   // creation chat, so an open creation chat gives way to a new thread.
   async function agentDeleted(agent) {
     const chats = creations.filter(item => item.kind === 'agent' && item.resultId === agent.id).map(item => item.threadId)
+    const threadIds = Object.keys(agentThreadMap).filter(id => agentThreadMap[id] === agent.id)
     const next = { ...threadOrganization }
-    for (const id of Object.keys(agentThreadMap).filter(id => agentThreadMap[id] === agent.id)) next[id] = { ...next[id], archived: true }
+    for (const id of threadIds) next[id] = { ...next[id], archived: true }
     localStorage.setItem(THREAD_ORGANIZATION_KEY, JSON.stringify(next))
     threadOrganization = next
     if (selectedAgent === agent.id) selectedAgent = null
     if (profileOnlyAgent === agent.id) profileOnlyAgent = null
     agentProfileOpen = false
     await Promise.all([refreshCreations(), refreshAgents()])
-    if (chats.includes(currentThreadId)) await newSidebarThread()
+    await leaveThreads([...threadIds, ...chats])
   }
   // The agent whose thread is starting keeps its profile open until the
   // listing names that thread.
@@ -818,9 +834,11 @@
   }
 
   // Back to threads closes Settings onto the open thread, never onto the page Settings opened over.
+  // A thread deleted while a page covered it gives way as the page closes.
   function backToThreads() {
     projectsOpen = false; agentsOpen = false; artifactsOpen = false; fullPage = null
     closeSettings()
+    if (!freshThread && (leftThreads.has(currentThreadId) || threadDeleted(currentThreadId))) void leaveThreads([currentThreadId])
   }
 
   function toggleSettings() {
@@ -2497,9 +2515,12 @@
     if (deletePending) return
     deletePending = true
     const targets = deletingThreadIds.length ? deletingThreadIds : [threadId]
+    const removed = []
     for (const id of targets) {
       if (!(await chatController.deleteThread(id))) break
+      removed.push(id)
     }
+    await leaveThreads(removed)
     // Core deletes a creation chat's record with its thread.
     if (targets.some((id) => creations.some((item) => item.threadId === id))) void refreshCreations()
     deletePending = false

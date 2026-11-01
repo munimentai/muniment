@@ -1,7 +1,25 @@
 import { describe, expect, it } from 'vitest'
-import { listedThreads, readThreadOrganization } from './thread-organization.js'
+import { OPEN_THREAD_KEY, forgetOpenThread, listedThreads, readThreadOrganization, threadAfterDelete } from './thread-organization.js'
 
 describe('thread organization', () => {
+  it('picks the newest thread that is neither deleted nor archived, else none', () => {
+    const summaries = [{ threadId: 'agent-run' }, { threadId: 'archived' }, { threadId: 'plain' }, { threadId: 'older' }]
+    expect(threadAfterDelete(summaries, ['agent-run'], { archived: { archived: true } })).toBe('plain')
+    expect(threadAfterDelete(summaries, ['agent-run', 'plain', 'older'], { archived: { archived: true } })).toBeNull()
+    expect(threadAfterDelete([], ['agent-run'])).toBeNull()
+  })
+
+  it('forgets the thread launch reopens only when it was deleted', () => {
+    const store = new Map()
+    const storage = { getItem: (key) => store.get(key) ?? null, setItem: (key, value) => store.set(key, value), removeItem: (key) => store.delete(key) }
+    storage.setItem(OPEN_THREAD_KEY, 'plain')
+    forgetOpenThread(['agent-run'], storage)
+    expect(storage.getItem(OPEN_THREAD_KEY)).toBe('plain')
+    forgetOpenThread(['agent-run', 'plain'], storage)
+    expect(storage.getItem(OPEN_THREAD_KEY)).toBeNull()
+  })
+
+
   it('recovers from invalid storage and rejects non-boolean choices', () => {
     expect(readThreadOrganization({ getItem: () => '{' })).toEqual({})
     expect(readThreadOrganization({ getItem: () => JSON.stringify({ a: null, b: { pinned: 'false', archived: true } }) }))
