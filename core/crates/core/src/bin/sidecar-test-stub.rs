@@ -220,6 +220,20 @@ fn pi_rpc_blocked_stdin() {
 }
 
 fn pi_resume(args: Vec<String>) {
+    // Each start appends its process id, so a test counts the processes
+    // a thread's replies started.
+    if let Ok(path) = std::env::var("PI_RESUME_STUB_SPAWNS") {
+        let mut spawns = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .unwrap();
+        writeln!(spawns, "{}", std::process::id()).unwrap();
+    }
+    // Pi loads its extensions before it answers its first command.
+    if let Ok(delay) = std::env::var("PI_RESUME_STUB_START_DELAY_MS") {
+        thread::sleep(Duration::from_millis(delay.parse().unwrap()));
+    }
     // Pi reads its working folder before it answers its first command. A
     // `PI_RESUME_STUB_FOLDER_GATE` FIFO there holds that read, as macOS holds
     // a protected folder until the user answers its consent prompt.
@@ -387,6 +401,16 @@ fn pi_resume(args: Vec<String>) {
                         .open(path)
                         .unwrap();
                     writeln!(prompts, "{}", request["message"].as_str().unwrap()).unwrap();
+                }
+                if let Ok(path) = std::env::var("PI_RESUME_STUB_PROMPT_PIDS") {
+                    let mut prompts = fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(path)
+                        .unwrap();
+                    let message = request["message"].as_str().unwrap();
+                    let last = message.lines().last().unwrap_or_default();
+                    writeln!(prompts, "{} {last}", std::process::id()).unwrap();
                 }
                 println!(
                     "{}",

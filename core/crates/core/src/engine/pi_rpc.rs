@@ -50,7 +50,7 @@ pub struct PiOpen<'a> {
 /// `models.json`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PiRpcEngine {
-    session_root: Option<PathBuf>,
+    pub(super) session_root: Option<PathBuf>,
     pub(super) agent_directory: Option<PathBuf>,
     /// The root the pinned Pi installs under.
     pub(super) harness_root: Option<PathBuf>,
@@ -347,7 +347,11 @@ impl AgentEngine for PiRpcEngine {
         )
         .map_err(|error| OpenError::Spawn(format!("{error:?}")))?;
         observe(OpenStage::Spawned(&supervisor));
-        let process = PiRuntime { supervisor, wiring };
+        let process = PiRuntime {
+            supervisor,
+            wiring,
+            reuse: None,
+        };
         let deadline = Instant::now() + startup_timeout;
         while process.supervisor.status() == SidecarStatus::Starting && Instant::now() < deadline {
             observe(OpenStage::Waiting);

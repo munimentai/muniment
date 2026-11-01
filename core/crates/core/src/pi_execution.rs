@@ -83,6 +83,8 @@ fn session_from_binding(
 pub struct PiRuntime {
     pub supervisor: SidecarSupervisor,
     pub wiring: PiRpcWiring,
+    /// Set while this idle process may take its thread's next reply.
+    pub reuse: Option<crate::engine::PiReuse>,
 }
 
 /// The engine processes of a runtime, one slot per thread. A run takes its

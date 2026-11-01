@@ -33,8 +33,9 @@ fn a_prompt_sets_its_thinking_level_before_pi_hears_it_and_only_when_it_changes(
     let session_thread = SessionThread::default();
     let mut thread_id = None;
 
-    // Each run starts a stub Pi at medium. No level asks for the model's
-    // saved level, and medium needs no command.
+    // A new stub Pi starts at medium. No level asks for the model's saved
+    // level. The third reply takes the process the second left idle, which
+    // runs at low, so medium needs its command again.
     for (index, level) in [Some("high"), None, Some("medium")].into_iter().enumerate() {
         let (sender, events) = mpsc::channel();
         let (accepted, launch) = accept_prompt(
@@ -81,6 +82,7 @@ fn a_prompt_sets_its_thinking_level_before_pi_hears_it_and_only_when_it_changes(
             "prompt",
             "set_thinking_level low",
             "prompt",
+            "set_thinking_level medium",
             "prompt"
         ]
     );

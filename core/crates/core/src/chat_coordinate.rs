@@ -660,9 +660,13 @@ fn coordinate_work(
     let mut runtime = runtime
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    // Each run owns its process. Reopen only its own thread's saved conversation.
+    // Each run owns its process. A new reply takes the process its thread's
+    // last reply left idle only when that process answers as a new one
+    // would; any other process stops before this run's own starts.
     diagnostics.startup_stage("runtime_reset");
-    *runtime = None;
+    let mut idle = runtime
+        .take()
+        .filter(|_| resume.is_none() && compaction.is_none());
     let opening = {
         diagnostics.startup_stage("grant_renewal");
         if let Err(error) = crate::chat_launch::renew_grant_if_needed(&mut grant, || {
@@ -740,7 +744,24 @@ fn coordinate_work(
                     .map(|resume| &resume.locator)
                     .or(previous_session.as_ref()),
             )?;
-            if let Some(directory) = config.working_directory.as_deref() {
+            let reused = idle.take().and_then(|process| {
+                match engine.reuse(process, &config, previous_session.as_ref()) {
+                    Ok(reused) => Some(reused),
+                    Err(miss) => {
+                        eprintln!(
+                            "muniment-runtime: run_id={run_id} pi_reuse miss={}",
+                            miss.as_str()
+                        );
+                        None
+                    }
+                }
+            });
+            // A process that already works in the folder needs no new read of it.
+            if let Some(directory) = config
+                .working_directory
+                .as_deref()
+                .filter(|_| reused.is_none())
+            {
                 diagnostics.startup_stage("folder_access");
                 // The run names the wait while macOS asks, so the window can
                 // say which prompt to answer.
@@ -789,7 +810,7 @@ fn coordinate_work(
                 )
                 .map_err(|error| PiLaunchError::rejected("pi_acquire_completed_append", error))?;
             }
-            Ok(config)
+            Ok((config, reused))
         })();
         if cancelled.load(Ordering::SeqCst) {
             eprintln!("muniment-runtime: run_id={run_id} pi_spawn cancelled");
@@ -813,7 +834,7 @@ fn coordinate_work(
             );
             return;
         }
-        let config = match config {
+        let (config, reused) = match config {
             Ok(config) => config,
             Err(PiLaunchError::MissingRoot) => {
                 eprintln!("muniment-runtime: run_id={run_id} pi_spawn missing_root");
@@ -857,40 +878,58 @@ fn coordinate_work(
         let startup_timeout = config.startup_timeout;
         let working_directory = config.working_directory.clone();
         diagnostics.startup_stage("pi_spawn");
-        let opened = engine.open(PiOpen {
-            config,
-            cancelled: &cancelled,
-            observe: &mut |stage| match stage {
-                OpenStage::Spawned(supervisor) => diagnostics.spawned(supervisor),
-                OpenStage::Waiting => diagnostics.log_lifecycle(),
-            },
-        });
-        let (process, opened) = match opened {
-            Ok((process, transport)) => (process, Ok(transport)),
-            Err(OpenError::Spawn(error)) => {
-                eprintln!("muniment-runtime: run_id={run_id} pi_spawn error={error}");
-                fail_start(
-                    &app,
-                    &journal,
-                    &mut projector,
-                    &run_id,
-                    &mut seq,
-                    "The agent runtime could not start.",
-                    subject.as_deref(),
-                    resume.is_some(),
-                );
-                return;
-            }
-            Err(OpenError::Cancelled(process)) => (process, Err(OpenError::Cancelled(()))),
-            Err(OpenError::NotReady(process, status)) => {
-                (process, Err(OpenError::NotReady((), status)))
-            }
-            Err(OpenError::Unavailable(process)) => (process, Err(OpenError::Unavailable(()))),
-        };
-        *runtime = Some(process);
-        (startup_timeout, working_directory, opened)
+        if let Some((process, transport, launch)) = reused {
+            diagnostics.reused(&process.supervisor);
+            eprintln!("muniment-runtime: run_id={run_id} pi_spawn reused");
+            *runtime = Some(process);
+            (
+                startup_timeout,
+                working_directory,
+                Ok(transport),
+                Some(launch),
+            )
+        } else {
+            let launch_config = config.clone();
+            let opened = engine.open(PiOpen {
+                config,
+                cancelled: &cancelled,
+                observe: &mut |stage| match stage {
+                    OpenStage::Spawned(supervisor) => diagnostics.spawned(supervisor),
+                    OpenStage::Waiting => diagnostics.log_lifecycle(),
+                },
+            });
+            let (process, opened) = match opened {
+                Ok((process, transport)) => (process, Ok(transport)),
+                Err(OpenError::Spawn(error)) => {
+                    eprintln!("muniment-runtime: run_id={run_id} pi_spawn error={error}");
+                    fail_start(
+                        &app,
+                        &journal,
+                        &mut projector,
+                        &run_id,
+                        &mut seq,
+                        "The agent runtime could not start.",
+                        subject.as_deref(),
+                        resume.is_some(),
+                    );
+                    return;
+                }
+                Err(OpenError::Cancelled(process)) => (process, Err(OpenError::Cancelled(()))),
+                Err(OpenError::NotReady(process, status)) => {
+                    (process, Err(OpenError::NotReady((), status)))
+                }
+                Err(OpenError::Unavailable(process)) => (process, Err(OpenError::Unavailable(()))),
+            };
+            // The launch is read once Pi is ready, so a file Pi writes as it
+            // starts belongs to it.
+            let launch = opened
+                .is_ok()
+                .then(|| crate::engine::PiLaunch::ready(launch_config));
+            *runtime = Some(process);
+            (startup_timeout, working_directory, opened, launch)
+        }
     };
-    let (startup_timeout, working_directory, opened) = opening;
+    let (startup_timeout, working_directory, opened, launch) = opening;
     // A reply records its folder and conversation before its prompt goes,
     // and its folder again when it ends, so a rewind can return to them.
     let _checkpoints = if compaction.is_some() {
@@ -1860,6 +1899,18 @@ fn coordinate_work(
         if let Some(title) = run_thread_title(&journal, &run_id) {
             app.name_thread_folder(&title);
         }
+    }
+    // A reply that ended cleanly leaves its process for the thread's next one.
+    if let Some(launch) = launch.filter(|_| {
+        compaction.is_none()
+            && resume.is_none()
+            && gateway_failure.is_none()
+            && matches!(
+                projector.status(),
+                Some(crate::journal::reducer::RunStatus::Completed)
+            )
+    }) {
+        engine.park(runtime, launch);
     }
     if compaction.is_none()
         && matches!(

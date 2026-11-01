@@ -106,6 +106,16 @@ impl RunDiagnostics {
         self.log_lifecycle();
     }
 
+    /// A process the thread's last reply left idle takes this run. Its
+    /// earlier transitions belong to the runs before, so none is logged again.
+    pub fn reused(&mut self, supervisor: &SidecarSupervisor) {
+        self.startup_stage = None;
+        self.stderr = Some(supervisor.io().stderr);
+        let lifecycle = supervisor.subscribe();
+        lifecycle.try_iter().for_each(drop);
+        self.lifecycle = Some(lifecycle);
+    }
+
     pub fn log_lifecycle(&self) {
         if let Some(events) = &self.lifecycle {
             for event in events.try_iter() {
