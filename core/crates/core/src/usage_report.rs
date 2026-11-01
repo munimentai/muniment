@@ -1451,6 +1451,7 @@ pub struct Member {
 #[derive(Clone, Debug, Default)]
 pub struct Scope {
     /// The one machine the machine filter names, or None for every machine.
+    /// The other answers count only the copies they hold of its runs.
     pub machine: Option<String>,
     /// The names of the fleet members the window does not ask.
     pub members: Vec<Member>,
@@ -1499,8 +1500,9 @@ pub fn merge(answers: Vec<MachineAnswer>, now_ms: i64) -> FleetSummary {
 /// answer that counts its copies takes its runs from the copies the other
 /// machines hold of them, each run id once. A member the window did not ask,
 /// or one that failed to answer, counts from the copies the others hold,
-/// under a row of its own, so no held run drops out. With a machine filter that names such a member, the
-/// view counts only those copies.
+/// under a row of its own, so no held run drops out. A machine filter counts
+/// the named machine alone: its own answer, or the copies the others hold of
+/// its runs when it gives none, so the window asks every machine it reaches.
 pub fn merge_scoped(answers: Vec<MachineAnswer>, scope: &Scope, now_ms: i64) -> FleetSummary {
     let mut held: BTreeMap<String, HeldRun> = BTreeMap::new();
     let mut copies_listed = false;
@@ -1532,16 +1534,12 @@ pub fn merge_scoped(answers: Vec<MachineAnswer>, scope: &Scope, now_ms: i64) -> 
             .iter()
             .filter_map(|answer| answer.summary.as_ref().ok()?.machine_id.clone()),
     );
-    let copies_only = scope
-        .machine
-        .as_ref()
-        .is_some_and(|machine| !answers.iter().any(|answer| &answer.id == machine));
     let absent: BTreeSet<String> = held
         .values()
         .map(|run| run.origin.clone())
         .filter(|origin| !asked.contains(origin))
         .filter(|origin| match &scope.machine {
-            Some(machine) => copies_only && machine == origin,
+            Some(machine) => machine == origin,
             None => true,
         })
         .collect();
@@ -1613,7 +1611,14 @@ pub fn merge_scoped(answers: Vec<MachineAnswer>, scope: &Scope, now_ms: i64) -> 
             joined.end_ms = summary.end_ms;
             joined.bucket = summary.bucket.clone();
         }
-        if copies_only && !from_copies {
+        // Under a machine filter the other machines answer only for the
+        // copies they hold of the named machine's runs.
+        if !from_copies
+            && scope
+                .machine
+                .as_ref()
+                .is_some_and(|machine| machine != &answer.id)
+        {
             continue;
         }
         let summary = if !from_copies && summary.replicas.is_none() && copies_listed {
@@ -3189,5 +3194,124 @@ mod tests {
         assert_eq!(replicas[0].origin, DOCKER);
         assert_eq!(replicas[0].origin_name, "Docker container");
         let _ = std::fs::remove_dir_all(profile);
+    }
+
+    #[test]
+    fn the_machine_filter_on_a_machine_that_fails_counts_the_copies_others_hold() {
+        let own = [run("a", NOW - HOUR, "openai-codex/gpt", 50, None)];
+        let docker = [
+            run("d1", NOW - HOUR, "anthropic/claude", 30, None),
+            run("d2", NOW - 2 * HOUR, "anthropic/claude", 20, None),
+        ];
+        let fleet = merge_scoped(
+            vec![
+                answer("local", "This computer", this_computer(&own, &docker)),
+                MachineAnswer {
+                    id: DOCKER.into(),
+                    name: "Docker container".into(),
+                    summary: Err("The request timed out.".into()),
+                },
+            ],
+            &Scope {
+                machine: Some(DOCKER.into()),
+                members: Vec::new(),
+            },
+            NOW,
+        );
+        assert!(fleet.partial);
+        let joined = fleet.summary;
+        assert_eq!(joined.totals.runs, 2);
+        assert_eq!(total_series_runs(&joined), 2);
+        assert_eq!(joined.breakdown.machine.len(), 1);
+        assert_eq!(
+            machine_row(&joined, DOCKER).label,
+            "Docker container (did not answer)"
+        );
+        assert_eq!(joined.providers, ["anthropic"]);
+        assert!(joined.accounts.is_empty());
+    }
+
+    #[test]
+    fn the_machine_filter_on_a_machine_that_answers_counts_its_own_runs_alone() {
+        let own = [run("a", NOW - HOUR, "openai-codex/gpt", 50, None)];
+        let docker = [run("d1", NOW - HOUR, "anthropic/claude", 30, None)];
+        let hubs = run("h", NOW - 2 * HOUR, "openai-codex/gpt", 10, None);
+        let hub = summarize(
+            &[
+                hubs.clone(),
+                RunUsage {
+                    origin: Some("local-member".into()),
+                    ..own[0].clone()
+                },
+            ],
+            &Owners::default(),
+            Vec::new(),
+            Vec::new(),
+            &request(Range::Month),
+            NOW,
+        );
+        let answers = || {
+            vec![
+                answer("local", "This computer", this_computer(&own, &docker)),
+                answer("hub-runtime", "Factory hub", hub.clone()),
+            ]
+        };
+        let filtered = |machine: &str| {
+            merge_scoped(
+                answers(),
+                &Scope {
+                    machine: Some(machine.into()),
+                    members: Vec::new(),
+                },
+                NOW,
+            )
+            .summary
+        };
+        let local = filtered("local");
+        assert_eq!(local.totals.runs, 1);
+        assert_eq!(local.breakdown.machine.len(), 1);
+        assert_eq!(machine_row(&local, "local").amount.runs, 1);
+        assert_eq!(local.windows.len(), 1);
+        let hub_view = filtered("hub-runtime");
+        assert_eq!(hub_view.totals.runs, 1);
+        assert_eq!(hub_view.breakdown.machine.len(), 1);
+        assert_eq!(machine_row(&hub_view, "hub-runtime").amount.runs, 1);
+        assert!(hub_view.windows.is_empty());
+    }
+
+    #[test]
+    fn the_machine_filter_on_an_older_member_reads_its_runs_from_the_copies_others_hold() {
+        let mine = run("a", NOW - HOUR, "openai-codex/gpt", 50, None);
+        let hubs = run("h", NOW - 2 * HOUR, "openai-codex/gpt", 20, None);
+        let local = this_computer(std::slice::from_ref(&mine), &[]);
+        let mut local = local;
+        let copy = summarize(
+            &[RunUsage {
+                origin: Some("hub-runtime".into()),
+                ..hubs.clone()
+            }],
+            &Owners::default(),
+            Vec::new(),
+            Vec::new(),
+            &request(Range::Month),
+            NOW,
+        );
+        local.replicas = copy.replicas;
+        // The older hub counts the copy it holds of this computer's run.
+        let hub = older_answer(&[mine.clone(), hubs.clone()]);
+        let joined = merge_scoped(
+            vec![
+                answer("local", "This computer", local),
+                answer("hub-runtime", "Factory hub", hub),
+            ],
+            &Scope {
+                machine: Some("hub-runtime".into()),
+                members: Vec::new(),
+            },
+            NOW,
+        )
+        .summary;
+        assert_eq!(joined.totals.runs, 1);
+        assert_eq!(machine_row(&joined, "hub-runtime").amount.runs, 1);
     }
 }
