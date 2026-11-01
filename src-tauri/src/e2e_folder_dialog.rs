@@ -68,7 +68,7 @@ struct ConfirmLookup {
 }
 
 type ConfirmLookups = Arc<Mutex<Vec<ConfirmLookup>>>;
-type NavigationEvents = Arc<Mutex<Vec<accessibility::NavigationEvent>>>;
+type NavigationEvents = Arc<Mutex<selection::Trace>>;
 
 fn record_navigation(
     events: &NavigationEvents,
@@ -77,7 +77,7 @@ fn record_navigation(
     let mut events = events
         .lock()
         .map_err(|_| "The Home picker navigation snapshot is unavailable.")?;
-    event.record(&mut events);
+    events.record(event, Instant::now());
     Ok(())
 }
 
@@ -109,6 +109,7 @@ enum Progress {
 
 thread_local! {
     static DRIVE: RefCell<Option<Drive>> = const { RefCell::new(None) };
+    static TRACE: RefCell<Option<NavigationEvents>> = const { RefCell::new(None) };
     static DEADLINE: RefCell<Option<Instant>> = const { RefCell::new(None) };
 }
 
@@ -178,6 +179,14 @@ fn lookup_confirm(
         );
         if let Err(reason) = &result {
             failures.push(*reason);
+        }
+        {
+            let mut history = confirm_lookups
+                .lock()
+                .map_err(|_| "The Home picker lookup snapshot is unavailable.")?;
+            if history.len() >= 32 {
+                history.remove(0);
+            }
         }
         confirm_lookups
             .lock()
@@ -570,12 +579,23 @@ fn poll(home: String) -> Result<Progress, String> {
     let app = NSApplication::sharedApplication(mtm);
     // Count the panel search too. Stop native actions before the runner's 30-second timeout.
     let deadline = DEADLINE.with(|slot| {
-        *slot
-            .borrow_mut()
-            .get_or_insert_with(|| Instant::now() + Duration::from_secs(15))
+        *slot.borrow_mut().get_or_insert_with(|| {
+            let start = Instant::now();
+            TRACE.with(|trace| {
+                *trace.borrow_mut() = Some(Arc::new(Mutex::new(selection::Trace::new(start))))
+            });
+            start + Duration::from_secs(15)
+        })
     });
     if Instant::now() >= deadline {
-        return Err("The Home picker drive timed out.".into());
+        let awaited = TRACE.with(|trace| {
+            trace
+                .borrow()
+                .as_ref()
+                .and_then(|trace| trace.lock().ok().map(|trace| trace.awaited()))
+                .unwrap_or("panel discovery")
+        });
+        return Err(format!("The Home picker timed out awaiting {awaited}."));
     }
     DRIVE.with(|slot| {
         let mut slot = slot.borrow_mut();
@@ -618,7 +638,7 @@ fn poll(home: String) -> Result<Progress, String> {
                 deadline,
                 identifier,
                 confirm_lookups: Arc::default(),
-                navigation_events: Arc::default(),
+                navigation_events: TRACE.with(|trace| Arc::clone(trace.borrow().as_ref().expect("drive trace"))),
                 navigation_committed: Arc::default(),
             });
         }
@@ -644,6 +664,7 @@ fn poll(home: String) -> Result<Progress, String> {
                     "The NSOpenPanel did not select the isolated Home. The panel selected {selected:?} and the drive expected {home}."
                 ));
             }
+            record_navigation(&drive.navigation_events, accessibility::NavigationEvent::stage("opened"))?;
             *slot = None;
             DEADLINE.with(|deadline| *deadline.borrow_mut() = None);
             return Ok(Progress::Complete);
@@ -663,11 +684,14 @@ fn poll(home: String) -> Result<Progress, String> {
                 Arc::clone(&drive.navigation_committed),
             ));
         }
-        if !drive.navigation_committed.load(Ordering::Acquire)
-            || !selection::matches_home(panel_directory(&drive.panel).as_deref(), &home)
-        {
+        if !selection::ready_to_open(
+            drive.navigation_committed.load(Ordering::Acquire),
+            panel_directory(&drive.panel).as_deref(),
+            &home,
+        ) {
             return Ok(Progress::Waiting);
         }
+        record_navigation(&drive.navigation_events, accessibility::NavigationEvent::stage("directory_changed"))?;
         // Mark confirmation before the AX call so concurrent polls cannot press twice.
         drive.step = 2;
         Ok(Progress::Confirm(
@@ -736,7 +760,7 @@ pub(crate) struct FolderDialogSnapshot {
     key_window: Option<WindowSnapshot>,
     system_prompt: Option<SystemPromptSnapshot>,
     confirm_lookups: Vec<ConfirmLookup>,
-    navigation_events: Vec<accessibility::NavigationEvent>,
+    navigation_events: Vec<selection::TimedEvent>,
 }
 
 #[tauri::command]
@@ -776,14 +800,13 @@ pub(crate) async fn e2e_folder_dialog_snapshot(
                 app_active: app.isActive(),
                 key_window: app.keyWindow().map(|window| window_snapshot(&window)),
                 system_prompt: None,
-                navigation_events: DRIVE.with(|slot| {
+                navigation_events: TRACE.with(|slot| {
                     slot.borrow()
                         .as_ref()
-                        .map(|drive| {
-                            drive
-                                .navigation_events
+                        .map(|trace| {
+                            trace
                                 .lock()
-                                .map(|events| events.clone())
+                                .map(|trace| trace.events.clone())
                                 .map_err(|_| "The Home picker navigation snapshot is unavailable.")
                         })
                         .transpose()
@@ -825,6 +848,32 @@ pub(crate) async fn e2e_folder_dialog_snapshot(
 
 #[tauri::command]
 pub(crate) async fn e2e_drive_folder_dialog(app: tauri::AppHandle) -> Result<bool, String> {
+    if std::env::var("MUNIMENT_E2E_ONBOARDING_ONLY").as_deref() != Ok("1") {
+        return Err("The Home picker drive needs the E2E onboarding runner.".into());
+    }
+    let result = drive_folder_dialog(app.clone()).await;
+    if let Err(reason) = &result {
+        let reason = reason.clone();
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        app.run_on_main_thread(move || {
+            TRACE.with(|slot| {
+                if let Some(trace) = slot.borrow().as_ref() {
+                    if let Ok(mut trace) = trace.lock() {
+                        trace.fail(reason, Instant::now());
+                    }
+                }
+            });
+            DRIVE.with(|slot| *slot.borrow_mut() = None);
+            DEADLINE.with(|slot| *slot.borrow_mut() = None);
+            let _ = sender.send(());
+        })
+        .map_err(|error| error.to_string())?;
+        receiver.recv().map_err(|error| error.to_string())?;
+    }
+    result
+}
+
+async fn drive_folder_dialog(app: tauri::AppHandle) -> Result<bool, String> {
     if std::env::var("MUNIMENT_E2E_ONBOARDING_ONLY").as_deref() != Ok("1") {
         return Err("The Home picker drive needs the E2E onboarding runner.".into());
     }

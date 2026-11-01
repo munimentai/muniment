@@ -34,6 +34,7 @@ struct Tree(
 #[derive(Clone, Default)]
 struct Live {
     overlay: HashMap<(usize, &'static str), Value>,
+    on_write: Vec<(usize, &'static str, Value)>,
     on_commit: Vec<(usize, &'static str, Value)>,
     actions: HashMap<usize, Vec<String>>,
     writes: Vec<(usize, String)>,
@@ -2290,6 +2291,12 @@ impl navigation::AccessibilityActions for Tree {
         if !live.ignore_write {
             live.overlay
                 .insert((*element, "AXValue"), Value::String(value.into()));
+            let changes = live.on_write.clone();
+            live.overlay.extend(
+                changes
+                    .into_iter()
+                    .map(|(node, name, value)| ((node, name), value)),
+            );
         }
         Ok(())
     }
@@ -2531,8 +2538,8 @@ fn go_to_folder_supports_the_view_bridge_combo_box_on_a_host_sheet() {
 fn go_to_folder_commits_a_buttonless_sheet_through_the_field_confirm_action() {
     let mut tree = view_bridge_tree();
     tree.set(8, "AXChildren", Value::Elements(vec![9]));
-    assert_eq!(commit(&tree).0, Err(ConfirmFailure::Deadline));
-    assert!(tree.2.borrow().writes.is_empty());
+    assert_eq!(commit(&tree).0, Err(ConfirmFailure::KeyboardFocusLost));
+    assert_eq!(tree.2.borrow().writes, vec![(6, HOME.to_string())]);
     let mut tree = view_bridge_tree();
     tree.set(8, "AXChildren", Value::Elements(vec![9]));
     let confirm = vec!["AXConfirm".to_string()];
@@ -2601,12 +2608,18 @@ fn go_to_folder_rejects_lost_focus_and_foreign_ownership_before_it_writes() {
     tree.set(5, "AXTitle", Value::String("Go to the folder:".into()));
     assert_eq!(commit(&tree).0, Err(ConfirmFailure::Deadline));
     assert!(tree.2.borrow().writes.is_empty());
-    // Disabled controls wait without writing.
+    // A disabled field withholds entry; a disabled button withholds the commit.
     for node in [6, GO] {
         let mut tree = go_to_folder_tree();
         tree.set(node, "AXEnabled", Value::Boolean(false));
-        assert_eq!(commit(&tree).0, Err(ConfirmFailure::Deadline));
-        assert!(tree.2.borrow().writes.is_empty());
+        let expected = if node == 6 {
+            ConfirmFailure::Deadline
+        } else {
+            ConfirmFailure::CommitFailed
+        };
+        assert_eq!(commit(&tree).0, Err(expected));
+        assert_eq!(tree.2.borrow().writes.len(), usize::from(node == GO));
+        assert!(tree.2.borrow().performed.is_empty());
     }
 }
 
@@ -2918,14 +2931,14 @@ fn a_close_button_is_never_pressed_even_as_the_default_button() {
     assert_eq!(commit(&tree).0, Ok(()));
     assert_eq!(tree.2.borrow().performed, vec![(12, "AXPress".to_string())]);
     assert!(tree.2.borrow().returns.is_empty());
-    // Without AXConfirm, a sheet whose only button is CloseButton waits for the deadline.
+    // Without AXConfirm, the field commits with one owner-targeted Return.
     let tree = buttonless_tree();
     tree.2.borrow_mut().actions.clear();
-    assert_eq!(commit(&tree).0, Err(ConfirmFailure::Deadline));
+    assert_eq!(commit(&tree).0, Ok(()));
     let live = tree.2.borrow();
-    assert!(live.writes.is_empty());
+    assert_eq!(live.writes, vec![(6, HOME.to_string())]);
     assert!(live.performed.is_empty());
-    assert!(live.returns.is_empty());
+    assert_eq!(live.returns, vec![SERVICE_PID]);
 }
 
 #[test]
@@ -3069,4 +3082,141 @@ fn a_successful_return_fallback_posts_one_press_and_one_release() {
         tree.2.borrow().keys,
         vec![(SERVICE_PID, true), (SERVICE_PID, false)]
     );
+}
+
+#[test]
+fn timed_trace_retains_order_completion_failure_and_resets_for_a_new_drive() {
+    use accessibility::NavigationEvent;
+    use std::time::{Duration, Instant};
+    let start = Instant::now();
+    let mut trace = selection::Trace::new(start);
+    for (index, stage) in [
+        "sheet_found",
+        "value_set",
+        "go_committed",
+        "sheet_closed",
+        "panel_refocused",
+        "directory_changed",
+        "opened",
+    ]
+    .iter()
+    .enumerate()
+    {
+        trace.record(
+            NavigationEvent::stage(stage),
+            start + Duration::from_millis((index as u64 + 1) * 10),
+        );
+    }
+    assert_eq!(
+        trace
+            .events
+            .iter()
+            .map(|entry| entry.event.stage)
+            .collect::<Vec<_>>(),
+        vec![
+            "navigation_started",
+            "sheet_found",
+            "value_set",
+            "go_committed",
+            "sheet_closed",
+            "panel_refocused",
+            "directory_changed",
+            "opened"
+        ]
+    );
+    assert_eq!(
+        trace
+            .events
+            .iter()
+            .map(|entry| entry.elapsed_ms)
+            .collect::<Vec<_>>(),
+        vec![0, 10, 20, 30, 40, 50, 60, 70]
+    );
+    let retained = trace.events.clone();
+    drop(trace);
+    assert_eq!(retained.last().unwrap().event.stage, "opened");
+    let mut trace = selection::Trace::new(start);
+    assert_eq!(trace.events.len(), 1);
+    trace.record(
+        NavigationEvent::stage("panel_refocused"),
+        start + Duration::from_millis(10),
+    );
+    trace.fail("Deadline reached".into(), start + Duration::from_millis(15));
+    assert!(trace
+        .events
+        .last()
+        .unwrap()
+        .reason
+        .as_ref()
+        .unwrap()
+        .contains("canonical panel directory change"));
+    let retained_failure = trace.events.clone();
+    drop(trace);
+    assert_eq!(retained_failure.last().unwrap().elapsed_ms, 15);
+}
+
+#[test]
+fn noisy_discovery_keeps_bounded_trace_and_terminal_stages() {
+    use accessibility::NavigationEvent;
+    let start = std::time::Instant::now();
+    let mut trace = selection::Trace::new(start);
+    for index in 0..1000 {
+        trace.record(
+            NavigationEvent {
+                stage: "focused_window",
+                role: None,
+                identifier: Some(index.to_string()),
+            },
+            start,
+        );
+    }
+    trace.record(NavigationEvent::stage("directory_changed"), start);
+    trace.record(NavigationEvent::stage("opened"), start);
+    trace.fail("Selection mismatch".into(), start);
+    assert!(trace.events.len() <= 128);
+    assert_eq!(trace.events.last().unwrap().event.stage, "failed");
+    assert!(trace
+        .events
+        .last()
+        .unwrap()
+        .reason
+        .as_ref()
+        .unwrap()
+        .contains("Selection mismatch"));
+}
+
+#[test]
+fn open_requires_committed_sheet_closure_and_canonical_home_directory() {
+    let root = std::env::temp_dir().join(format!("picker-state-{}", std::process::id()));
+    let home = root.join("Home");
+    let stale = root.join("Documents");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&stale).unwrap();
+    let home = home.to_str().unwrap();
+    let stale = stale.to_str().unwrap();
+    for committed in [false, true] {
+        assert!(!selection::ready_to_open(committed, None, home));
+        assert!(!selection::ready_to_open(committed, Some(stale), home));
+    }
+    assert!(!selection::ready_to_open(false, Some(home), home));
+    assert!(selection::ready_to_open(true, Some(home), home));
+    assert!(selection::ready_to_open(
+        true,
+        Some(&format!("{home}/.")),
+        home
+    ));
+    // Navigation never authorizes an incorrect final selection.
+    assert!(!selection::matches_home(Some(stale), home));
+    assert!(!selection::matches_home(None, home));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn entering_a_path_can_enable_the_sheets_own_go_button() {
+    let mut tree = go_to_folder_tree();
+    tree.set(GO, "AXEnabled", Value::Boolean(false));
+    tree.2.borrow_mut().on_write = vec![(GO, "AXEnabled", Value::Boolean(true))];
+    assert_eq!(commit(&tree).0, Ok(()));
+    assert_eq!(tree.2.borrow().performed, vec![(GO, "AXPress".to_string())]);
+    assert_eq!(tree.2.borrow().writes, vec![(6, HOME.to_string())]);
 }

@@ -1,6 +1,6 @@
 import path from 'node:path'
-import { access, appendFile, mkdir, readFile } from 'node:fs/promises'
-import { chooseFolder, folderDialogDescription, recordMacosPickerBaseline, withWindowsPickerDiagnostics } from '../support/onboarding-folder.mjs'
+import { access, appendFile, readFile } from 'node:fs/promises'
+import { chooseFolder, prepareIsolatedHome, folderDialogDescription, recordMacosPickerBaseline, withWindowsPickerDiagnostics } from '../support/onboarding-folder.mjs'
 import { homePathMatches } from '../support/home-path.mjs'
 import { expandSidebar, openFirstRunModelSettings, openSettingsPage } from '../support/first-run.mjs'
 
@@ -129,7 +129,7 @@ describe('installed nightly model-ready onboarding', () => {
     await change.click()
     const homeSettings = await $('section[aria-label="Home settings"]')
     await homeSettings.waitForDisplayed()
-    await mkdir(home, { recursive: true })
+    await prepareIsolatedHome(home)
     // Record any system prompt before the app opens NSOpenPanel.
     await recordMacosPickerBaseline(process.env.MUNIMENT_E2E_RAW_DIR)
     await (await $('[data-testid="onboarding-picker"]')).click()
@@ -140,6 +140,13 @@ describe('installed nightly model-ready onboarding', () => {
         FOLDER_DIALOG_TITLE,
         process.env.MUNIMENT_E2E_RAW_DIR,
       )
+      if (process.platform === 'darwin') {
+        const trace = JSON.parse(await readFile(path.join(process.env.MUNIMENT_E2E_RAW_DIR, 'folder-picker-trace.json'), 'utf8'))
+        const events = trace.native.navigation_events
+        expect(events.filter(({ stage }) => ['navigation_started', 'directory_changed', 'opened'].includes(stage)).map(({ stage }) => stage))
+          .toEqual(['navigation_started', 'directory_changed', 'opened'])
+        expect(events.every(({ elapsed_ms }, index) => Number.isSafeInteger(elapsed_ms) && elapsed_ms >= 0 && (index === 0 || elapsed_ms >= events[index - 1].elapsed_ms))).toBe(true)
+      }
       // Home settings show the path, and data-home-path holds it in full.
       let location
       await browser.waitUntil(async () => {

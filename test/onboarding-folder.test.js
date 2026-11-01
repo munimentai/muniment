@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { spawnSync } from 'node:child_process'
 import os from 'node:os'
 import path from 'node:path'
-import { chooseFolder, folderDialogDescription, recordMacosPickerBaseline, withWindowsPickerDiagnostics } from './e2e/support/onboarding-folder.mjs'
+import { chooseFolder, prepareIsolatedHome, folderDialogDescription, recordMacosPickerBaseline, withWindowsPickerDiagnostics } from './e2e/support/onboarding-folder.mjs'
 import { driveMacosFolder } from './e2e/support/folder-dialog-macos.mjs'
 
 const title = '(Select|Open|Choose|Pick).*([Ff]older|[Dd]irectory|[Ff]ile)'
@@ -241,7 +241,7 @@ describe('The onboarding folder picker selects a native driver.', () => {
     const accessibility = await readFile(new URL('../src-tauri/src/e2e_folder_dialog/accessibility.rs', import.meta.url), 'utf8')
     expect(accessibility).toContain('Self::AmbiguousPanel => "ambiguous_panel"')
     expect(accessibility).toContain('Self::WrongTopLevelElement => "wrong_top_level_element"')
-    expect(macos).toContain('The Home picker drive timed out.')
+    expect(macos).toContain('The Home picker timed out awaiting {awaited}.')
     expect(macos).toContain('The NSOpenPanel did not select the isolated Home.')
     expect(macos).toContain('The Home path changed during the picker drive.')
     expect(macos).toContain('drive.panel.URLs()')
@@ -451,15 +451,15 @@ Write-Output 'The confirm and navigation checks passed.'
     }, 35_000)
 
   it('The macOS picker uses app IPC and presses only its own Accessibility button.', async () => {
-    const invoke = vi.fn().mockResolvedValue(true)
+    const invoke = vi.fn((command) => Promise.resolve(command === 'e2e_drive_folder_dialog' ? true : { navigation_events: [] })); vi.stubGlobal('document', { querySelector: () => null })
     const execute = vi.fn()
     vi.stubGlobal('window', { __TAURI__: { core: { invoke } } })
     const browserExecute = vi.fn((callback) => callback())
     vi.stubGlobal('browser', { execute: browserExecute })
     await chooseFolder('/tmp/home', 30, title, await rawDirectory(), execute, 'darwin')
     expect(execute).not.toHaveBeenCalled()
-    expect(browserExecute).toHaveBeenCalledTimes(1)
-    expect(invoke).toHaveBeenCalledExactlyOnceWith('e2e_drive_folder_dialog')
+    expect(browserExecute).toHaveBeenCalledTimes(2)
+    expect(invoke).toHaveBeenCalledWith('e2e_drive_folder_dialog'); expect(invoke).toHaveBeenLastCalledWith('e2e_folder_dialog_snapshot')
 
     const native = await readFile(new URL('../src-tauri/src/e2e_folder_dialog.rs', import.meta.url), 'utf8')
     // AppKit only accepts directoryURL during configuration, not after presentation.
@@ -566,8 +566,8 @@ Write-Output 'The confirm and navigation checks passed.'
     expect(drive.indexOf('drive.step = 1;')).toBeLessThan(drive.indexOf('Ok(Progress::Confirm('))
     expect(drive).toContain('urls.len() == 1')
     expect(drive).toContain('!selection::matches_home(selected.as_deref(), &home)')
-    expect(drive).toContain('!drive.navigation_committed.load(Ordering::Acquire)')
-    expect(drive).toContain('!selection::matches_home(panel_directory(&drive.panel).as_deref(), &home)')
+    expect(drive).toContain('drive.navigation_committed.load(Ordering::Acquire)')
+    expect(drive).toMatch(/selection::ready_to_open\(\s*drive.navigation_committed.load\(Ordering::Acquire\),\s*panel_directory\(&drive.panel\).as_deref\(\),\s*&home,/)
     expect(drive.indexOf('drive.step = 2;')).toBeLessThan(drive.indexOf('Ok(Progress::Confirm('))
     expect(native).toMatch(/navigate\(\s*&identifier,\s*&home,\s*deadline,\s*confirm_lookups,\s*navigation_events,?\s*\)\?;\s*committed\.store\(true, Ordering::Release\)/)
     const selection = await readFile(new URL('../src-tauri/src/e2e_folder_dialog/selection.rs', import.meta.url), 'utf8')
@@ -624,7 +624,7 @@ Write-Output 'The confirm and navigation checks passed.'
   it('The AppKit drive waits for the native panel to close.', async () => {
     vi.useFakeTimers()
     const poll = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(false).mockResolvedValue(true)
-    const result = driveMacosFolder(1, poll)
+    const result = driveMacosFolder(1, poll, () => ({ native: { navigation_events: [] } }))
     await vi.runAllTimersAsync()
     await result
     expect(poll).toHaveBeenCalledTimes(3)
@@ -798,4 +798,33 @@ Write-Output 'The confirm and navigation checks passed.'
     expect(owner).toContain('ax.string(button, "AXTitle").ok().as_deref() != Some(identifier)')
     expect(owner).toContain('sheet_below(ax, host, Some(panel), &mut check_deadline)?')
   })
+})
+
+it('prepares only the absent isolated fixture and propagates filesystem failures before a picker opens', async () => {
+  const raw = await rawDirectory()
+  const home = path.join(raw, 'Home space café')
+  await expect(readFile(home)).rejects.toMatchObject({ code: 'ENOENT' })
+  await prepareIsolatedHome(home)
+  for (const name of ['memory', 'agents', 'projects', 'sessions']) {
+    await expect(readFile(path.join(home, name, 'README.md'))).rejects.toMatchObject({ code: 'ENOENT' })
+  }
+  const failure = new Error('Permission denied')
+  const create = vi.fn().mockRejectedValue(failure)
+  await expect(prepareIsolatedHome(home, create)).rejects.toBe(failure)
+  expect(create).toHaveBeenCalledExactlyOnceWith(home, { recursive: true })
+  const file = path.join(raw, 'file')
+  await writeFile(file, '')
+  await expect(prepareIsolatedHome(path.join(file, 'Home'))).rejects.toMatchObject({ code: 'ENOTDIR' })
+})
+
+it('retains the completed native timed trace in the raw artifacts', async () => {
+  const raw = await rawDirectory()
+  const navigation_events = ['navigation_started', 'sheet_found', 'value_set', 'go_committed', 'directory_changed', 'opened']
+    .map((stage, index) => ({ stage, elapsed_ms: index * 100 }))
+  const diagnostics = { native: { navigation_events }, open: { status: 'resolved' } }
+  const diagnose = vi.fn().mockResolvedValue(diagnostics)
+  const drive = (wait) => driveMacosFolder(wait, () => true, diagnose)
+  await chooseFolder('/tmp/Home', 30, title, raw, vi.fn(), 'darwin', drive)
+  expect(JSON.parse(await readFile(path.join(raw, 'folder-picker-trace.json'), 'utf8'))).toEqual(diagnostics)
+  expect(diagnose).toHaveBeenCalledTimes(1)
 })
