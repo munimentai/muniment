@@ -41,6 +41,7 @@ function machine(stored = agent, extra = {}) {
     if (args.operation === 'permission.modes') return structuredClone(modes)
     if (args.operation === 'agent.run_now') return { run: { id: 'run-new', agent_id: stored.id, status: 'queued', trigger: { kind: 'manual' } } }
     if (args.operation === 'agent.routine_proposals') return { proposals: stored.routines.filter((routine) => routine.proposed) }
+    if (args.operation === 'agent.delete') return { folder_kept: '/home/me/Scout', message: "The agent's folder holds your files, so it stays." }
     if (args.operation === 'agent.export') return { format: args.body.format, file_name: `${stored.name}.${args.body.format}.md`, content: '# Export' }
     return {}
   })
@@ -215,7 +216,8 @@ it('runs the agent on its own machine, opens a run from its history and deletes 
   await fireEvent.click(screen.getByRole('button', { name: 'Delete agent' }))
   await fireEvent.click(screen.getByRole('checkbox', { name: 'Also delete its memory' }))
   await fireEvent.click(screen.getByRole('button', { name: 'Confirm delete' }))
-  await waitFor(() => expect(ondelete).toHaveBeenCalled())
+  // Core's answer reaches the app, which names a kept folder.
+  await waitFor(() => expect(ondelete).toHaveBeenCalledWith({ folder_kept: '/home/me/Scout', message: "The agent's folder holds your files, so it stays." }))
   expect(requests.at(-1)).toEqual({ runtime: 'box', operation: 'agent.delete', body: { id: 'scout', remove_memory: true } })
 })
 

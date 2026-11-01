@@ -310,7 +310,7 @@
       {#if deleting}
         <div class="confirm" role="group" aria-label="Delete agent" bind:this={confirmBox}>
           <label class="check"><input type="checkbox" bind:checked={removeMemory} disabled={busy} />Also delete its memory</label>
-          <div class="actions"><Button variant="danger" disabled={busy} onclick={() => action(async () => { await agentRequest(tauri, agent.runtimeId, 'agent.delete', { id: agent.id, remove_memory: removeMemory }); ondelete() })}>Confirm delete</Button><Button data-safe disabled={busy} onclick={() => { deleting = false; removeMemory = false }}>Cancel</Button></div>
+          <div class="actions"><Button variant="danger" disabled={busy} onclick={() => action(async () => { const answer = await agentRequest(tauri, agent.runtimeId, 'agent.delete', { id: agent.id, remove_memory: removeMemory }); ondelete(answer) })}>Confirm delete</Button><Button data-safe disabled={busy} onclick={() => { deleting = false; removeMemory = false }}>Cancel</Button></div>
         </div>
       {:else}<div class="delete-row"><Button variant="danger" icon="trash-2" disabled={busy || runActive(run?.status)} onclick={() => { deleting = true }}>Delete agent</Button></div>{/if}
     </div>

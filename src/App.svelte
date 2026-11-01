@@ -340,7 +340,7 @@
       localStorage.setItem(THREAD_ORGANIZATION_KEY,JSON.stringify(next))
       threadOrganization = next
       if (kind === 'agent') {
-        await agentRequest(tauri, item.runtimeId, 'agent.delete', { id: item.id, remove_memory: false })
+        showKeptFolder(item, await agentRequest(tauri, item.runtimeId, 'agent.delete', { id: item.id, remove_memory: false }))
         if (selectedAgent===item.id) { selectedAgent=null;agentProfileOpen=false }
       } else if (kind === 'artifact' && (item.resultId || item.id)) {
         await tauri.invoke('artifact_edit',{id:item.resultId || item.id,name:null})
@@ -719,6 +719,20 @@
   }
   // A deleted agent's threads leave the sidebar, and core removed its
   // creation chat, so an open creation chat gives way to a new thread.
+  // Core keeps a deleted agent's folder that holds the user's files and says
+  // so. The notice names the folder, and on this computer it reveals it.
+  const revealLabel = /Mac/.test(navigator.platform) ? 'Reveal in Finder' : /Win/.test(navigator.platform) ? 'Reveal in File Explorer' : 'Reveal in File Manager'
+  let keptFolders = 0
+  function showKeptFolder(agent, answer) {
+    const folder = answer?.folder_kept
+    if (!folder) return
+    const local = (agent?.runtimeId ?? LOCAL_RUNTIME_ID) === LOCAL_RUNTIME_ID
+    composerNotices.show({
+      id: 'agent-folder-kept', cause: ++keptFolders, text: `${answer.message || "The agent's folder holds your files, so it stays."} ${folder}`,
+      label: 'Agent folder kept', testid: 'agent-folder-kept-notice', dismissLabel: 'Dismiss agent folder notice',
+      action: local ? { label: revealLabel, run: () => { tauri.invoke('workspace_reveal', { path: folder }).catch(error => { submitError = String(error) }) } } : undefined,
+    })
+  }
   async function agentDeleted(agent) {
     const chats = creations.filter(item => item.kind === 'agent' && item.resultId === agent.id).map(item => item.threadId)
     const threadIds = Object.keys(agentThreadMap).filter(id => agentThreadMap[id] === agent.id)
@@ -4580,7 +4594,7 @@
         runs={activityRuns.filter(entry => entry.agent_id === profileAgent.id && entry.runtimeId === profileAgent.runtimeId)} agents={roster} {runtimeList} {swarm} {inventory} catalog={agentCatalog} activity={profileAgent.activity} threads={agentListing.threads?.[profileAgent.id] ?? []}
         onclose={() => { agentProfileOpen = false; profileOnlyAgent = null }} onchange={refreshAgentsAndRuns} onrun={(run) => { startedRuns.add(run.id); activityRuns = applyRunUpdate(activityRuns, { runtimeId: run.runtimeId, run }) }}
         onmanagemodels={openModelSettings} onvisibility={setModelShown}
-        deleteAsked={profileDelete.agentId === profileAgent.id ? profileDelete.count : 0} ondelete={() => { void agentDeleted(profileAgent) }}
+        deleteAsked={profileDelete.agentId === profileAgent.id ? profileDelete.count : 0} ondelete={(answer) => { showKeptFolder(profileAgent, answer); void agentDeleted(profileAgent) }}
         onopen={(id) => showThread(id)} onopenrun={(run) => openRunThread(run).catch(error => { submitError = String(error) })} onopenfolder={openAgentFolder} />{/key}
     {/if}
   {#if browserPanel}<div class="artifact-divider workspace-divider" role="separator" aria-label="Workspace panel width" aria-orientation="vertical" aria-valuemin="340" aria-valuemax={workspacePanelMaximum} aria-valuenow={workspacePanelWidth} tabindex="0" onpointerdown={workspaceResize.pointerDown} onpointermove={workspaceResize.pointerMove} onpointerup={workspaceResize.pointerEnd} onpointercancel={workspaceResize.pointerEnd} onkeydown={workspaceResize.keydown}><span class="divider-grip" aria-hidden="true"><LucideIcon name="ellipsis-vertical" size={14} variant="action" /></span></div>{/if}

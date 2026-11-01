@@ -9368,6 +9368,39 @@ describe('agent chat', () => {
     expect(within(rows()).queryByText('New agent', { selector: '.thread-row-title' })).toBeNull()
   })
 
+  it('names a deleted agent\'s kept folder in a composer notice that reveals it', async () => {
+    const saved = []
+    chatMock(saved)
+    const original = invoke.getMockImplementation()
+    let deleted = false
+    const folder = '/Users/me/Muniment/Agents/Weekly recap'
+    invoke.mockImplementation((command, payload) => {
+      // Core keeps the folder that holds the user's files and says so.
+      if (command === 'agent_request' && payload?.operation === 'agent.delete') { deleted = true; saved.splice(0); return Promise.resolve({ folder_kept: folder, message: "The agent's folder holds your files, so it stays." }) }
+      if (command === 'workspace_reveal') return Promise.resolve()
+      if (command === 'creation_list' && deleted) return Promise.resolve([])
+      if (command === 'chat_new_thread' && deleted) return Promise.resolve('01900000-0000-7000-8000-0000000000b3')
+      return original(command, payload)
+    })
+    render(App)
+    await screen.findByPlaceholderText('Ask anything')
+    await openSidebarPage('Agents')
+    const panel = await screen.findByRole('region', { name: 'Agents' })
+    await fireEvent.click(within(await within(panel).findByRole('region', { name: 'Give an agent a job' })).getByRole('button', { name: /^Weekly report/ }))
+    const reply = await screen.findByRole('article', { name: 'Draft: Weekly recap' })
+    await fireEvent.click(within(reply).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(within(screen.getByRole('list', { name: 'Projects list' })).getAllByText('Weekly recap', { selector: '.thread-row-title' })).toHaveLength(1))
+    await openSidebarPage('Agents')
+    const page = await screen.findByRole('region', { name: 'Agents' })
+    await fireEvent.click(await within(page).findByRole('button', { name: 'Actions for Weekly recap' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
+    await fireEvent.click(within(await screen.findByRole('group', { name: 'Delete agent' })).getByRole('button', { name: 'Confirm delete' }))
+    const notice = await screen.findByTestId('agent-folder-kept-notice')
+    expect(notice).toHaveTextContent(`The agent's folder holds your files, so it stays. ${folder}`)
+    await fireEvent.click(within(notice).getByRole('button', { name: /^Reveal in / }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('workspace_reveal', { path: folder }))
+  })
+
   it('revises the draft with the next message in the same chat', async () => {
     chatMock([])
     render(App)
