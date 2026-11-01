@@ -437,6 +437,34 @@ pub struct Summary {
     pub unmetered: Vec<Unmetered>,
     /// Each account's reading, which [`merge`] pools across machines.
     pub windows: Vec<AccountWindow>,
+    /// The runs in the range this machine holds only as copies of another
+    /// swarm member's runs. The totals leave them out, and [`merge`] counts
+    /// them for a member whose own answer also counts its copies. None in an
+    /// answer whose totals count every copy it holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replicas: Option<Vec<HeldRun>>,
+}
+
+/// One run a machine holds as a copy, with what it used, for [`merge`].
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct HeldRun {
+    pub run_id: String,
+    /// The swarm member that ran it.
+    pub origin: String,
+    /// The start of the series bucket it falls in.
+    pub bucket_ms: i64,
+    pub provider: String,
+    pub model: String,
+    #[serde(default)]
+    pub agent: String,
+    #[serde(default)]
+    pub agent_label: String,
+    #[serde(default)]
+    pub project: String,
+    #[serde(default)]
+    pub project_label: String,
+    #[serde(flatten)]
+    pub amount: Amount,
 }
 
 /// What one finished run used.
@@ -449,6 +477,26 @@ pub struct RunUsage {
     pub model: String,
     pub tokens: Tokens,
     pub cost_usd: Option<f64>,
+    /// The swarm member that ran it, when this machine holds a copy.
+    pub origin: Option<String>,
+}
+
+/// The provider family a receipt's provider id names. A turn on a Claude
+/// Code account runs through the bridge provider, and its runs belong to
+/// the Anthropic account's card.
+pub fn family_id(provider: &str) -> String {
+    let provider = if provider == crate::models::claude_accounts::PROVIDER {
+        "anthropic"
+    } else {
+        family::family_for_pi_provider(provider)
+            .map(|family| family.id)
+            .unwrap_or(provider)
+    };
+    if provider.is_empty() {
+        "unknown".into()
+    } else {
+        provider.to_owned()
+    }
 }
 
 /// The provider family and model a receipt's `provider/model` names. A
@@ -459,21 +507,7 @@ pub fn split_model(model: &str) -> (String, String) {
         (ROUTER_PROVIDER, Some((family, model))) => (family, model),
         _ => (provider, rest),
     };
-    // A turn on a Claude Code account runs through the bridge provider, and
-    // its runs belong to the Anthropic account's card.
-    let provider = if provider == crate::models::claude_accounts::PROVIDER {
-        "anthropic"
-    } else {
-        family::family_for_pi_provider(provider)
-            .map(|family| family.id)
-            .unwrap_or(provider)
-    };
-    let provider = if provider.is_empty() {
-        "unknown"
-    } else {
-        provider
-    };
-    (provider.to_owned(), rest.to_owned())
+    (family_id(provider), rest.to_owned())
 }
 
 fn count(value: &Value, field: &str) -> u64 {
@@ -507,6 +541,7 @@ pub fn run_usage(completed: &CompletedReceipt) -> Option<RunUsage> {
             reasoning: count(tokens, "reasoning"),
         },
         cost_usd,
+        origin: completed.origin.clone(),
     })
 }
 
@@ -657,6 +692,49 @@ impl Owners {
                 .and_then(|thread| self.thread_agents.get(thread))
         })
     }
+
+    /// The agent row a run counts under: its id and name, empty for none.
+    fn agent_row(&self, run: &RunUsage) -> (String, String) {
+        let agent = self.agent(run).cloned().unwrap_or_default();
+        let label = self.agent_names.get(&agent).cloned().unwrap_or_default();
+        (agent, label)
+    }
+
+    /// The project row a run counts under: its id and name, empty for none.
+    fn project_row(&self, run: &RunUsage) -> (String, String) {
+        let project = run
+            .thread_id
+            .as_ref()
+            .and_then(|thread| self.thread_projects.get(thread))
+            .cloned()
+            .unwrap_or_default();
+        let label = self
+            .project_names
+            .get(&project)
+            .cloned()
+            .unwrap_or_default();
+        (project, label)
+    }
+}
+
+/// Adds `amount` to the row `key` of `rows`, which takes `label` and
+/// `provider` when it is new.
+fn add_amount(
+    rows: &mut BTreeMap<String, Row>,
+    key: String,
+    label: String,
+    provider: Option<String>,
+    amount: &Amount,
+) {
+    rows.entry(key.clone())
+        .or_insert_with(|| Row {
+            key,
+            label,
+            provider,
+            ..Row::default()
+        })
+        .amount
+        .add(amount);
 }
 
 /// Sums `runs` into a summary for `request`, as of `now_ms`.
@@ -670,10 +748,11 @@ pub fn summarize(
 ) -> Summary {
     let (starts, end_ms) = request_buckets(request, now_ms);
     let start_ms = starts.first().copied().unwrap_or(end_ms);
-    let in_range: Vec<&RunUsage> = runs
+    // A copy of another member's run counts on the member that ran it.
+    let (copies, in_range): (Vec<&RunUsage>, Vec<&RunUsage>) = runs
         .iter()
         .filter(|run| run.at_ms >= start_ms && run.at_ms < end_ms)
-        .collect();
+        .partition(|run| run.origin.is_some());
     let providers: BTreeSet<String> = in_range.iter().map(|run| run.provider.clone()).collect();
     let wanted = |provider: &str| {
         request
@@ -692,10 +771,36 @@ pub fn summarize(
     let mut models: BTreeMap<String, Row> = BTreeMap::new();
     let mut agents: BTreeMap<String, Row> = BTreeMap::new();
     let mut projects: BTreeMap<String, Row> = BTreeMap::new();
+    let bucket_of = |run: &RunUsage| {
+        starts
+            .partition_point(|start| *start <= run.at_ms)
+            .checked_sub(1)
+    };
+    let replicas = copies
+        .into_iter()
+        .filter(|run| wanted(&run.provider))
+        .filter_map(|run| {
+            let mut amount = Amount::default();
+            amount.record(run);
+            let (agent, agent_label) = owners.agent_row(run);
+            let (project, project_label) = owners.project_row(run);
+            Some(HeldRun {
+                run_id: run.run_id.clone(),
+                origin: run.origin.clone()?,
+                bucket_ms: *starts.get(bucket_of(run)?)?,
+                provider: run.provider.clone(),
+                model: run.model.clone(),
+                agent,
+                agent_label,
+                project,
+                project_label,
+                amount,
+            })
+        })
+        .collect();
     for run in in_range.into_iter().filter(|run| wanted(&run.provider)) {
         total.record(run);
-        let index = starts.partition_point(|start| *start <= run.at_ms);
-        if let Some(bucket) = index.checked_sub(1).and_then(|index| series.get_mut(index)) {
+        if let Some(bucket) = bucket_of(run).and_then(|index| series.get_mut(index)) {
             bucket
                 .providers
                 .entry(run.provider.clone())
@@ -713,8 +818,7 @@ pub fn summarize(
             })
             .amount
             .record(run);
-        let agent = owners.agent(run).cloned().unwrap_or_default();
-        let agent_label = owners.agent_names.get(&agent).cloned().unwrap_or_default();
+        let (agent, agent_label) = owners.agent_row(run);
         agents
             .entry(agent.clone())
             .or_insert_with(|| Row {
@@ -724,17 +828,7 @@ pub fn summarize(
             })
             .amount
             .record(run);
-        let project = run
-            .thread_id
-            .as_ref()
-            .and_then(|thread| owners.thread_projects.get(thread))
-            .cloned()
-            .unwrap_or_default();
-        let project_label = owners
-            .project_names
-            .get(&project)
-            .cloned()
-            .unwrap_or_default();
+        let (project, project_label) = owners.project_row(run);
         projects
             .entry(project.clone())
             .or_insert_with(|| Row {
@@ -780,6 +874,7 @@ pub fn summarize(
         pools: pools(&windows, now_ms),
         unmetered,
         windows,
+        replicas: Some(replicas),
     }
 }
 
@@ -1222,10 +1317,117 @@ fn add_rows(into: &mut BTreeMap<String, Row>, rows: Vec<Row>) {
     }
 }
 
+/// A summary with each provider id named by its family, as a runtime that
+/// names a Claude Code turn by its bridge provider answers, so one family
+/// shows once.
+fn by_family(mut summary: Summary) -> Summary {
+    for bucket in &mut summary.series {
+        let mut providers: BTreeMap<String, Amount> = BTreeMap::new();
+        for (provider, amount) in std::mem::take(&mut bucket.providers) {
+            providers
+                .entry(family_id(&provider))
+                .or_default()
+                .add(&amount);
+        }
+        bucket.providers = providers;
+    }
+    let mut models = BTreeMap::new();
+    for row in std::mem::take(&mut summary.breakdown.model) {
+        let Some(provider) = row.provider.as_deref().map(family_id) else {
+            add_rows(&mut models, vec![row]);
+            continue;
+        };
+        let model = row
+            .key
+            .split_once('/')
+            .map_or(row.label.as_str(), |(_, model)| model);
+        let key = format!("{provider}/{model}");
+        add_amount(&mut models, key, row.label, Some(provider), &row.amount);
+    }
+    summary.breakdown.model = models.into_values().collect();
+    let providers: BTreeSet<String> = summary.providers.iter().map(|p| family_id(p)).collect();
+    summary.providers = providers.into_iter().collect();
+    summary
+}
+
+/// The summary of `machine` with its runs read from the copies other
+/// machines hold of the runs it ran. An answer without replicas counts every
+/// copy it holds of another member's runs, which that member counts too.
+fn own_runs(mut summary: Summary, machine: &str, held: &BTreeMap<String, HeldRun>) -> Summary {
+    let mut series: BTreeMap<i64, BTreeMap<String, Amount>> = BTreeMap::new();
+    let mut models = BTreeMap::new();
+    let mut agents = BTreeMap::new();
+    let mut projects = BTreeMap::new();
+    let mut providers = BTreeSet::new();
+    let mut total = Amount::default();
+    for run in held.values().filter(|run| run.origin == machine) {
+        total.add(&run.amount);
+        series
+            .entry(run.bucket_ms)
+            .or_default()
+            .entry(run.provider.clone())
+            .or_default()
+            .add(&run.amount);
+        add_amount(
+            &mut models,
+            format!("{}/{}", run.provider, run.model),
+            run.model.clone(),
+            Some(run.provider.clone()),
+            &run.amount,
+        );
+        add_amount(
+            &mut agents,
+            run.agent.clone(),
+            run.agent_label.clone(),
+            None,
+            &run.amount,
+        );
+        add_amount(
+            &mut projects,
+            run.project.clone(),
+            run.project_label.clone(),
+            None,
+            &run.amount,
+        );
+        providers.insert(run.provider.clone());
+    }
+    summary.totals = Totals::of(&total);
+    summary.series = series
+        .into_iter()
+        .map(|(start_ms, providers)| Bucket {
+            start_ms,
+            providers,
+        })
+        .collect();
+    summary.breakdown = Breakdown {
+        model: ranked(models),
+        agent: ranked(agents),
+        project: ranked(projects),
+        machine: Vec::new(),
+    };
+    summary.providers = providers.into_iter().collect();
+    summary
+}
+
 /// Joins the answers of several machines: sums, the series by bucket, the
 /// breakdowns by key, a machine row each, and each account's newest reading
-/// pooled once however many machines hold it.
+/// pooled once however many machines hold it. Each run counts once, on the
+/// machine that ran it: an answer leaves out the copies it holds, and an
+/// answer that counts its copies takes its runs from the copies the other
+/// machines hold of them, each run id once.
 pub fn merge(answers: Vec<MachineAnswer>, now_ms: i64) -> FleetSummary {
+    let mut held: BTreeMap<String, HeldRun> = BTreeMap::new();
+    let mut copies_listed = false;
+    for replicas in answers
+        .iter()
+        .filter_map(|answer| answer.summary.as_ref().ok()?.replicas.as_ref())
+    {
+        copies_listed = true;
+        for run in replicas {
+            held.entry(run.run_id.clone())
+                .or_insert_with(|| run.clone());
+        }
+    }
     let mut joined = Summary::default();
     let mut total = Amount::default();
     let mut series: BTreeMap<i64, BTreeMap<String, Amount>> = BTreeMap::new();
@@ -1256,6 +1458,12 @@ pub fn merge(answers: Vec<MachineAnswer>, now_ms: i64) -> FleetSummary {
             state: "ok".into(),
             error: None,
         });
+        let summary = if summary.replicas.is_none() && copies_listed {
+            own_runs(summary, &answer.id, &held)
+        } else {
+            summary
+        };
+        let summary = by_family(summary);
         if joined.range.is_none() {
             joined.range = summary.range;
             joined.start_ms = summary.start_ms;
@@ -1360,6 +1568,7 @@ mod tests {
                 .unwrap()
                 .to_rfc3339_opts(SecondsFormat::Millis, true),
             receipt,
+            origin: None,
         }
     }
 
@@ -2300,5 +2509,246 @@ mod tests {
             assert!(answer.get(key).is_some(), "the answer lacks {key}");
         }
         let _ = std::fs::remove_dir_all(profile);
+    }
+
+    fn copied(run_id: &str, at_ms: i64, model: &str, input: u64, origin: &str) -> RunUsage {
+        RunUsage {
+            origin: Some(origin.into()),
+            ..run(run_id, at_ms, model, input, None)
+        }
+    }
+
+    fn answer(id: &str, name: &str, summary: Summary) -> MachineAnswer {
+        MachineAnswer {
+            id: id.into(),
+            name: name.into(),
+            summary: Ok(summary),
+        }
+    }
+
+    /// The answer of a runtime that counts every copy it holds and names a
+    /// Claude Code turn by its bridge provider, as it reaches the desktop.
+    fn older_answer(runs: &[RunUsage]) -> Summary {
+        let runs: Vec<RunUsage> = runs
+            .iter()
+            .map(|run| RunUsage {
+                origin: None,
+                provider: if run.model.starts_with("claude-fable") {
+                    "claude-bridge".into()
+                } else {
+                    run.provider.clone()
+                },
+                ..run.clone()
+            })
+            .collect();
+        let summary = summarize(
+            &runs,
+            &Owners::default(),
+            Vec::new(),
+            Vec::new(),
+            &request(Range::Day),
+            NOW,
+        );
+        let mut wire = serde_json::to_value(summary).unwrap();
+        wire.as_object_mut().unwrap().remove("replicas");
+        serde_json::from_value(wire).unwrap()
+    }
+
+    fn machine_row<'a>(joined: &'a Summary, id: &str) -> &'a Row {
+        joined
+            .breakdown
+            .machine
+            .iter()
+            .find(|row| row.key == id)
+            .unwrap()
+    }
+
+    #[test]
+    fn a_copy_of_another_members_run_counts_on_the_member_that_ran_it() {
+        let mut owners = Owners::default();
+        owners.run_agents.insert("copy".into(), "agent-1".into());
+        owners.agent_names.insert("agent-1".into(), "Scout".into());
+        let summary = summarize(
+            &[
+                run("own", NOW - HOUR, "openai-codex/gpt", 50, None),
+                copied("copy", NOW - HOUR, "anthropic/claude", 70, "hub-runtime"),
+                copied(
+                    "old",
+                    NOW - 30 * HOUR,
+                    "anthropic/claude",
+                    70,
+                    "hub-runtime",
+                ),
+            ],
+            &owners,
+            Vec::new(),
+            Vec::new(),
+            &request(Range::Day),
+            NOW,
+        );
+        assert_eq!(summary.totals.runs, 1);
+        assert_eq!(summary.providers, ["openai"]);
+        assert_eq!(summary.breakdown.model.len(), 1);
+        let replicas = summary.replicas.unwrap();
+        assert_eq!(replicas.len(), 1);
+        let copy = &replicas[0];
+        assert_eq!(
+            (copy.run_id.as_str(), copy.origin.as_str()),
+            ("copy", "hub-runtime")
+        );
+        assert_eq!(
+            (copy.agent.as_str(), copy.agent_label.as_str()),
+            ("agent-1", "Scout")
+        );
+        assert_eq!(copy.amount.runs, 1);
+        assert_eq!(copy.amount.processed, 180);
+        assert!(summary
+            .series
+            .iter()
+            .any(|bucket| bucket.start_ms == copy.bucket_ms));
+    }
+
+    #[test]
+    fn an_older_member_that_counts_the_copies_it_holds_counts_each_run_once() {
+        let mine = [
+            run("a", NOW - HOUR, "openai-codex/gpt", 50, None),
+            run(
+                "b",
+                NOW - 2 * HOUR,
+                "claude-bridge/claude-fable-5-1",
+                30,
+                None,
+            ),
+        ];
+        let hubs = run("h", NOW - 3 * HOUR, "openai-codex/gpt", 20, None);
+        // This computer holds a copy of the hub's run, and the hub holds
+        // copies of both of this computer's runs.
+        let mut local_runs = mine.to_vec();
+        local_runs.push(RunUsage {
+            origin: Some("hub-runtime".into()),
+            ..hubs.clone()
+        });
+        let local = summarize(
+            &local_runs,
+            &Owners::default(),
+            Vec::new(),
+            Vec::new(),
+            &request(Range::Day),
+            NOW,
+        );
+        let hub = older_answer(&[mine[0].clone(), mine[1].clone(), hubs.clone()]);
+        assert!(hub.replicas.is_none());
+        assert!(hub.providers.contains(&"claude-bridge".to_string()));
+        let joined = merge(
+            vec![
+                answer("local", "This computer", local),
+                answer("hub-runtime", "Factory hub", hub),
+            ],
+            NOW,
+        )
+        .summary;
+        let processed =
+            |runs: &[&RunUsage]| -> u64 { runs.iter().map(|run| run.tokens.processed()).sum() };
+        assert_eq!(joined.totals.runs, 3);
+        assert_eq!(
+            joined.totals.processed,
+            processed(&[&mine[0], &mine[1], &hubs])
+        );
+        assert_eq!(machine_row(&joined, "local").amount.runs, 2);
+        assert_eq!(
+            machine_row(&joined, "local").amount.processed,
+            processed(&[&mine[0], &mine[1]])
+        );
+        assert_eq!(machine_row(&joined, "hub-runtime").amount.runs, 1);
+        assert_eq!(
+            machine_row(&joined, "hub-runtime").amount.processed,
+            processed(&[&hubs])
+        );
+        assert_eq!(joined.providers, ["anthropic", "openai"]);
+        let fable: Vec<&Row> = joined
+            .breakdown
+            .model
+            .iter()
+            .filter(|row| row.label == "claude-fable-5-1")
+            .collect();
+        assert_eq!(fable.len(), 1);
+        assert_eq!(fable[0].key, "anthropic/claude-fable-5-1");
+        assert_eq!(fable[0].amount.runs, 1);
+        let series_runs: u64 = joined
+            .series
+            .iter()
+            .flat_map(|bucket| bucket.providers.values())
+            .map(|amount| amount.runs)
+            .sum();
+        assert_eq!(series_runs, 3);
+        assert!(joined
+            .series
+            .iter()
+            .all(|bucket| !bucket.providers.contains_key("claude-bridge")));
+    }
+
+    #[test]
+    fn a_run_two_machines_hold_copies_of_counts_once_on_the_member_that_ran_it() {
+        let hubs = run("h", NOW - HOUR, "openai-codex/gpt", 20, None);
+        let holder = |id: &str| {
+            let copy = RunUsage {
+                origin: Some("hub-runtime".into()),
+                ..hubs.clone()
+            };
+            answer(
+                id,
+                id,
+                summarize(
+                    &[copy],
+                    &Owners::default(),
+                    Vec::new(),
+                    Vec::new(),
+                    &request(Range::Day),
+                    NOW,
+                ),
+            )
+        };
+        let joined = merge(
+            vec![
+                holder("local"),
+                holder("laptop"),
+                answer(
+                    "hub-runtime",
+                    "Factory hub",
+                    older_answer(std::slice::from_ref(&hubs)),
+                ),
+            ],
+            NOW,
+        )
+        .summary;
+        assert_eq!(joined.totals.runs, 1);
+        assert_eq!(machine_row(&joined, "hub-runtime").amount.runs, 1);
+        assert_eq!(machine_row(&joined, "local").amount.runs, 0);
+        assert_eq!(machine_row(&joined, "laptop").amount.runs, 0);
+    }
+
+    #[test]
+    fn an_older_answer_alone_keeps_its_runs_under_one_name_per_family() {
+        let joined = merge(
+            vec![answer(
+                "hub-runtime",
+                "Factory hub",
+                older_answer(&[
+                    run("b", NOW - HOUR, "claude-bridge/claude-fable-5-1", 30, None),
+                    run("c", NOW - HOUR, "anthropic/claude-opus", 30, None),
+                ]),
+            )],
+            NOW,
+        )
+        .summary;
+        assert_eq!(joined.totals.runs, 2);
+        assert_eq!(joined.providers, ["anthropic"]);
+        let bucket = joined
+            .series
+            .iter()
+            .find(|bucket| !bucket.providers.is_empty())
+            .unwrap();
+        assert_eq!(bucket.providers.keys().collect::<Vec<_>>(), ["anthropic"]);
+        assert_eq!(bucket.providers["anthropic"].runs, 2);
     }
 }

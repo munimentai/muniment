@@ -271,6 +271,8 @@ pub struct CompletedReceipt {
     pub thread_id: Option<String>,
     pub recorded_at: String,
     pub receipt: Value,
+    /// The swarm member that ran the run, when this journal holds a copy.
+    pub origin: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -2375,16 +2377,24 @@ impl RunJournal {
         let mut receipts = Vec::new();
         for row in rows {
             let (run_id, recorded_at, envelope, thread_id) = row?;
-            let receipt = serde_json::from_str::<Value>(&envelope)
-                .ok()
-                .and_then(|envelope| envelope.pointer("/payload_json/receipt").cloned())
+            let Ok(envelope) = serde_json::from_str::<Value>(&envelope) else {
+                continue;
+            };
+            let receipt = envelope
+                .pointer("/payload_json/receipt")
+                .cloned()
                 .filter(Value::is_object);
+            let origin = envelope
+                .pointer("/provenance/swarm_origin")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
             if let Some(receipt) = receipt {
                 receipts.push(CompletedReceipt {
                     run_id,
                     thread_id,
                     recorded_at,
                     receipt,
+                    origin,
                 });
             }
         }

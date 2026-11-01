@@ -1475,10 +1475,29 @@ mod tests {
                 .append(1, &envelope(&run_id, 2, "run.completed", receipt))
                 .unwrap();
         }
+        // A copy of another member's run names the member that ran it.
+        let copy = Uuid::now_v7().to_string();
+        journal
+            .append_new_run("workspace", &envelope(&copy, 1, "run.started", json!({})))
+            .unwrap();
+        let mut completed = envelope(
+            &copy,
+            2,
+            "run.completed",
+            json!({"receipt": {"model": "anthropic/claude", "tokens": {"input": 4}}}),
+        );
+        completed
+            .provenance
+            .extra
+            .insert("swarm_origin".into(), json!("hub-runtime"));
+        journal.append(1, &completed).unwrap();
         let receipts = journal.completed_receipts("2026-08-01T00:00:00Z").unwrap();
-        assert_eq!(receipts.len(), 1);
+        assert_eq!(receipts.len(), 2);
         assert_eq!(receipts[0].run_id, with_receipt);
         assert_eq!(receipts[0].receipt["tokens"]["input"], 3);
+        assert_eq!(receipts[0].origin, None);
+        assert_eq!(receipts[1].run_id, copy);
+        assert_eq!(receipts[1].origin.as_deref(), Some("hub-runtime"));
         assert!(journal
             .completed_receipts("2026-09-01T00:00:00Z")
             .unwrap()
