@@ -1268,6 +1268,69 @@ pub fn remove_deleted_folders(profile: &Path) -> Result<Vec<String>, String> {
     }
     Ok(removed)
 }
+/// The files an agent's private memory folder holds that its facts rebuild:
+/// the search index and the record of chats already read for facts.
+const MEMORY_INDEX_FILES: [&str; 5] = [
+    "memory-index.sqlite3",
+    "memory-index.sqlite3-wal",
+    "memory-index.sqlite3-shm",
+    "memory-index.sqlite3-journal",
+    "memory-extracted.json",
+];
+/// Removes the index files from the private memory folder of agent `id`
+/// under `memory`, then the folder when nothing else stays in it. Deleted
+/// facts under it stay restorable. Answers whether the folder went.
+fn remove_memory_index(memory: &Path, id: &str) -> bool {
+    let folder = memory.join(id);
+    if memory.is_symlink() || folder.is_symlink() || !folder.is_dir() {
+        return false;
+    }
+    for name in MEMORY_INDEX_FILES {
+        let file = folder.join(name);
+        if file.is_file() && !file.is_symlink() {
+            let _ = fs::remove_file(file);
+        }
+    }
+    fs::remove_dir(&folder).is_ok()
+}
+/// Removes the index files, and the folder when nothing else stays, of each
+/// private memory folder under `agent-memory` whose agent no longer exists,
+/// as a delete that kept the memory or an older version leaves. A folder
+/// whose agent's folder or name cannot be read stays. Deleted facts stay
+/// restorable, and the shared memory outside `agent-memory` is never read.
+/// Answers the agent ids whose folders went.
+pub fn remove_deleted_memory(profile: &Path) -> Result<Vec<String>, String> {
+    let memory = profile.join("agent-memory");
+    if memory.is_symlink() || !memory.is_dir() {
+        return Ok(Vec::new());
+    }
+    // A save writes `agent.md` under this lock, so an agent cannot appear
+    // while the sweep runs.
+    let _lock = lock(profile)?;
+    let mut removed = Vec::new();
+    for entry in fs::read_dir(&memory).map_err(|_| "The agent memory could not be read.")? {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let id = entry.file_name().to_string_lossy().into_owned();
+        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) || uuid::Uuid::parse_str(&id).is_err()
+        {
+            continue;
+        }
+        let gone = match locate(profile, &id) {
+            Ok(Location::Missing) => true,
+            Ok(Location::Recorded(folder) | Location::Unrecorded(folder, _)) => {
+                let file = folder.join("agent.md");
+                !file.exists() && !file.is_symlink()
+            }
+            Err(_) => false,
+        };
+        if gone && remove_memory_index(&memory, &id) {
+            removed.push(id);
+        }
+    }
+    Ok(removed)
+}
 /// Removes an agent, its routines and its run history, and its folder when
 /// that holds only Muniment's own files. A folder with the user's files
 /// stays, and the answer names it. With `remove_memory`, its private memory
@@ -1299,6 +1362,9 @@ fn remove_agent(profile: &Path, id: &str, remove_memory: bool) -> Result<Deleted
             }
             _ => {}
         }
+    } else {
+        // The agent's index goes with it. Its deleted facts stay restorable.
+        remove_memory_index(&memory, id);
     }
     store.delete_agent(id)?;
     let mut state = state(profile)?;
@@ -2787,6 +2853,83 @@ mod tests {
         assert!(unnamed.is_dir());
         assert_eq!(list(&profile).unwrap().agents.len(), 1);
         assert!(remove_deleted_folders(&profile).unwrap().is_empty());
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    /// Writes the index files and, with `trash`, one deleted fact into an
+    /// agent's private memory folder.
+    fn private_memory(profile: &Path, id: &str, trash: bool) -> PathBuf {
+        let folder = profile.join("agent-memory").join(id);
+        fs::create_dir_all(&folder).unwrap();
+        for name in [
+            "memory-index.sqlite3",
+            "memory-index.sqlite3-wal",
+            "memory-extracted.json",
+        ] {
+            fs::write(folder.join(name), "index").unwrap();
+        }
+        if trash {
+            fs::create_dir_all(folder.join("memory-trash")).unwrap();
+            fs::write(folder.join("memory-trash/fact-1.md"), "deleted fact").unwrap();
+        }
+        folder
+    }
+
+    #[test]
+    fn deleting_an_agent_and_keeping_its_memory_removes_its_index_and_keeps_deleted_facts() {
+        let (root_dir, profile) = profile();
+        let (plain, _) = saved(&profile, "Plain");
+        let plain_memory = private_memory(&profile, &plain.id, false);
+        delete_agent(&profile, &plain.id, false).unwrap();
+        assert!(!plain_memory.exists());
+        let (kept, _) = saved(&profile, "Kept");
+        let kept_memory = private_memory(&profile, &kept.id, true);
+        delete_agent(&profile, &kept.id, false).unwrap();
+        assert!(!kept_memory.join("memory-index.sqlite3").exists());
+        assert!(!kept_memory.join("memory-extracted.json").exists());
+        assert_eq!(
+            fs::read_to_string(kept_memory.join("memory-trash/fact-1.md")).unwrap(),
+            "deleted fact"
+        );
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    #[test]
+    fn the_start_sweep_removes_only_memory_folders_deleted_agents_left() {
+        let (root_dir, profile) = profile();
+        let (live, _) = saved(&profile, "Live");
+        let live_memory = private_memory(&profile, &live.id, false);
+        // A delete that left the folder: the agent's folder and `agent.md` are gone.
+        let (gone, gone_folder) = saved(&profile, "Gone");
+        fs::remove_dir_all(&gone_folder).unwrap();
+        let gone_memory = private_memory(&profile, &gone.id, false);
+        // An agent no save ever recorded here.
+        let never = uuid::Uuid::new_v4().to_string();
+        let never_memory = private_memory(&profile, &never, false);
+        // A deleted agent's deleted facts stay restorable.
+        let trashed = uuid::Uuid::new_v4().to_string();
+        let trashed_memory = private_memory(&profile, &trashed, true);
+        // A folder that names no agent, and the shared memory beside it.
+        let other = profile.join("agent-memory/shared");
+        fs::create_dir_all(&other).unwrap();
+        fs::write(other.join("memory-index.sqlite3"), "index").unwrap();
+        fs::write(profile.join("memory-index.sqlite3"), "shared").unwrap();
+        let mut removed = remove_deleted_memory(&profile).unwrap();
+        removed.sort();
+        let mut expected = vec![gone.id.clone(), never.clone()];
+        expected.sort();
+        assert_eq!(removed, expected);
+        assert!(!gone_memory.exists() && !never_memory.exists());
+        assert!(live_memory.join("memory-index.sqlite3").is_file());
+        assert!(live_memory.join("memory-extracted.json").is_file());
+        assert!(!trashed_memory.join("memory-index.sqlite3").exists());
+        assert!(trashed_memory.join("memory-trash/fact-1.md").is_file());
+        assert!(other.join("memory-index.sqlite3").is_file());
+        assert_eq!(
+            fs::read_to_string(profile.join("memory-index.sqlite3")).unwrap(),
+            "shared"
+        );
+        assert!(remove_deleted_memory(&profile).unwrap().is_empty());
         fs::remove_dir_all(root_dir).unwrap();
     }
 
