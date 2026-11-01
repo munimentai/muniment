@@ -505,9 +505,7 @@ impl RouterStore for FileStore {
 
     fn save_quota(&self, account: &str, quota: &Quota) -> io::Result<()> {
         let _held = lock(&self.writes);
-        let mut store = quota::load(&self.agent);
-        store.accounts.insert(account.to_owned(), quota.clone());
-        quota::save(&self.agent, &store)
+        quota::record(&self.agent, account, quota.clone())
     }
 
     fn load_sessions(&self) -> Sessions {

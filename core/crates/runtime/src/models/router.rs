@@ -1164,9 +1164,7 @@ fn save_probe(
         }
     }
     save(agent, &config)?;
-    let mut store = quota::load(agent);
-    store.accounts.insert(id.to_owned(), probed);
-    quota::save(agent, &store).map_err(|_| SAVE_ERROR.to_string())?;
+    quota::record(agent, id, probed).map_err(|_| SAVE_ERROR.to_string())?;
     Ok(true)
 }
 

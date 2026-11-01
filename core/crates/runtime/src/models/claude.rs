@@ -216,11 +216,13 @@ pub(super) fn parse_usage(response: &Value, now_ms: i64) -> Option<(Usage, Optio
             scope: scope.into(),
             remaining_percent: 100.0 - used,
             limit_reached: used >= 100.0,
+            // The reset is a whole second. Claude Code reports it with
+            // jitter in the milliseconds that would read as a new reading.
             resets_at_ms: window
                 .get("resets_at")
                 .and_then(Value::as_str)
                 .and_then(|text| chrono::DateTime::parse_from_rfc3339(text).ok())
-                .map(|at| at.timestamp_millis()),
+                .map(|at| (at.timestamp_millis() + 500).div_euclid(1000) * 1000),
         });
     };
     if let Some(limits) = limits {
@@ -330,15 +332,7 @@ pub(super) fn refresh(agent: &Path, id: &str) -> bool {
     let Some((reading, plan)) = usage(&executable, &folder) else {
         return false;
     };
-    claude_accounts::update(agent, |store| {
-        if let Some(account) = store.accounts.iter_mut().find(|account| account.id == id) {
-            account.usage = Some(reading);
-            if plan.is_some() {
-                account.plan = plan;
-            }
-        }
-    })
-    .is_ok()
+    claude_accounts::record_usage(agent, id, reading, plan).is_ok()
 }
 
 /// Reads every account's plan limits at once, or the one `id` names.
