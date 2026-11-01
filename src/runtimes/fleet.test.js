@@ -177,6 +177,14 @@ describe('the audit log', () => {
     expect(auditRow({ kind: 'hold_moved', actor_runtime: LAPTOP, runtime_id: STUDIO, record: { account: 'router:a1b2' } }, swarm, accounts).detail).toBe('Work')
     // A router account the accounts do not list reads in words, never by its id.
     expect(auditRow({ kind: 'hold_moved', actor_runtime: LAPTOP, runtime_id: STUDIO, record: { account: 'router:0193aa' } }, swarm, []).detail).toBe('a model account')
+    // Every key class core seals reads in words: decision models by name, search keys by provider.
+    const decisionModels = [{ id: '01a17921-b66d-77e8-bc7e-815e81b4df15', name: 'Jev · TypeSafe API' }]
+    const keys = auditRow({ kind: 'sealed', actor_runtime: LAPTOP, record: { secret_id: `keys:${LAPTOP}`, keys: ['decision:01a17921-b66d-77e8-bc7e-815e81b4df15', 'decision:0193ffff-0000-7000-8000-000000000000', 'search:tavily'] } }, swarm, accounts, decisionModels)
+    expect(keys.detail).toBe('Keys of This computer · Jev · TypeSafe API, a decision model, Tavily search key')
+    const mcp = auditRow({ kind: 'sealed', actor_runtime: LAPTOP, record: { secret_id: `mcp:${LAPTOP}`, keys: ['mcp:github', 'mcp-oauth:linear'] } }, swarm)
+    expect(mcp.detail).toBe('MCP connections of This computer · github, linear')
+    expect(auditRow({ kind: 'sealed', actor_runtime: LAPTOP, record: { keys: ['endpoint:ollama', 'decision:01a17921-b66d-77e8-bc7e-815e81b4df15', 'other:0193aaaa-0000-7000-8000-000000000000'] } }, swarm).detail).toBe('Ollama, a decision model, a connection')
+    for (const row of [keys, mcp]) expect(row.detail).not.toMatch(/(decision|search|mcp|mcp-oauth|models|router|endpoint|keys):/)
   })
 
   it('reads each entry in the direction the action went', () => {

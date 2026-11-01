@@ -219,36 +219,48 @@ function secretName(id, swarm, accounts) {
   return `${label} of ${machineName(swarm, owner)}`
 }
 
-// A model or MCP connection's name from core's `fleet.credentials`
-// accounts: a sign-in by its provider, a router account by its label, or
-// in words when the accounts do not list it. Any other name stays as core wrote it.
+// A connection's name for the log: a sign-in by its provider, a router
+// account by its label from core's `fleet.credentials` accounts, a decision
+// model by its name from `decisionModels`, a search key by its provider, or
+// in words when no list names it. Core names each `pi:<provider>`,
+// `router:<id>`, `endpoint:<provider>`, `mcp:<server>`, `mcp-oauth:<server>`,
+// `decision:<id>` or `search:<provider>`.
 const HARNESS_SIGN_IN = /^pi:(.+)$/
-function connectionName(name, accounts) {
+const RAW_ID = /^[a-z_-]+:[0-9a-f]{8}-?[0-9a-f-]*$/i
+function connectionName(name, accounts, decisionModels = null) {
   const text = String(name ?? '')
   const shared = /^shared:swarm:[^:]+:(.+)$/.exec(text)
-  if (shared) return connectionName(`router:${shared[1]}`, accounts)
+  if (shared) return connectionName(`router:${shared[1]}`, accounts, decisionModels)
   const account = (accounts ?? []).find((entry) => entry.name === text)
   const harness = HARNESS_SIGN_IN.exec(text)
   if (harness) return providerName(account?.provider || harness[1])
   if (text.startsWith('router:')) return account?.label || 'a model account'
+  const endpoint = /^endpoint:(.+)$/.exec(text)
+  if (endpoint) return account?.label || providerName(endpoint[1])
   const mcp = /^mcp(?:-oauth)?:(.+)$/.exec(text)
   if (mcp) return mcp[1]
-  return account?.label || text
+  const decision = /^decision:(.+)$/.exec(text)
+  if (decision) return (decisionModels ?? []).find((entry) => entry?.id === decision[1])?.name || 'a decision model'
+  const search = /^search:(.+)$/.exec(text)
+  if (search) return `${search[1].charAt(0).toUpperCase()}${search[1].slice(1)} search key`
+  if (account?.label) return account.label
+  return RAW_ID.test(text) ? 'a connection' : text
 }
 
 // One `fleet.audit` entry as a log row: when, what, the machines it moved
 // between in the direction it went, and the record's detail. Core keys each
 // entry `<writer>:<uuidv7>`, and `actor_runtime` is the writer. `accounts`
-// from `fleet.credentials` names the connections a secret carries.
-export function auditRow(entry, swarm, accounts = null) {
+// from `fleet.credentials` and `decisionModels`, the router settings'
+// `classifier_connections`, name the connections a secret carries.
+export function auditRow(entry, swarm, accounts = null, decisionModels = null) {
   const record = entry?.record ?? {}
   const rows = Number.isInteger(record.rows) ? `${record.rows} ${record.rows === 1 ? 'row' : 'rows'}` : ''
   const detail = [
     record.operation,
     record.secret_id ? secretName(record.secret_id, swarm, accounts) : '',
-    record.account ? connectionName(record.account, accounts) : '',
+    record.account ? connectionName(record.account, accounts, decisionModels) : '',
     record.from && record.to ? `${record.from} to ${record.to}` : '',
-    Array.isArray(record.keys) ? record.keys.map((key) => connectionName(key, accounts)).join(', ') : '',
+    Array.isArray(record.keys) ? record.keys.map((key) => connectionName(key, accounts, decisionModels)).join(', ') : '',
     Array.isArray(record.recipients) ? `${record.recipients.length} ${record.recipients.length === 1 ? 'recipient' : 'recipients'}` : '',
     rows,
     record.result,

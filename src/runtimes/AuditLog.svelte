@@ -2,7 +2,8 @@
   // Machines → This computer → Log: the fleet audit log from core's `fleet.audit`, newest
   // first. Each entry is a record row in mono: when, what happened, the
   // machines it moved between and its detail, with machine names from
-  // `swarm.members` and connection names from `fleet.credentials`. The log shows in a fleet, or while this computer holds
+  // `swarm.members` and connection names from `fleet.credentials` and the
+  // router settings' decision models. The log shows in a fleet, or while this computer holds
   // entries from one. A runtime that does not answer `fleet.audit` keeps the
   // log hidden.
   import { onMount, tick } from 'svelte'
@@ -24,21 +25,24 @@
   // The members name the machines behind each entry's runtime ids.
   let swarm = $state(null)
   let accounts = $state(null)
-  const rows = $derived((entries ?? []).map((entry) => auditRow(entry, swarm, accounts)))
+  let decisionModels = $state(null)
+  const rows = $derived((entries ?? []).map((entry) => auditRow(entry, swarm, accounts, decisionModels)))
   const shown = $derived(!!entries && (!alone || entries.length > 0))
   const ask = (operation, body = {}) => agentRequest(tauri, LOCAL_RUNTIME_ID, operation, body)
 
   async function load() {
     busy = true
     try {
-      const [answer, members, status, fleet] = await Promise.all([
+      const [answer, members, status, fleet, router] = await Promise.all([
         ask('fleet.audit', { limit }),
         ask('swarm.members').catch(() => null),
         ask('fleet.sync_status').catch(() => null),
         readFleetAccounts(tauri),
+        Promise.resolve().then(() => tauri?.invoke('model_router_settings')).catch(() => null),
       ])
       if (members?.members) swarm = members
       if (fleet) accounts = fleet
+      if (Array.isArray(router?.classifier_connections)) decisionModels = router.classifier_connections
       alone = (status?.state ?? 'alone') === 'alone'
       entries = answer?.entries ?? []
       more = !!answer?.more && limit < AUDIT_LIMIT
