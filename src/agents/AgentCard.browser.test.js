@@ -6,9 +6,11 @@ import '../styles/base.css'
 import AgentCard from './AgentCard.svelte'
 
 let component
+const components = []
 afterEach(() => {
   if (component) unmount(component)
   component = null
+  components.splice(0).forEach((mounted) => unmount(mounted))
   document.body.replaceChildren()
 })
 
@@ -27,48 +29,87 @@ function card(left) {
 
 const overlaps = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom
 
-// The gap from a rail mark's icon to its name, and the vertical offset of
-// their centers.
-function nearIcon(mark, box) {
+// The gap from a rail mark's icon to its name, in any direction.
+function iconGap(mark, box) {
   const icon = mark.querySelector('svg').getBoundingClientRect()
-  const gap = Math.max(box.left - icon.right, icon.left - box.right, 0)
-  const offset = Math.abs((box.top + box.bottom) / 2 - (icon.top + icon.bottom) / 2)
-  return { gap, offset }
+  return Math.hypot(Math.max(box.left - icon.right, icon.left - box.right, 0), Math.max(box.top - icon.bottom, icon.top - box.bottom, 0))
 }
 
-it('names a rail mark right of its icon, centered on it, clear of the sidebar at its left', async () => {
-  const sidebar = document.createElement('nav')
-  Object.assign(sidebar.style, { position: 'absolute', left: '0', top: '0', width: '150px', height: '400px' })
-  document.body.append(sidebar)
-  await page.viewport(1000, 600)
-  const target = card(160)
-  for (const name of ['Overview', 'History']) {
-    const mark = target.querySelector(`[role="tab"][aria-label="${name}"]`)
-    await userEvent.hover(mark)
-    const tip = document.querySelector('.rail-tip')
-    expect(tip.textContent).toBe(name)
-    const box = tip.getBoundingClientRect()
-    expect(box.left).toBeGreaterThanOrEqual(mark.getBoundingClientRect().right)
-    const { gap, offset } = nearIcon(mark, box)
-    expect(gap).toBeLessThan(16)
-    expect(offset).toBeLessThanOrEqual(1)
-    expect(box.right).toBeLessThanOrEqual(window.innerWidth)
-    expect(overlaps(box, sidebar.getBoundingClientRect())).toBe(false)
+// What a panel shows: its heading and every word and icon of its rows.
+function panelContent(target) {
+  const panel = target.querySelector('[role="tabpanel"]')
+  const boxes = [...panel.querySelectorAll('h4, svg')].map((node) => node.getBoundingClientRect())
+  const walker = document.createTreeWalker(panel, NodeFilter.SHOW_TEXT)
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (!node.textContent.trim()) continue
+    const range = document.createRange()
+    range.selectNodeContents(node)
+    boxes.push(...range.getClientRects())
   }
+  return boxes.filter((box) => box.width && box.height)
+}
+
+// The Agents page as the app lays it out: the sidebar, then the page with its
+// 24px margin and a grid of 340 by 300 cards 12px apart.
+function agentsPage(count = 2) {
+  const sidebar = document.createElement('nav')
+  sidebar.id = 'sidebar'
+  Object.assign(sidebar.style, { position: 'absolute', left: '0', top: '0', width: '240px', height: '100%' })
+  const page = document.createElement('main')
+  Object.assign(page.style, { position: 'absolute', left: '240px', top: '0', right: '0', padding: '24px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, 340px)', gridAutoRows: '300px', gap: '12px' })
+  document.body.append(sidebar, page)
+  const cards = Array.from({ length: count }, (_, index) => {
+    const target = document.createElement('div')
+    page.append(target)
+    components.push(mount(AgentCard, { target, props: { agent: { ...agent, id: `scout-${index}`, name: `Scout ${index}` }, tauri, machine: { id: 'local', name: 'This computer', kind: 'laptop' } } }))
+    return target
+  })
+  flushSync()
+  return { sidebar, cards }
+}
+
+it('names each rail mark next to its icon, clear of the panel heading, its rows and the sidebar', async () => {
+  await page.viewport(1100, 600)
+  const { sidebar, cards } = agentsPage(2)
+  for (const target of cards) {
+    // Overview holds the heading and the fact rows, and Routines the "Add or edit in the profile" row.
+    for (const shown of ['Overview', 'Routines']) {
+      await userEvent.click(target.querySelector(`[role="tab"][aria-label="${shown}"]`))
+      for (const name of ['Overview', 'Model', 'Permissions', 'Routines', 'History']) {
+        const mark = target.querySelector(`[role="tab"][aria-label="${name}"]`)
+        await userEvent.hover(mark)
+        const tip = document.querySelector('.rail-tip')
+        expect(tip.textContent).toBe(name)
+        const box = tip.getBoundingClientRect()
+        expect(iconGap(mark, box)).toBeLessThan(16)
+        expect(overlaps(box, mark.querySelector('svg').getBoundingClientRect())).toBe(false)
+        expect(overlaps(box, sidebar.getBoundingClientRect())).toBe(false)
+        expect(panelContent(target).filter((content) => overlaps(box, content)).map((content) => `${name}/${shown} ${JSON.stringify(box)} ${JSON.stringify(content)}`)).toEqual([])
+        expect(box.left).toBeGreaterThanOrEqual(0)
+        expect(box.top).toBeGreaterThanOrEqual(0)
+      }
+    }
+  }
+  expect(cards[0].querySelector('h4').textContent).toBe('Routines')
+  expect(cards[0].querySelector('.foot').textContent).toBe('Add or edit in the profile')
 })
 
-it('names a rail mark left of its icon only where the window\'s right edge cuts it', async () => {
-  await page.viewport(1000, 600)
-  // A card pushed past the window's right edge, so its rail sits at that edge.
-  const target = card(window.innerWidth - 60)
+it('names a rail mark left of its icon, outside the card, where the page is free there', async () => {
+  await page.viewport(1100, 600)
+  const sidebar = document.createElement('nav')
+  sidebar.id = 'sidebar'
+  Object.assign(sidebar.style, { position: 'absolute', left: '0', top: '0', width: '150px', height: '400px' })
+  document.body.append(sidebar)
+  const target = card(300)
   const mark = target.querySelector('[role="tab"][aria-label="Permissions"]')
-  await userEvent.hover(mark, { force: true })
+  await userEvent.hover(mark)
   const box = document.querySelector('.rail-tip').getBoundingClientRect()
-  expect(box.right).toBeLessThanOrEqual(mark.getBoundingClientRect().left)
-  expect(box.left).toBeGreaterThanOrEqual(0)
-  const { gap, offset } = nearIcon(mark, box)
-  expect(gap).toBeLessThan(16)
-  expect(offset).toBeLessThanOrEqual(1)
+  const icon = mark.querySelector('svg').getBoundingClientRect()
+  expect(box.right).toBeLessThanOrEqual(target.getBoundingClientRect().left + 16)
+  expect(box.right).toBeLessThanOrEqual(icon.left)
+  expect(Math.abs((box.top + box.bottom) / 2 - (icon.top + icon.bottom) / 2)).toBeLessThanOrEqual(1)
+  expect(iconGap(mark, box)).toBeLessThan(16)
+  expect(overlaps(box, sidebar.getBoundingClientRect())).toBe(false)
 })
 
 // The picked mark's edge spans the mark and meets the rail's divider, where a

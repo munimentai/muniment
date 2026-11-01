@@ -157,25 +157,51 @@
     const rail = event.currentTarget
     void tick().then(() => rail?.querySelector('[aria-selected="true"]')?.focus())
   }
-  // A rail mark's name shows beside its icon, at its right and centered on
-  // it, so the eye finds it next to the icon. The tip sits on the
-  // page, since the card clips what overflows it.
-  const TIP_GAP = 10
+  // A rail mark's name shows next to its icon and never over the panel's
+  // rows or the sidebar: left of the icon, outside the card, where free page
+  // lies there, else just above the icon, over the rail and the page's
+  // margin, ending where the words of the panel's rows start. The tip sits on the page,
+  // since the card clips what overflows it.
+  const TIP_GAP = 6
+  // Every panel but Model insets its headings and rows' words 8px.
+  const ROW_INSET = 8
+  let card = $state()
+  let panelList = $state()
   function showTip(event, entry) {
-    const mark = event.currentTarget
-    const icon = (mark.querySelector('svg') ?? mark).getBoundingClientRect()
-    tip = { label: entry.label, top: icon.top + icon.height / 2, left: icon.right + TIP_GAP, flip: icon.left - TIP_GAP }
+    tip = { label: entry.label, mark: event.currentTarget }
   }
-  // A mark at the window's right edge shows the tip at its left.
-  function onPage(node) {
+  // The nearest right edge left of the card among `nodes`, else the window's left edge.
+  function edgeLeft(box, nodes) {
+    const blockers = nodes.filter((node) => node && node !== card).map((node) => node.getBoundingClientRect())
+      .filter((other) => other.width && other.right <= box.left + 1 && other.top < box.bottom && box.top < other.bottom)
+    return Math.max(0, ...blockers.map((other) => other.right))
+  }
+  function placeTip(node, { mark }) {
+    const box = card.getBoundingClientRect()
+    const markBox = mark.getBoundingClientRect()
+    const icon = (mark.querySelector('svg') ?? mark).getBoundingClientRect()
+    const sidebar = document.getElementById('sidebar')
+    const { width, height } = node.getBoundingClientRect()
+    let left = icon.left - TIP_GAP - width
+    let top = icon.top + icon.height / 2 - height / 2
+    // A card beside this one is no free page, but the gutter and its margin are.
+    if (left < edgeLeft(box, [sidebar, ...document.querySelectorAll('[data-agent-card]')])) {
+      const rows = panelList.getBoundingClientRect().left + parseFloat(getComputedStyle(panelList).paddingLeft) + (panel === 'model' ? 0 : ROW_INSET)
+      left = Math.max(edgeLeft(box, [sidebar]), rows - width)
+      top = markBox.top - 2 - height
+      if (top < 0) top = markBox.bottom + 2
+    }
+    Object.assign(node.style, { left: `${left}px`, top: `${top}px` })
+  }
+  function onPage(node, value) {
     document.body.append(node)
-    if (node.getBoundingClientRect().right > window.innerWidth - 4) Object.assign(node.style, { left: 'auto', right: `${window.innerWidth - tip.flip}px` })
-    return { destroy() { node.remove() } }
+    placeTip(node, value)
+    return { update(next) { placeTip(node, next) }, destroy() { node.remove() } }
   }
   const kebabActions = $derived([{ id: 'profile', label: 'Open profile', icon: 'user' }, ...(agent.replica ? [] : [{ id: 'export', label: 'Export', icon: 'download' }])])
 </script>
 
-<article class="agent-card" data-agent-card={agent.id} class:read-only={readOnly} class:away={agent.online === false} aria-label={agent.name} style:--agent-color={agentColor(agent)}>
+<article class="agent-card" bind:this={card} data-agent-card={agent.id} class:read-only={readOnly} class:away={agent.online === false} aria-label={agent.name} style:--agent-color={agentColor(agent)}>
   <header class="card-head">
     <span class="head-avatar"><AgentAvatar {agent} activity={agent.activity} size={28} /></span>
     <div class="head-name">
@@ -193,8 +219,8 @@
         </button>
       {/each}
     </div>
-    {#if tip}<span class="rail-tip" aria-hidden="true" use:onPage style:top="{tip.top}px" style:left="{tip.left}px">{tip.label}</span>{/if}
-    <div class="panel-list" class:fill={panel === 'model'} id={`agent-${key}-panel`} role="tabpanel" aria-labelledby={`agent-${key}-${panel}-tab`} data-panel-id={panel} use:panelScroll>
+    {#if tip}<span class="rail-tip" aria-hidden="true" use:onPage={tip}>{tip.label}</span>{/if}
+    <div class="panel-list" bind:this={panelList} class:fill={panel === 'model'} id={`agent-${key}-panel`} role="tabpanel" aria-labelledby={`agent-${key}-${panel}-tab`} data-panel-id={panel} use:panelScroll>
       {#if readOnly}<p class="note" role="note"><LucideIcon name={agent.online === false ? 'globe-off' : 'refresh-cw'} variant="action" size={12} />{readOnlyNote}</p>{/if}
       {#if error}<p class="error" role="alert">{error}</p>{/if}
       {#if panel === 'overview'}
@@ -265,7 +291,7 @@
   .rail-mark[aria-selected="true"] { background: var(--selected); color: var(--on-selected); }
   /* The edge spans the picked mark and meets the rail's divider, so it reads as the tab's edge and never as a text caret. */
   .rail-mark[aria-selected="true"]::after { content: ''; position: absolute; top: 0; bottom: 0; right: -7px; width: 2px; background: var(--selected-edge); }
-  .rail-tip { position: fixed; z-index: 30; transform: translateY(-50%); padding: 3px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); box-shadow: var(--shadow-overlay); color: var(--ink); font: var(--text-12) var(--font-human); white-space: nowrap; pointer-events: none; }
+  .rail-tip { position: fixed; z-index: 30; padding: 2px 6px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); box-shadow: var(--shadow-overlay); color: var(--ink); font: var(--text-12) var(--font-human); white-space: nowrap; pointer-events: none; }
   .panel-list { flex: 1; min-width: 0; min-height: 0; padding: 6px; overflow-y: auto; }
   /* The model picker fills the panel and scrolls its own list. */
   .panel-list.fill { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
