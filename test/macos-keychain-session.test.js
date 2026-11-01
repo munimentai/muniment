@@ -75,6 +75,7 @@ if (op === 'bootstrap') {
 `, { mode: 0o700 })
     fs.writeFileSync(path.join(bin, 'sleep'), `#!/usr/bin/env bash
 if [[ "$TEST_MODE" != 'console timeout' ]]; then exec /bin/sleep "$@"; fi
+printf '%s\\n' "$*" >> "$TEST_ROOT/sleeps"
 `, { mode: 0o700 })
     fs.writeFileSync(path.join(bin, 'security'), `#!/usr/bin/env bash
 set -eu
@@ -126,7 +127,11 @@ esac
         if [ "$TEST_MODE" = 'runner signal' ]; then kill -TERM "$PPID"; fi
       `], {
         cwd: process.cwd(), encoding: 'utf8', timeout: 15_000,
-        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, TMPDIR: root, TEST_LOG: log, TEST_ROOT: root, TEST_MODE: mode },
+        env: {
+          ...process.env, PATH: `${bin}:${process.env.PATH}`, TMPDIR: root, TEST_LOG: log, TEST_ROOT: root, TEST_MODE: mode,
+          // A short poll budget keeps the timeout case to a few stub processes on a loaded host.
+          ...(mode === 'console timeout' ? { MUNIMENT_KEYCHAIN_SETUP_POLLS: '3' } : {}),
+        },
       })
       expect(result.error).toBeUndefined()
       expect(result.status, result.stderr).toBe(expected)
@@ -157,6 +162,7 @@ esac
       if (mode === 'runner failure') expect(result.stderr).not.toContain('reason=cleanup-')
       if (mode === 'runner and bootout failure') expect(result.stderr).toContain('reason=probe-failed')
       if (expected === 0) expect(result.stderr).not.toContain('macos-keychain-session: reason=')
+      if (mode === 'console timeout') expect(fs.readFileSync(path.join(root, 'sleeps'), 'utf8')).toBe('0.1\n0.1\n0.1\n')
       expect(fs.readdirSync(root).filter((name) => name.startsWith('muniment-keychain.'))).toEqual([])
     } finally { fs.rmSync(root, { recursive: true, force: true }) }
   })
