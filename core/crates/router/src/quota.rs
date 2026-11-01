@@ -1193,8 +1193,8 @@ mod tests {
 
     #[test]
     fn the_store_reads_back_and_a_damaged_one_reads_as_empty() {
-        let agent =
-            std::env::temp_dir().join(format!("muniment-router-quota-{}", uuid::Uuid::now_v7()));
+        let agent = muniment_atomic_file::test_root::test_root()
+            .join(format!("muniment-router-quota-{}", uuid::Uuid::now_v7()));
         fs::create_dir_all(&agent).unwrap();
         let mut store = QuotaStore::default();
         store

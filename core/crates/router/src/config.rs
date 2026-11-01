@@ -1035,7 +1035,8 @@ mod tests {
     }
 
     fn tempdir() -> PathBuf {
-        let path = std::env::temp_dir().join(format!("muniment-router-{}", uuid::Uuid::now_v7()));
+        let path = muniment_atomic_file::test_root::test_root()
+            .join(format!("muniment-router-{}", uuid::Uuid::now_v7()));
         fs::create_dir_all(&path).unwrap();
         path
     }

@@ -2165,7 +2165,7 @@ mod tests {
     }
 
     fn profile() -> (PathBuf, PathBuf) {
-        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let root = crate::state_root::test_root().join(uuid::Uuid::new_v4().to_string());
         fs::create_dir_all(&root).unwrap();
         let profile = root.join("private");
         crate::home::confirm_home(&profile, &root.join("muniment")).unwrap();

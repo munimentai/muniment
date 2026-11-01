@@ -15,7 +15,8 @@ static NEXT_TEST: AtomicU64 = AtomicU64::new(0);
 
 fn paths() -> (PathBuf, PathBuf) {
     let id = NEXT_TEST.fetch_add(1, Ordering::Relaxed);
-    let base = std::env::temp_dir().join(format!("muniment-retention-{}-{id}", std::process::id()));
+    let base = muniment_core::state_root::test_root()
+        .join(format!("muniment-retention-{}-{id}", std::process::id()));
     (base.with_extension("sqlite3"), base.with_extension("cas"))
 }
 

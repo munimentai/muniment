@@ -90,45 +90,19 @@ pub fn export(root: &Path, mode: Mode) -> io::Result<()> {
     Ok(())
 }
 
+/// The publication lock sits beside the fixture directory, as `.<name>.lock`
+/// in its canonical parent, so every spelling of one target shares it and it
+/// goes with the folder. It never lands in the system temporary folder.
 fn publication_lock_path(target: &Path) -> io::Result<PathBuf> {
     let parent = fs::canonicalize(
         target
             .parent()
             .expect("the fixture directory always has a parent"),
     )?;
-    let identity = parent.join(
-        target
-            .file_name()
-            .expect("the fixture directory always has a name"),
-    );
-    let hash = publication_identity_hash(&identity);
-    Ok(std::env::temp_dir().join(format!("muniment-attach-fixtures-{hash:016x}.lock")))
-}
-
-#[cfg(unix)]
-fn publication_identity_hash(identity: &Path) -> u64 {
-    use std::os::unix::ffi::OsStrExt;
-
-    identity
-        .as_os_str()
-        .as_bytes()
-        .iter()
-        .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
-            (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
-        })
-}
-
-#[cfg(windows)]
-fn publication_identity_hash(identity: &Path) -> u64 {
-    use std::os::windows::ffi::OsStrExt;
-
-    identity
-        .as_os_str()
-        .encode_wide()
-        .flat_map(u16::to_le_bytes)
-        .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
-            (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
-        })
+    let name = target
+        .file_name()
+        .expect("the fixture directory always has a name");
+    Ok(parent.join(format!(".{}.lock", name.to_string_lossy())))
 }
 
 struct ExportLock {

@@ -2377,8 +2377,8 @@ mod tests {
     }
 
     fn agent_dir() -> PathBuf {
-        let path =
-            std::env::temp_dir().join(format!("muniment-router-server-{}", uuid::Uuid::now_v7()));
+        let path = muniment_atomic_file::test_root::test_root()
+            .join(format!("muniment-router-server-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir_all(&path).unwrap();
         path
     }

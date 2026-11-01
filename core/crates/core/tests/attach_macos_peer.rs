@@ -7,10 +7,41 @@ use socket_path::socket_temp_path;
 // The listener owns the socket's parent directory and sets it to 0700, so its
 // socket sits beneath a directory the test creates rather than in the
 // per-user temporary directory itself.
-fn owned_socket_path() -> std::path::PathBuf {
-    let parent = socket_temp_path().join("muniment");
+// The folder goes when the value drops. A socket path stays short, so it
+// sits in the temporary folder itself, not in the test root.
+fn owned_socket_path() -> OwnedSocket {
+    let root = socket_temp_path();
+    let parent = root.join("muniment");
     std::fs::create_dir_all(&parent).unwrap();
-    parent.join("attach-v1.sock")
+    OwnedSocket {
+        path: parent.join("attach-v1.sock"),
+        root,
+    }
+}
+
+struct OwnedSocket {
+    root: std::path::PathBuf,
+    path: std::path::PathBuf,
+}
+
+impl std::ops::Deref for OwnedSocket {
+    type Target = std::path::Path;
+
+    fn deref(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+impl AsRef<std::path::Path> for OwnedSocket {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+impl Drop for OwnedSocket {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
 }
 
 use muniment_core::attach::{

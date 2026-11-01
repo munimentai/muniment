@@ -53,7 +53,7 @@ fn run_started(actor_id: Option<&str>) -> EventEnvelope {
 }
 
 fn journal_with_thread(actor_id: Option<&str>) -> (PathBuf, RunJournal, String) {
-    let path = std::env::temp_dir().join(format!(
+    let path = muniment_core::state_root::test_root().join(format!(
         "muniment-journal-thread-mutation-{}.sqlite3",
         Uuid::new_v4()
     ));
@@ -78,7 +78,7 @@ fn stored_thread_event(path: &PathBuf, thread_id: &str) -> (String, u64, String,
 
 #[test]
 fn creates_thread_now_and_reads_it_from_the_journal() {
-    let path = std::env::temp_dir().join(format!(
+    let path = muniment_core::state_root::test_root().join(format!(
         "muniment-journal-thread-create-{}.sqlite3",
         Uuid::new_v4()
     ));
@@ -99,7 +99,7 @@ fn creates_thread_now_and_reads_it_from_the_journal() {
 
 #[test]
 fn create_thread_now_rejects_invalid_workspace_or_provenance() {
-    let path = std::env::temp_dir().join(format!(
+    let path = muniment_core::state_root::test_root().join(format!(
         "muniment-journal-thread-create-invalid-{}.sqlite3",
         Uuid::new_v4()
     ));

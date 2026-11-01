@@ -550,7 +550,8 @@ mod tests {
 
     #[test]
     fn a_ledger_reads_back_and_a_damaged_one_reads_as_empty() {
-        let agent = std::env::temp_dir().join(format!("muniment-usage-{}", uuid::Uuid::now_v7()));
+        let agent = muniment_atomic_file::test_root::test_root()
+            .join(format!("muniment-usage-{}", uuid::Uuid::now_v7()));
         fs::create_dir_all(&agent).unwrap();
         let mut ledger = Ledger::default();
         ledger.record_success("a1", "2026-09-17", 1_000, 5, 1);

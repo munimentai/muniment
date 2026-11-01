@@ -1,3 +1,5 @@
+pub mod test_root;
+
 use std::fs;
 use std::io;
 use std::path::Path;
