@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { agentMachine, agentRequest, agentRuntimes, agentThreads, applyRunUpdate, listAgents, listRuns } from './agent-runtime.js'
+import { agentMachine, agentRequest, agentRuntimes, agentThreads, applyRunUpdate, keepNewerRuns, listAgents, listRuns } from './agent-runtime.js'
 
 const studio = { id: '018f0000-0000-7000-8000-000000000042', name: 'Studio', kind: 'desktop', status: 'online', local: false }
 const box = { id: '018f0000-0000-7000-8000-000000000043', name: 'Build box', kind: 'container', status: 'offline', local: false }
@@ -95,5 +95,29 @@ describe('agents across machines', () => {
     expect(agentMachine(list, { runtimeId: studio.id }).name).toBe('Studio')
     expect(agentMachine(list, {}).kind).toBe('local')
     expect(agentMachine(null, { runtimeId: 'gone' }).name).toBe('Paired machine')
+  })
+})
+
+describe('a listing that answers after a run event', () => {
+  const agents = [{ id: 'scout', runtimeId: 'local' }, { id: 'clerk', runtimeId: 'local' }]
+  const running = { id: 'run-1', agent_id: 'scout', status: 'running', updated_at: '2026-11-01T16:07:50Z', runtimeId: 'local' }
+  const failed = { ...running, status: 'failed', error: 'The key was refused.', updated_at: '2026-11-01T16:07:57.550Z' }
+
+  it('keeps the settled run the event brought over the same run the listing still names active', () => {
+    const next = keepNewerRuns({ latestRuns: { scout: failed } }, { agents, latestRuns: { scout: running } })
+    expect(next.latestRuns.scout).toBe(failed)
+    // Even when the listing's copy carries a later lease time.
+    expect(keepNewerRuns({ latestRuns: { scout: failed } }, { agents, latestRuns: { scout: { ...running, updated_at: '2026-11-01T16:08:00Z' } } }).latestRuns.scout).toBe(failed)
+  })
+
+  it('takes the listing\'s run when it is newer or the window holds none', () => {
+    const later = { id: 'run-2', agent_id: 'scout', status: 'running', updated_at: '2026-11-01T16:09:00Z', runtimeId: 'local' }
+    expect(keepNewerRuns({ latestRuns: { scout: failed } }, { agents, latestRuns: { scout: later } }).latestRuns.scout).toBe(later)
+    expect(keepNewerRuns({ latestRuns: { scout: running } }, { agents, latestRuns: { scout: failed } }).latestRuns.scout).toBe(failed)
+    expect(keepNewerRuns({ latestRuns: {} }, { agents, latestRuns: { scout: failed } }).latestRuns.scout).toBe(failed)
+  })
+
+  it('drops the run of an agent the listing no longer names', () => {
+    expect(keepNewerRuns({ latestRuns: { scout: failed } }, { agents: [], latestRuns: {} }).latestRuns).toEqual({})
   })
 })

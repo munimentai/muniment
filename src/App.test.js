@@ -4691,6 +4691,37 @@ describe('sidebar collapse', () => {
     expect(invoke.mock.calls.filter(([command]) => command === 'chat_new_thread')).toHaveLength(0)
   })
 
+  it('settles an agent card\'s last run on the run\'s failed event, also when a listing that started before it answers after', async () => {
+    const original = invoke.getMockImplementation()
+    const scout = { id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null }
+    const running = { id: 'run-1', agent_id: 'agent-1', status: 'running', thread_id: 'agent-thread', updated_at: '2026-11-01T16:07:50Z', trigger: { kind: 'manual' } }
+    const failed = { ...running, status: 'failed', error: 'The key was refused.', updated_at: '2026-11-01T16:07:57.550Z' }
+    let held = null
+    invoke.mockImplementation(async (command, args) => {
+      if (isAgentList(command, args)) {
+        const answer = { agents: [scout], primary_threads: { 'agent-1': 'agent-thread' }, latest_runs: { 'agent-1': running }, errors: [] }
+        if (!held) return answer
+        return new Promise((resolve) => { held = () => resolve(answer) })
+      }
+      return original(command, args)
+    })
+    threadSummaryResult = [{ threadId: 'agent-thread', title: 'Carry out your saved agent instructions', updatedAt: '2026-01-02T00:00:00Z' }]
+    render(App)
+    await openSidebarPage('Agents')
+    const card = await within(await screen.findByRole('region', { name: 'Agents', exact: true })).findByRole('article', { name: 'Scout' })
+    await waitFor(() => expect(within(card).getByRole('img', { name: 'Running' })).toBeInTheDocument())
+    // A listing starts, the run fails, and the listing answers with the run as it was.
+    held = true
+    document.dispatchEvent(new Event('visibilitychange'))
+    await waitFor(() => expect(typeof held).toBe('function'))
+    for (const [name, handle] of window.__TAURI__.event.listen.mock.calls) if (name === 'agent-run-updated') handle({ payload: { runtimeId: 'local', run: failed } })
+    await waitFor(() => expect(within(card).getByRole('img', { name: 'Failed' })).toBeInTheDocument())
+    held()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(within(card).getByRole('img', { name: 'Failed' })).toBeInTheDocument()
+    expect(within(card).queryByRole('img', { name: 'Running' })).toBeNull()
+  })
+
   it('lands an agent chat opened from its card at the newest message', async () => {
     const original = invoke.getMockImplementation()
     const history = Array.from({ length: 6 }, (_, index) => ({ role: index % 2 ? 'assistant' : 'user', content: `Message ${index}` }))
