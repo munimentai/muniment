@@ -58,6 +58,17 @@ describe('chat composer and projection', () => {
     })
   })
 
+  it('counts a live reply from the start the runtime names, and keeps it across text deltas', () => {
+    const initial = { id: 'r', phase: 'thinking', text: '', startedAt: '2026-01-01T00:00:00.700Z' }
+    const live = applyChatEvent(initial, { runId: 'r', phase: 'thinking', text: '', startedAt: '2026-01-01T00:00:00.512345Z' })
+    expect(live.startedAt).toBe('2026-01-01T00:00:00.512345Z')
+    const streamed = applyChatEvent(live, { runId: 'r', type: 'text-delta', text: 'Hi' })
+    expect(streamed.startedAt).toBe('2026-01-01T00:00:00.512345Z')
+    expect(applyChatEvent(streamed, { runId: 'r', phase: 'complete', text: 'Hi', receipt: { time: '5.612s' } }).startedAt).toBe('2026-01-01T00:00:00.512345Z')
+    // Restored history names the same start: the run's first event.
+    expect(historyMessages([{ runId: 'r', phase: 'complete', text: 'Hi', sentAt: '2026-01-01T00:00:00.512345Z' }])[0].run.startedAt).toBe('2026-01-01T00:00:00.512345Z')
+  })
+
   it('keeps the prompt storage notice across live events and restored history', () => {
     const promptStorageNotice = 'Prompt text stays in runtime memory for this run. Keyring error -25307: A default keychain could not be found.'
     const entry = { runId: 'r', phase: 'streaming', text: 'Reply', promptStorageNotice }

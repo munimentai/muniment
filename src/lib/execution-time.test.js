@@ -11,6 +11,10 @@ describe('execution time', () => {
   })
 
   it('keeps existing human-readable receipts and rejects nonfinite durations', () => {
+    // A receipt in milliseconds rounds as the live time does, and an older one-decimal receipt still reads.
+    expect(receiptTime('5.499s')).toBe('5s')
+    expect(receiptTime('5.500s')).toBe('6s')
+    expect(receiptTime('5.6s')).toBe('6s')
     expect(receiptTime('2m 3s')).toBe('2m 3s')
     expect(executionTime(NaN)).toBeNull()
     expect(executionTime(Infinity)).toBeNull()

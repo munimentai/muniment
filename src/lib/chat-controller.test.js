@@ -2449,7 +2449,7 @@ describe('chat controller', () => {
     expect(context.onThreadSelected).toHaveBeenLastCalledWith('thread-2')
   })
 
-  it('times a live reply from when the runtime accepts the run, as its receipt does', async () => {
+  it('times a live reply from the run\'s acceptance until the runtime names the run\'s start', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     try {
       vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'))
@@ -2463,6 +2463,9 @@ describe('chat controller', () => {
       await sending
       expect(context.messages().at(-1).run).toMatchObject({ id: 'run-1', startedAt: '2026-01-01T00:00:00.700Z' })
       expect(context.active()).toMatchObject({ id: 'run-1', startedAt: '2026-01-01T00:00:00.700Z' })
+      // The runtime's first event names the run's own start, which its receipt times from.
+      context.event({ runId: 'run-1', phase: 'thinking', text: '', startedAt: '2026-01-01T00:00:00.650Z' })
+      expect(context.messages().at(-1).run.startedAt).toBe('2026-01-01T00:00:00.650Z')
     } finally { vi.useRealTimers() }
   })
 

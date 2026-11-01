@@ -962,8 +962,8 @@ export function createChatController({
       const model = preserveDraft ? null : readPendingModel()
       const mentions = preserveDraft ? [] : readMentions(prompt)
       const run = await submitWhenAvailable({ prompt, files, ...(thinkingLevel ? { thinkingLevel } : {}), ...(permissionMode ? { permissionMode } : {}), ...(model ? { model } : {}), ...(mentions.length ? { mentions } : {}) })
-      // The runtime times the reply from when it accepts the run, so the live
-      // time counts from then too, and its last value is the receipt's.
+      // The live time counts from the run's acceptance until the runtime's
+      // first event names the run's own start, which its receipt times from.
       const acceptedAt = new Date().toISOString()
       if (destroyed || submissionId !== submissionSequence) return
       onSubmitted()

@@ -321,7 +321,9 @@ export function formatByteSize(bytes) {
 
 export function applyChatEvent(run, event) {
   if (!run || event.runId !== run.id) return run
-  if (event.sentAt) run = { ...run, startedAt: event.sentAt }
+  // The runtime names when the run started, which its receipt times from too.
+  const startedAt = event.startedAt ?? event.sentAt
+  if (startedAt) run = { ...run, startedAt }
   const pendingPermission = event.pendingPermission ?? null
   if (event.phase) return { ...run, promptStorageNotice: event.promptStorageNotice ?? run.promptStorageNotice ?? null, resumeNotice: event.resumeNotice ?? run.resumeNotice ?? null, phase: event.phase, stage: runStage(run, event), turnStarted: event.turnStarted === true, failureReason: event.failureReason ?? null, failureDetail: failureDetail(event), text: event.text ?? '', receipt: event.receipt ?? null, recalls: event.recalls ?? [], toolActivity: event.toolActivity ?? [], attachments: event.attachments ?? run.attachments ?? [], appliedDiffs: event.appliedDiffs ?? [], pendingPermission }
   if (event.type === 'prompt-accepted') return { ...run, accepted: true, pendingPermission }
