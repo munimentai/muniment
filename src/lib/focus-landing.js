@@ -55,16 +55,23 @@ export function takesText(element) {
 
 // The terminal draws its prompt where AppKit draws the input-source mark,
 // beside the caret of xterm's hidden text field, so the mark covers the
-// prompt. Each poke waits `delay` ms after the last focus or keystroke, then
-// asks the shell to hide the mark. macOS shows it again on its own when the
-// input source changes.
-export const INPUT_MARK_SETTLE_MS = 1000
-export function inputMarkSettler(invoke, delay = INPUT_MARK_SETTLE_MS) {
+// prompt. AppKit shows the mark up to two seconds after the caret moves, and
+// the shell hides only a mark it sees. So each poke asks the shell to hide
+// the mark at each of `checks` ms after the last focus, keystroke or output.
+// macOS shows it again on its own when the input source changes.
+export const INPUT_MARK_CHECKS_MS = [1000, 2000, 3000]
+export function inputMarkSettler(invoke, checks = INPUT_MARK_CHECKS_MS) {
   let timer
+  const check = (index) => {
+    timer = setTimeout(() => {
+      Promise.resolve(invoke?.('input_mark_dismiss')).catch(() => {})
+      if (index + 1 < checks.length) check(index + 1)
+    }, checks[index] - (checks[index - 1] ?? 0))
+  }
   return {
     poke() {
       clearTimeout(timer)
-      timer = setTimeout(() => { Promise.resolve(invoke?.('input_mark_dismiss')).catch(() => {}) }, delay)
+      if (checks.length) check(0)
     },
     stop() { clearTimeout(timer) },
   }

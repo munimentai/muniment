@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { INPUT_MARK_SETTLE_MS, inputMarkSettler, landFocus, shown, takesText } from './focus-landing.js'
+import { INPUT_MARK_CHECKS_MS, inputMarkSettler, landFocus, shown, takesText } from './focus-landing.js'
 
 const SKIP = '#sidebar, .titlebar, [data-panel="workspace"]'
 afterEach(() => { document.body.innerHTML = '' })
@@ -106,12 +106,12 @@ it('tells a field that takes typed text from a heading, a button and the body', 
   expect([name, search, message, draft].map(takesText)).toEqual([true, true, true, true])
 })
 
-it('hides the input-source mark once, a second after the last focus or keystroke', async () => {
+it('hides the input-source mark at one, two and three seconds after the last focus or keystroke', async () => {
   vi.useFakeTimers()
   try {
     const invoke = vi.fn(async () => {})
     const settler = inputMarkSettler(invoke)
-    expect(INPUT_MARK_SETTLE_MS).toBe(1000)
+    expect(INPUT_MARK_CHECKS_MS).toEqual([1000, 2000, 3000])
     settler.poke()
     vi.advanceTimersByTime(999)
     expect(invoke).not.toHaveBeenCalled()
@@ -124,16 +124,39 @@ it('hides the input-source mark once, a second after the last focus or keystroke
     vi.advanceTimersByTime(1)
     expect(invoke).toHaveBeenCalledTimes(1)
     expect(invoke).toHaveBeenCalledWith('input_mark_dismiss')
-    vi.advanceTimersByTime(5000)
+    // AppKit can show the mark after the first check, so two more follow.
+    vi.advanceTimersByTime(999)
     expect(invoke).toHaveBeenCalledTimes(1)
-    // A stopped settler asks nothing, and a failed call stays quiet.
+    vi.advanceTimersByTime(1)
+    expect(invoke).toHaveBeenCalledTimes(2)
+    vi.advanceTimersByTime(1000)
+    expect(invoke).toHaveBeenCalledTimes(3)
+    vi.advanceTimersByTime(10000)
+    expect(invoke).toHaveBeenCalledTimes(3)
+    // A poke between checks starts the whole window again.
+    settler.poke()
+    vi.advanceTimersByTime(1500)
+    expect(invoke).toHaveBeenCalledTimes(4)
+    settler.poke()
+    vi.advanceTimersByTime(2999)
+    expect(invoke).toHaveBeenCalledTimes(6)
+    vi.advanceTimersByTime(1)
+    expect(invoke).toHaveBeenCalledTimes(7)
+    vi.advanceTimersByTime(10000)
+    expect(invoke).toHaveBeenCalledTimes(7)
+    // A stopped settler asks nothing, also between checks, and a failed call stays quiet.
     settler.poke()
     settler.stop()
     vi.advanceTimersByTime(5000)
-    expect(invoke).toHaveBeenCalledTimes(1)
+    expect(invoke).toHaveBeenCalledTimes(7)
+    settler.poke()
+    vi.advanceTimersByTime(1000)
+    settler.stop()
+    vi.advanceTimersByTime(5000)
+    expect(invoke).toHaveBeenCalledTimes(8)
     const failing = inputMarkSettler(vi.fn(() => Promise.reject(new Error('no shell'))))
     failing.poke()
-    vi.advanceTimersByTime(1000)
+    vi.advanceTimersByTime(3000)
     await Promise.resolve()
   } finally { vi.useRealTimers() }
 })
