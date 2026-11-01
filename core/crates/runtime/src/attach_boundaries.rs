@@ -1869,6 +1869,12 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             .map_err(ProtocolError::invalid_request_with_reason);
         }
         if operation == muniment_core::attach::Operation::UsageSummary {
+            let member_name =
+                |id: &str| self.swarm.as_ref().and_then(|swarm| swarm.member_name(id));
+            let fleet = muniment_core::usage_report::Fleet {
+                machine_id: self.swarm.as_ref().and_then(|swarm| swarm.runtime_id()),
+                member_name: &member_name,
+            };
             return muniment_core::usage_report::operation(
                 &self.profile_directory,
                 |since| {
@@ -1878,6 +1884,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
                         .map_err(|_| "Usage could not be read from the run history.".to_string())?;
                     muniment_core::usage_report::receipts(&mut storage.journal, since)
                 },
+                &fleet,
                 body,
                 muniment_core::chrono::Utc::now().timestamp_millis(),
             )

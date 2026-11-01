@@ -443,6 +443,10 @@ pub struct Summary {
     /// answer whose totals count every copy it holds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replicas: Option<Vec<HeldRun>>,
+    /// The fleet member id this machine's runs carry in the copies the other
+    /// members hold of them, once the machine is in a fleet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine_id: Option<String>,
 }
 
 /// One run a machine holds as a copy, with what it used, for [`merge`].
@@ -451,6 +455,9 @@ pub struct HeldRun {
     pub run_id: String,
     /// The swarm member that ran it.
     pub origin: String,
+    /// The machine name that member last announced to the fleet, or empty.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub origin_name: String,
     /// The start of the series bucket it falls in.
     pub bucket_ms: i64,
     pub provider: String,
@@ -787,6 +794,7 @@ pub fn summarize(
             Some(HeldRun {
                 run_id: run.run_id.clone(),
                 origin: run.origin.clone()?,
+                origin_name: String::new(),
                 bucket_ms: *starts.get(bucket_of(run)?)?,
                 provider: run.provider.clone(),
                 model: run.model.clone(),
@@ -875,6 +883,7 @@ pub fn summarize(
         unmetered,
         windows,
         replicas: Some(replicas),
+        machine_id: None,
     }
 }
 
@@ -1247,6 +1256,7 @@ pub fn receipts(journal: &mut RunJournal, since: &str) -> Result<Vec<CompletedRe
 pub fn operation(
     profile: &Path,
     receipts: impl FnOnce(&str) -> Result<Vec<CompletedReceipt>, String>,
+    fleet: &Fleet<'_>,
     body: Value,
     now_ms: i64,
 ) -> Result<Value, String> {
@@ -1260,7 +1270,7 @@ pub fn operation(
         .to_rfc3339_opts(SecondsFormat::Secs, true);
     let runs: Vec<RunUsage> = receipts(&since)?.iter().filter_map(run_usage).collect();
     let (windows, unmetered) = account_windows(&crate::state_root::agent_directory(profile));
-    let summary = summarize(
+    let mut summary = summarize(
         &runs,
         &Owners::read(profile),
         windows,
@@ -1268,7 +1278,28 @@ pub fn operation(
         &request,
         now_ms,
     );
+    summary.machine_id = fleet.machine_id.clone();
+    for run in summary.replicas.iter_mut().flatten() {
+        run.origin_name = (fleet.member_name)(&run.origin).unwrap_or_default();
+    }
     serde_json::to_value(summary).map_err(|_| "Usage could not be read.".to_string())
+}
+
+/// What a runtime knows of its fleet for [`operation`]: its own member id,
+/// and the name each member last announced.
+pub struct Fleet<'a> {
+    pub machine_id: Option<String>,
+    pub member_name: &'a dyn Fn(&str) -> Option<String>,
+}
+
+impl Fleet<'_> {
+    /// A runtime in no fleet.
+    pub fn none() -> Fleet<'static> {
+        Fleet {
+            machine_id: None,
+            member_name: &|_| None,
+        }
+    }
 }
 
 /// One machine's answer for [`merge`].
@@ -1409,13 +1440,58 @@ fn own_runs(mut summary: Summary, machine: &str, held: &BTreeMap<String, HeldRun
     summary
 }
 
+/// A fleet member the window does not ask, by the name the window shows.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+pub struct Member {
+    pub id: String,
+    pub name: String,
+}
+
+/// What the joined view counts.
+#[derive(Clone, Debug, Default)]
+pub struct Scope {
+    /// The one machine the machine filter names, or None for every machine.
+    pub machine: Option<String>,
+    /// The names of the fleet members the window does not ask.
+    pub members: Vec<Member>,
+}
+
+/// The name of a member the window does not ask and no copy names.
+pub const UNLISTED_MACHINE: &str = "Another machine";
+
+/// The row name of a member whose runs count from the copies others hold.
+fn absent_name(origin: &str, scope: &Scope, held: &BTreeMap<String, HeldRun>) -> String {
+    let name = scope
+        .members
+        .iter()
+        .find(|member| member.id == origin)
+        .map(|member| member.name.clone())
+        .filter(|name| !name.trim().is_empty())
+        .or_else(|| {
+            held.values()
+                .find(|run| run.origin == origin && !run.origin_name.trim().is_empty())
+                .map(|run| run.origin_name.clone())
+        })
+        .unwrap_or_else(|| UNLISTED_MACHINE.to_owned());
+    format!("{name} (offline)")
+}
+
+/// Joins the answers of every machine, as [`merge_scoped`] does with no
+/// machine filter.
+pub fn merge(answers: Vec<MachineAnswer>, now_ms: i64) -> FleetSummary {
+    merge_scoped(answers, &Scope::default(), now_ms)
+}
+
 /// Joins the answers of several machines: sums, the series by bucket, the
 /// breakdowns by key, a machine row each, and each account's newest reading
 /// pooled once however many machines hold it. Each run counts once, on the
 /// machine that ran it: an answer leaves out the copies it holds, and an
 /// answer that counts its copies takes its runs from the copies the other
-/// machines hold of them, each run id once.
-pub fn merge(answers: Vec<MachineAnswer>, now_ms: i64) -> FleetSummary {
+/// machines hold of them, each run id once. A member the window did not ask
+/// counts from the copies the others hold, under a row of its own, so no
+/// held run drops out. With a machine filter that names such a member, the
+/// view counts only those copies.
+pub fn merge_scoped(answers: Vec<MachineAnswer>, scope: &Scope, now_ms: i64) -> FleetSummary {
     let mut held: BTreeMap<String, HeldRun> = BTreeMap::new();
     let mut copies_listed = false;
     for replicas in answers
@@ -1428,6 +1504,46 @@ pub fn merge(answers: Vec<MachineAnswer>, now_ms: i64) -> FleetSummary {
                 .or_insert_with(|| run.clone());
         }
     }
+    // Each asked machine counts its own runs, under the id the window names
+    // it by and under the member id its copies carry.
+    let mut asked: BTreeSet<String> = answers.iter().map(|answer| answer.id.clone()).collect();
+    asked.extend(
+        answers
+            .iter()
+            .filter_map(|answer| answer.summary.as_ref().ok()?.machine_id.clone()),
+    );
+    let copies_only = scope
+        .machine
+        .as_ref()
+        .is_some_and(|machine| !answers.iter().any(|answer| &answer.id == machine));
+    let absent: BTreeSet<String> = held
+        .values()
+        .map(|run| run.origin.clone())
+        .filter(|origin| !asked.contains(origin))
+        .filter(|origin| match &scope.machine {
+            Some(machine) => copies_only && machine == origin,
+            None => true,
+        })
+        .collect();
+    let template = answers
+        .iter()
+        .find_map(|answer| answer.summary.as_ref().ok())
+        .map(|summary| Summary {
+            range: summary.range,
+            start_ms: summary.start_ms,
+            end_ms: summary.end_ms,
+            bucket: summary.bucket.clone(),
+            ..Summary::default()
+        })
+        .unwrap_or_default();
+    let absent: Vec<(String, String, Summary)> = absent
+        .into_iter()
+        .map(|origin| {
+            let name = absent_name(&origin, scope, &held);
+            let summary = own_runs(template.clone(), &origin, &held);
+            (origin, name, summary)
+        })
+        .collect();
     let mut joined = Summary::default();
     let mut total = Amount::default();
     let mut series: BTreeMap<i64, BTreeMap<String, Amount>> = BTreeMap::new();
@@ -1439,7 +1555,18 @@ pub fn merge(answers: Vec<MachineAnswer>, now_ms: i64) -> FleetSummary {
     let mut unmetered: BTreeMap<(String, String, String, String), Unmetered> = BTreeMap::new();
     let mut windows: Vec<AccountWindow> = Vec::new();
     let mut machines = Vec::new();
-    for answer in answers {
+    let answers = answers
+        .into_iter()
+        .map(|answer| (answer, false))
+        .chain(absent.into_iter().map(|(id, name, summary)| {
+            let answer = MachineAnswer {
+                id,
+                name,
+                summary: Ok(summary),
+            };
+            (answer, true)
+        }));
+    for (answer, from_copies) in answers {
         let summary = match answer.summary {
             Ok(summary) => summary,
             Err(error) => {
@@ -1452,24 +1579,29 @@ pub fn merge(answers: Vec<MachineAnswer>, now_ms: i64) -> FleetSummary {
                 continue;
             }
         };
-        machines.push(MachineState {
-            id: answer.id.clone(),
-            name: answer.name.clone(),
-            state: "ok".into(),
-            error: None,
-        });
-        let summary = if summary.replicas.is_none() && copies_listed {
-            own_runs(summary, &answer.id, &held)
-        } else {
-            summary
-        };
-        let summary = by_family(summary);
+        if !from_copies {
+            machines.push(MachineState {
+                id: answer.id.clone(),
+                name: answer.name.clone(),
+                state: "ok".into(),
+                error: None,
+            });
+        }
         if joined.range.is_none() {
             joined.range = summary.range;
             joined.start_ms = summary.start_ms;
             joined.end_ms = summary.end_ms;
             joined.bucket = summary.bucket.clone();
         }
+        if copies_only && !from_copies {
+            continue;
+        }
+        let summary = if !from_copies && summary.replicas.is_none() && copies_listed {
+            own_runs(summary, &answer.id, &held)
+        } else {
+            summary
+        };
+        let summary = by_family(summary);
         let mut machine = Amount::default();
         // A runtime before the time zone field starts its days at a fixed
         // offset, an hour off the zone's own midnight across a daylight
@@ -2499,6 +2631,7 @@ mod tests {
         let answer = operation(
             &profile,
             |_| Ok(Vec::new()),
+            &Fleet::none(),
             json!({"range": "24h", "utc_offset_minutes": 0}),
             NOW,
         )
@@ -2750,5 +2883,253 @@ mod tests {
             .unwrap();
         assert_eq!(bucket.providers.keys().collect::<Vec<_>>(), ["anthropic"]);
         assert_eq!(bucket.providers["anthropic"].runs, 2);
+    }
+
+    const DOCKER: &str = "docker-member";
+
+    /// This computer's answer: its own runs, the copies it holds of the
+    /// offline Docker container's runs, and its fleet member id.
+    fn this_computer(own: &[RunUsage], docker: &[RunUsage]) -> Summary {
+        let mut runs = own.to_vec();
+        runs.extend(docker.iter().map(|run| RunUsage {
+            origin: Some(DOCKER.into()),
+            ..run.clone()
+        }));
+        Summary {
+            machine_id: Some("local-member".into()),
+            windows: vec![window("mine", 40.0, HOUR)],
+            ..summarize(
+                &runs,
+                &Owners::default(),
+                Vec::new(),
+                Vec::new(),
+                &request(Range::Month),
+                NOW,
+            )
+        }
+    }
+
+    fn docker_scope(machine: Option<&str>) -> Scope {
+        Scope {
+            machine: machine.map(str::to_owned),
+            members: vec![Member {
+                id: DOCKER.into(),
+                name: "Docker container".into(),
+            }],
+        }
+    }
+
+    fn total_series_runs(joined: &Summary) -> u64 {
+        joined
+            .series
+            .iter()
+            .flat_map(|bucket| bucket.providers.values())
+            .map(|amount| amount.runs)
+            .sum()
+    }
+
+    #[test]
+    fn an_offline_members_runs_count_from_the_copies_this_computer_holds() {
+        let own = [
+            run("a", NOW - HOUR, "openai-codex/gpt", 50, None),
+            run("b", NOW - 3 * 24 * HOUR, "openai-codex/gpt", 40, None),
+        ];
+        let docker = [
+            run("d1", NOW - 12 * 24 * HOUR, "anthropic/claude", 30, None),
+            run("d2", NOW - 10 * 24 * HOUR, "anthropic/claude", 20, None),
+        ];
+        let hubs = run("h", NOW - 2 * HOUR, "openai-codex/gpt", 10, None);
+        // The hub answers with its own run, a copy of one of this computer's
+        // runs under this computer's member id, and a copy of one of the
+        // Docker container's runs.
+        let hub = summarize(
+            &[
+                hubs.clone(),
+                RunUsage {
+                    origin: Some("local-member".into()),
+                    ..own[0].clone()
+                },
+                RunUsage {
+                    origin: Some(DOCKER.into()),
+                    ..docker[0].clone()
+                },
+            ],
+            &Owners::default(),
+            Vec::new(),
+            Vec::new(),
+            &request(Range::Month),
+            NOW,
+        );
+        let fleet = merge_scoped(
+            vec![
+                answer("local", "This computer", this_computer(&own, &docker)),
+                answer("hub-runtime", "Factory hub", hub),
+            ],
+            &docker_scope(None),
+            NOW,
+        );
+        let joined = fleet.summary;
+        assert_eq!(joined.totals.runs, 5);
+        assert_eq!(total_series_runs(&joined), 5);
+        assert_eq!(machine_row(&joined, "local").amount.runs, 2);
+        assert_eq!(machine_row(&joined, "hub-runtime").amount.runs, 1);
+        let row = machine_row(&joined, DOCKER);
+        assert_eq!(row.label, "Docker container (offline)");
+        assert_eq!(row.amount.runs, 2);
+        assert_eq!(
+            row.amount.processed,
+            docker.iter().map(|run| run.tokens.processed()).sum::<u64>()
+        );
+        assert_eq!(joined.breakdown.machine.len(), 3);
+        assert_eq!(joined.providers, ["anthropic", "openai"]);
+        let claude = joined
+            .breakdown
+            .model
+            .iter()
+            .find(|row| row.key == "anthropic/claude")
+            .unwrap();
+        assert_eq!(claude.amount.runs, 2);
+        // The offline member is a row of the breakdown, not a machine that
+        // failed to answer.
+        assert!(!fleet.partial);
+        assert_eq!(fleet.machines.len(), 2);
+    }
+
+    #[test]
+    fn an_offline_member_with_copies_on_this_computer_alone_counts_them() {
+        let own = [run("a", NOW - HOUR, "openai-codex/gpt", 50, None)];
+        let docker = [
+            run("d1", NOW - 12 * 24 * HOUR, "anthropic/claude", 30, None),
+            run("d2", NOW - 10 * 24 * HOUR, "anthropic/claude", 20, None),
+            run("d3", NOW - 10 * 24 * HOUR, "anthropic/claude", 25, None),
+        ];
+        let joined = merge(
+            vec![answer(
+                "local",
+                "This computer",
+                this_computer(&own, &docker),
+            )],
+            NOW,
+        )
+        .summary;
+        assert_eq!(joined.totals.runs, 4);
+        assert_eq!(machine_row(&joined, "local").amount.runs, 1);
+        let row = machine_row(&joined, DOCKER);
+        assert_eq!(row.amount.runs, 3);
+        // No window names it and no copy carries its name.
+        assert_eq!(row.label, format!("{UNLISTED_MACHINE} (offline)"));
+    }
+
+    #[test]
+    fn a_copy_names_an_unlisted_member_by_the_name_its_fleet_announced() {
+        let docker = [run("d1", NOW - HOUR, "anthropic/claude", 30, None)];
+        let mut local = this_computer(&[], &docker);
+        for run in local.replicas.iter_mut().flatten() {
+            run.origin_name = "Old laptop".into();
+        }
+        let joined = merge(vec![answer("local", "This computer", local)], NOW).summary;
+        assert_eq!(machine_row(&joined, DOCKER).label, "Old laptop (offline)");
+    }
+
+    #[test]
+    fn the_machine_filter_on_an_offline_member_counts_only_its_copies() {
+        let own = [run("a", NOW - HOUR, "openai-codex/gpt", 50, None)];
+        let docker = [
+            run("d1", NOW - 12 * 24 * HOUR, "anthropic/claude", 30, None),
+            run("d2", NOW - 10 * 24 * HOUR, "anthropic/claude", 20, None),
+        ];
+        let fleet = merge_scoped(
+            vec![answer(
+                "local",
+                "This computer",
+                this_computer(&own, &docker),
+            )],
+            &docker_scope(Some(DOCKER)),
+            NOW,
+        );
+        let joined = fleet.summary;
+        assert_eq!(joined.totals.runs, 2);
+        assert_eq!(total_series_runs(&joined), 2);
+        assert_eq!(joined.range, Some(Range::Month));
+        assert_eq!(joined.breakdown.machine.len(), 1);
+        assert_eq!(
+            machine_row(&joined, DOCKER).label,
+            "Docker container (offline)"
+        );
+        assert_eq!(joined.providers, ["anthropic"]);
+        assert!(joined.accounts.is_empty());
+        assert_eq!(fleet.machines.len(), 1);
+    }
+
+    #[test]
+    fn the_machine_filter_on_this_computer_leaves_out_the_copies_it_holds() {
+        let own = [run("a", NOW - HOUR, "openai-codex/gpt", 50, None)];
+        let docker = [run("d1", NOW - HOUR, "anthropic/claude", 30, None)];
+        let joined = merge_scoped(
+            vec![answer(
+                "local",
+                "This computer",
+                this_computer(&own, &docker),
+            )],
+            &docker_scope(Some("local")),
+            NOW,
+        )
+        .summary;
+        assert_eq!(joined.totals.runs, 1);
+        assert_eq!(joined.breakdown.machine.len(), 1);
+        assert_eq!(joined.providers, ["openai"]);
+    }
+
+    #[test]
+    fn a_member_that_failed_to_answer_stays_named_and_left_out() {
+        let docker = [run("d1", NOW - HOUR, "anthropic/claude", 30, None)];
+        let fleet = merge_scoped(
+            vec![
+                answer("local", "This computer", this_computer(&[], &docker)),
+                MachineAnswer {
+                    id: DOCKER.into(),
+                    name: "Docker container".into(),
+                    summary: Err("That machine is offline.".into()),
+                },
+            ],
+            &Scope::default(),
+            NOW,
+        );
+        assert!(fleet.partial);
+        assert_eq!(fleet.summary.totals.runs, 0);
+    }
+
+    #[test]
+    fn the_answer_names_its_member_id_and_the_member_each_copy_came_from() {
+        let profile = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let receipt = json!({"model": "anthropic/claude", "tokens": {"input": 3}});
+        let names = |id: &str| (id == DOCKER).then(|| "Docker container".to_owned());
+        let answer = operation(
+            &profile,
+            |_| {
+                Ok(vec![
+                    completed("own", NOW - HOUR, receipt.clone()),
+                    CompletedReceipt {
+                        origin: Some(DOCKER.into()),
+                        ..completed("copy", NOW - 2 * HOUR, receipt.clone())
+                    },
+                ])
+            },
+            &Fleet {
+                machine_id: Some("local-member".into()),
+                member_name: &names,
+            },
+            json!({"range": "24h", "utc_offset_minutes": 0}),
+            NOW,
+        )
+        .unwrap();
+        let summary: Summary = serde_json::from_value(answer).unwrap();
+        assert_eq!(summary.machine_id.as_deref(), Some("local-member"));
+        assert_eq!(summary.totals.runs, 1);
+        let replicas = summary.replicas.unwrap();
+        assert_eq!(replicas.len(), 1);
+        assert_eq!(replicas[0].origin, DOCKER);
+        assert_eq!(replicas[0].origin_name, "Docker container");
+        let _ = std::fs::remove_dir_all(profile);
     }
 }

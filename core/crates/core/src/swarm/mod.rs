@@ -683,6 +683,11 @@ impl Swarm {
         sync::replica_primary(&self.inner, thread_id)
     }
 
+    /// The machine name a fleet member last announced, once it was heard.
+    pub fn member_name(&self, runtime_id: &str) -> Option<String> {
+        ops::member_name(&self.inner, runtime_id)
+    }
+
     /// The runtime that runs `thread_id`: its owner when the swarm shares it,
     /// else this runtime.
     pub fn thread_owner(&self, thread_id: &str) -> Option<String> {

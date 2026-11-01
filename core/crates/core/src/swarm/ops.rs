@@ -309,7 +309,7 @@ fn speaks_ops(inner: &Inner, runtime_id: &str) -> bool {
     })
 }
 
-fn member_name(inner: &Inner, runtime_id: &str) -> Option<String> {
+pub(super) fn member_name(inner: &Inner, runtime_id: &str) -> Option<String> {
     member(inner, runtime_id)
         .map(|record| record.runtime_name)
         .filter(|name| !name.is_empty())
