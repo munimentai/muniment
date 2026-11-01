@@ -36,7 +36,8 @@ async function terminal(width, path, output = '') {
   component = mount(TerminalWorkspace, { target, props: { tauri: { invoke } } })
   for (let i = 0; i < 20 && !calls.some(([command]) => command === 'terminal_read'); i += 1) { await new Promise((resolve) => setTimeout(resolve, 20)); flushSync() }
   await settle()
-  return { target, calls, line: target.querySelector('header .path') }
+  const send = (text) => { pending = new TextEncoder().encode(text) }
+  return { target, calls, send, line: target.querySelector('header .path') }
 }
 
 it('drops the start of a long terminal path behind a leading ellipsis and names the full path on hover', async () => {
@@ -139,5 +140,35 @@ it('hides the input-source mark a second after the terminal takes focus and afte
     expect(dismissed()).toBe(1)
     vi.advanceTimersByTime(1)
     expect(dismissed()).toBe(2)
+  } finally { vi.useRealTimers() }
+})
+
+it('hides the input-source mark a second after shell output settles under a new prompt', async () => {
+  const { target, calls, send } = await terminal(600, '/tmp/work', PROMPT)
+  await expect.poll(() => target.querySelector('.xterm-rows')?.textContent ?? '').toContain('$')
+  const dismissed = () => calls.filter(([command]) => command === 'input_mark_dismiss').length
+  const field = target.querySelector('.xterm-helper-textarea')
+  field.focus()
+  await new Promise((resolve) => setTimeout(resolve, 1100))
+  calls.length = 0
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  try {
+    // The command's output and the next prompt arrive in two reads, and AppKit
+    // shows the mark again as the caret moves with them.
+    send('final-pass\r\n')
+    await vi.advanceTimersByTimeAsync(100)
+    await expect.poll(() => target.querySelector('.xterm-rows')?.textContent ?? '').toContain('final-pass')
+    send('$ ')
+    await vi.advanceTimersByTimeAsync(600)
+    expect(dismissed()).toBe(0)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(dismissed()).toBe(1)
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(dismissed()).toBe(1)
+    // Output to a terminal without focus asks nothing.
+    field.blur()
+    send('later\r\n$ ')
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(dismissed()).toBe(1)
   } finally { vi.useRealTimers() }
 })
