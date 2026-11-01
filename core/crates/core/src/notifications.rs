@@ -177,9 +177,14 @@ pub struct Filter {
     /// An agent id. None is every agent.
     #[serde(default)]
     pub agent: Option<String>,
-    /// The client's offset from UTC, so days start at its midnight.
+    /// The client's offset from UTC, so days start at its midnight when
+    /// `time_zone` names no zone.
     #[serde(default)]
     pub utc_offset_minutes: i32,
+    /// The client's IANA time zone. Days start at its midnight on each
+    /// date, so a daylight saving change moves no run to another day.
+    #[serde(default)]
+    pub time_zone: Option<String>,
     /// When the client last read each thread, by thread id. A run whose
     /// thread was read after the run ended is read.
     #[serde(default)]
@@ -383,10 +388,15 @@ pub fn merge(answers: Vec<MachineAnswer>, filter: &Filter, now_ms: i64) -> Page 
     }
     let read_at = page.read_at.as_deref().and_then(millis);
     let offset = Duration::minutes(i64::from(filter.utc_offset_minutes));
+    let zone = filter
+        .time_zone
+        .as_deref()
+        .and_then(|zone| crate::agent_routines::parse_time_zone(zone).ok());
     let local_day = |ms: i64| {
-        Utc.timestamp_millis_opt(ms)
-            .single()
-            .map(|at| (at + offset).date_naive())
+        Utc.timestamp_millis_opt(ms).single().map(|at| match zone {
+            Some(zone) => at.with_timezone(&zone).date_naive(),
+            None => (at + offset).date_naive(),
+        })
     };
     let today = local_day(now_ms);
     runs.sort_by(|a, b| b.1.run.updated_at.cmp(&a.1.run.updated_at));
@@ -736,5 +746,140 @@ mod tests {
         .unwrap();
         assert_eq!(filter.view, View::NeedsYou);
         assert_eq!(filter.read.len(), 1);
+    }
+
+    fn ms(at: &str) -> i64 {
+        DateTime::parse_from_rfc3339(at).unwrap().timestamp_millis()
+    }
+
+    /// The day each run lands under, in the zone `zone` or at the offset
+    /// `offset` alone, as of `now`.
+    fn days_of(
+        runs: &[(&str, &str)],
+        zone: Option<&str>,
+        offset: i32,
+        now: &str,
+    ) -> Vec<(String, String)> {
+        let listing = Listing {
+            runs: runs
+                .iter()
+                .enumerate()
+                .map(|(index, (id, at))| {
+                    run(id, &format!("a{index}"), RunStatus::Completed, ms(at))
+                })
+                .collect(),
+            ..Listing::default()
+        };
+        let page = merge(
+            vec![MachineAnswer {
+                machine: machine("local"),
+                listing: Ok(listing),
+            }],
+            &Filter {
+                time_zone: zone.map(str::to_owned),
+                utc_offset_minutes: offset,
+                ..Filter::default()
+            },
+            ms(now),
+        );
+        page.days
+            .iter()
+            .flat_map(|day| {
+                day.entries
+                    .iter()
+                    .map(|entry| (entry.run.id.clone(), day.day.clone()))
+            })
+            .collect()
+    }
+
+    fn pairs(expected: &[(&str, &str)]) -> Vec<(String, String)> {
+        expected
+            .iter()
+            .map(|(id, day)| ((*id).to_owned(), (*day).to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn days_start_at_the_zones_own_midnight_across_a_daylight_saving_change() {
+        // New York leaves daylight time at 06:00Z on Nov 1: the day started
+        // at 04:00Z, and the offset is -300 by 10:00 EST.
+        let runs = [
+            ("late", "2026-11-01T04:44:00Z"),
+            ("early", "2026-11-01T04:10:00Z"),
+            ("before", "2026-11-01T03:50:00Z"),
+        ];
+        let now = "2026-11-01T15:00:00Z";
+        assert_eq!(
+            days_of(&runs, Some("America/New_York"), -300, now),
+            pairs(&[
+                ("late", "today"),
+                ("early", "today"),
+                ("before", "yesterday")
+            ])
+        );
+        // The offset alone puts today's first runs under yesterday.
+        assert_eq!(
+            days_of(&runs, None, -300, now),
+            pairs(&[
+                ("late", "yesterday"),
+                ("early", "yesterday"),
+                ("before", "yesterday")
+            ])
+        );
+        // New York enters daylight time at 07:00Z on Mar 8: 23:30 EST on
+        // Mar 7 is yesterday at 23:30 EDT on Mar 8.
+        assert_eq!(
+            days_of(
+                &[
+                    ("today", "2026-03-08T05:10:00Z"),
+                    ("yesterday", "2026-03-08T04:30:00Z")
+                ],
+                Some("America/New_York"),
+                -240,
+                "2026-03-09T03:30:00Z",
+            ),
+            pairs(&[("today", "today"), ("yesterday", "yesterday")])
+        );
+        // Sydney leaves daylight time at 16:00Z on Apr 4: Apr 5 started at
+        // 13:00Z, under the +11 offset.
+        assert_eq!(
+            days_of(
+                &[
+                    ("today", "2026-04-04T13:30:00Z"),
+                    ("yesterday", "2026-04-04T12:50:00Z")
+                ],
+                Some("Australia/Sydney"),
+                600,
+                "2026-04-05T02:00:00Z",
+            ),
+            pairs(&[("today", "today"), ("yesterday", "yesterday")])
+        );
+        // Sydney enters daylight time at 16:00Z on Oct 3: Oct 4 started at
+        // 14:00Z, under the +10 offset.
+        assert_eq!(
+            days_of(
+                &[
+                    ("today", "2026-10-03T14:10:00Z"),
+                    ("yesterday", "2026-10-03T13:30:00Z")
+                ],
+                Some("Australia/Sydney"),
+                660,
+                "2026-10-04T12:30:00Z",
+            ),
+            pairs(&[("today", "today"), ("yesterday", "yesterday")])
+        );
+    }
+
+    #[test]
+    fn an_unknown_zone_falls_back_to_the_offset() {
+        assert_eq!(
+            days_of(
+                &[("early", "2026-11-01T04:10:00Z")],
+                Some("Mars/Base"),
+                -240,
+                "2026-11-01T15:00:00Z"
+            ),
+            pairs(&[("early", "today")])
+        );
     }
 }
