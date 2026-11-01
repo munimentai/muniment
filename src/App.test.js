@@ -4115,6 +4115,79 @@ describe('sidebar collapse', () => {
     await waitFor(() => expect(document.querySelector('.thread-row.active-thread .thread-row-title')).toHaveTextContent('Scout chat'))
   })
 
+  // A failed scheduled run moves only its run's time, so the thread's summary
+  // time stays under the old read mark while the run reads newer.
+  const failedRunReadSetup = () => {
+    const runAt = '2026-01-01T06:00:00Z'
+    localStorage.setItem('muniment.thread-read-baseline', '2025-12-01T00:00:00Z')
+    localStorage.setItem('muniment.thread-read', JSON.stringify({ 'agent-thread': '2026-01-01T00:00:00Z' }))
+    threadSummaryResult = [{ threadId: 'ordinary-thread', title: 'Single Word Acknowledgment', updatedAt: '2026-01-02T00:00:00Z' }, { threadId: 'agent-thread', title: 'Tauri Morning', updatedAt: '2026-01-01T00:00:00Z' }]
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args)
+      ? { ...agentListAnswer([{ id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null, routines: [] }], { 'agent-1': 'agent-thread' }), latest_runs: { 'agent-1': { id: 'run-1', agent_id: 'agent-1', thread_id: 'agent-thread', status: 'failed', error: 'The model refused.', created_at: '2026-01-01T05:59:00Z', updated_at: runAt } } }
+      : command === 'chat_current_thread' ? Promise.resolve('ordinary-thread')
+      : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
+    const readAt = () => Date.parse(JSON.parse(localStorage.getItem('muniment.thread-read') || '{}')['agent-thread'] ?? '')
+    // Core settles a row against the read times the window hands it.
+    let input = null
+    const core = window.__TAURI__.core.invoke
+    window.__TAURI__.core.invoke = (command, ...args) => { if (command === 'sidebar_arrange') input = args[0]?.input; return core(command, ...args) }
+    onTestFinished(() => { window.__TAURI__.core.invoke = core })
+    return { runAt: Date.parse(runAt), readAt, arranged: () => input }
+  }
+
+  it('reads an agent thread opened from "Open chat", so leaving it leaves no unread row', async () => {
+    const { runAt, readAt, arranged } = failedRunReadSetup()
+    render(App)
+    await waitFor(() => expect(document.querySelector('.thread-row.active-thread .thread-row-title')).toHaveTextContent('Single Word Acknowledgment'))
+    await openSidebarPage('Agents')
+    const card = await within(await screen.findByRole('region', { name: 'Agents', exact: true })).findByRole('article', { name: 'Scout' })
+    await fireEvent.click(within(card).getByRole('button', { name: 'Open chat' }))
+    await waitFor(() => expect(document.querySelector('.thread-row.active-thread .thread-row-title')).toHaveTextContent('Tauri Morning'))
+    await waitFor(() => expect(readAt()).toBeGreaterThanOrEqual(runAt))
+    await fireEvent.click(within(screen.getByRole('list', { name: 'Projects list' })).getByText('Single Word Acknowledgment').closest('.thread-row'))
+    await waitFor(() => expect(arranged()?.current).toBe('ordinary-thread'))
+    expect(Date.parse(arranged().read['agent-thread'])).toBeGreaterThanOrEqual(runAt)
+  })
+
+  it('reads an agent thread opened beside its profile from "Add or edit in the profile"', async () => {
+    const { runAt, readAt, arranged } = failedRunReadSetup()
+    render(App)
+    await waitFor(() => expect(document.querySelector('.thread-row.active-thread .thread-row-title')).toHaveTextContent('Single Word Acknowledgment'))
+    await openSidebarPage('Agents')
+    const card = await within(await screen.findByRole('region', { name: 'Agents', exact: true })).findByRole('article', { name: 'Scout' })
+    await fireEvent.click(within(card).getByRole('tab', { name: 'Routines' }))
+    await fireEvent.click(within(card).getByRole('button', { name: 'Add or edit in the profile' }))
+    await screen.findByRole('complementary', { name: 'Agent profile' })
+    await waitFor(() => expect(readAt()).toBeGreaterThanOrEqual(runAt))
+    await fireEvent.click(within(screen.getByRole('list', { name: 'Projects list' })).getByText('Single Word Acknowledgment').closest('.thread-row'))
+    await waitFor(() => expect(arranged()?.current).toBe('ordinary-thread'))
+    expect(Date.parse(arranged().read['agent-thread'])).toBeGreaterThanOrEqual(runAt)
+  })
+
+  it('opens an agent\'s fresh home thread from "Open chat" when its runs posted into it, and reads it', async () => {
+    const { runAt, readAt } = failedRunReadSetup()
+    // The chat list names the thread once its first page lists it, so a new thread stays fresh until then.
+    threadSummaryResult = threadSummaryResult.filter((summary) => summary.threadId !== 'agent-thread')
+    let current = 'ordinary-thread'
+    const mocked = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, args) => command === 'chat_new_thread' ? (current = 'agent-thread')
+      : command === 'chat_current_thread' ? current : mocked(command, args))
+    render(App)
+    await waitFor(() => expect(document.querySelector('.thread-row.active-thread .thread-row-title')).toHaveTextContent('Single Word Acknowledgment'))
+    // A new thread whose id the agent then names as its home thread.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'New thread' })).toBeEnabled())
+    await fireEvent.click(screen.getByRole('button', { name: 'New thread' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_new_thread'))
+    const opens = () => invoke.mock.calls.filter(([command, args]) => command === 'chat_thread_open' && args?.threadId === 'agent-thread').length
+    const before = opens()
+    await openSidebarPage('Agents')
+    const card = await within(await screen.findByRole('region', { name: 'Agents', exact: true })).findByRole('article', { name: 'Scout' })
+    await fireEvent.click(within(card).getByRole('button', { name: 'Open chat' }))
+    await waitFor(() => expect(opens()).toBeGreaterThan(before))
+    await waitFor(() => expect(readAt()).toBeGreaterThanOrEqual(runAt))
+  })
+
   it('opens the profile of an agent with no thread alone, with no new thread', async () => {
     const original = invoke.getMockImplementation()
     invoke.mockImplementation(async (command, args) => isAgentList(command, args)

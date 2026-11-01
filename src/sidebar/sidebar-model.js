@@ -39,6 +39,20 @@ export function markRead(marks, threadId, at = new Date(), storage = localStorag
   return { ...marks, read: kept }
 }
 
+// The last time anything the sidebar or Notifications compares with a read
+// time changed on `threadId`, in milliseconds: the thread's row time in the
+// sidebar input, which holds its newest run, and every run the agent listing
+// or Needs you names on it. A failed run that posts no message moves only its
+// run's time, so a read time checked against the thread's summary alone left
+// that run unread. Zero when nothing names a time.
+export function threadChangedAt(threadId, { threads = [], latestRuns = {}, needsYou = [] } = {}) {
+  if (!threadId) return 0
+  const times = [threads.find((thread) => thread.id === threadId)?.updated_at]
+  for (const run of Object.values(latestRuns ?? {})) if (run?.thread_id === threadId) times.push(run.updated_at)
+  for (const item of needsYou) if (item?.run?.thread_id === threadId) times.push(item.run.updated_at, item.at)
+  return Math.max(0, ...times.map((at) => Date.parse(at ?? '')).filter(Number.isFinite))
+}
+
 const RUNNING = new Set(['queued', 'leased', 'running'])
 const FAILED = new Set(['failed', 'interrupted'])
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { agentColor } from '../lib/agent-avatar.js'
-import { attention, freshIndex, listedRows, markRead, readMarks, rowTime, runStates, shownRows, sidebarInput, statusTone } from './sidebar-model.js'
+import { attention, freshIndex, listedRows, markRead, readMarks, rowTime, runStates, shownRows, sidebarInput, statusTone, threadChangedAt } from './sidebar-model.js'
 
 function memoryStorage(values = {}) {
   return { getItem: (key) => values[key] ?? null, setItem: (key, value) => { values[key] = value }, values }
@@ -15,6 +15,17 @@ describe('sidebar model', () => {
     expect(readMarks(storage, new Date('2026-10-19T00:00:00Z'))).toEqual({ read: { 'thread-1': '2026-10-18T11:00:00.000Z' }, baseline: '2026-10-18T10:00:00.000Z' })
     expect(marked.read['thread-1']).toBe('2026-10-18T11:00:00.000Z')
     expect(readMarks({ getItem: () => '{', setItem: () => {} }).read).toEqual({})
+  })
+
+  it('dates a thread by its row time and every run named on it, so a failed run with no message is unread until read', () => {
+    const threads = [{ id: 'a', updated_at: '2026-10-18T10:00:00Z' }, { id: 'b', updated_at: '2026-10-18T09:00:00Z' }]
+    const latestRuns = { scout: { thread_id: 'a', updated_at: '2026-10-18T11:00:00Z' }, other: { thread_id: 'b', updated_at: '2026-10-18T12:00:00Z' } }
+    const needsYou = [{ kind: 'failed', at: '2026-10-18T11:30:00Z', run: { thread_id: 'a', updated_at: '2026-10-18T11:30:00Z' } }]
+    expect(threadChangedAt('a', { threads })).toBe(Date.parse('2026-10-18T10:00:00Z'))
+    expect(threadChangedAt('a', { threads, latestRuns })).toBe(Date.parse('2026-10-18T11:00:00Z'))
+    expect(threadChangedAt('a', { threads, latestRuns, needsYou })).toBe(Date.parse('2026-10-18T11:30:00Z'))
+    expect(threadChangedAt('c', { threads, latestRuns, needsYou })).toBe(0)
+    expect(threadChangedAt(null, { threads })).toBe(0)
   })
 
   it('reads working and failed threads from the newest run of each', () => {

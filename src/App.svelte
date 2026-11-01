@@ -142,7 +142,7 @@
   import ProjectPicker from './sidebar/ProjectPicker.svelte'
   import { SETTINGS_PAGE, isPaletteShortcut, paletteInput, paletteShortcut, settingsPages } from './sidebar/palette.js'
   import { layerLabel, sourceLine } from './sidebar/sources.js'
-  import { arrangeSidebar, emptySidebar, markRead, readMarks, rowTime, runStates, shownRows, sidebarInput } from './sidebar/sidebar-model.js'
+  import { arrangeSidebar, emptySidebar, markRead, readMarks, rowTime, runStates, shownRows, sidebarInput, threadChangedAt } from './sidebar/sidebar-model.js'
   import { threadTitle, creationTitle } from './lib/thread-title.js'
   import { createVoiceGesture } from './lib/voice-gesture.js'
   import { createVoiceShortcutManager } from './lib/voice-shortcut.js'
@@ -642,7 +642,8 @@
       const threadId = agentHomeThread(agent)
       profileOnlyAgent = null
       if (threadId) {
-        if (threadId !== currentThreadId && !await chatController.openThread(threadId, true)) return
+        // A fresh thread the agent's runs post into shows no transcript until it opens.
+        if ((threadId !== currentThreadId || freshThread) && !await chatController.openThread(threadId, true)) return
       } else if (!machine.local || agent.replica) {
         // Its first run starts the conversation on its machine.
         profileOnlyAgent = agent.id
@@ -670,11 +671,11 @@
   async function openAgentProfile(agent, { deleting = false } = {}) {
     // A delete confirms over the open thread, since the agent's thread goes with it.
     const threadId = deleting ? null : agentHomeThread(agent)
-    if (threadId && threadId !== currentThreadId && !switchLocked && !agentOpening) {
+    if (threadId && (threadId !== currentThreadId || freshThread) && !switchLocked && !agentOpening) {
       agentOpening = true
       try { if (!await chatController.openThread(threadId, true)) return } finally { agentOpening = false }
     }
-    const home = !!threadId && threadId === currentThreadId
+    const home = !!threadId && threadId === currentThreadId && !freshThread
     profileOnlyAgent = home ? null : agent.id
     if (home) { selectedAgent = agent.id; selectedProject = agent.projectId || null }
     projectsOpen = false; agentsOpen = false; fullPage = null; artifactsOpen = false
@@ -1118,13 +1119,14 @@
       sidebarArrangement = next
     }).catch(() => { if (request === sidebarRequest) sidebarAsked = '' })
   })
-  // The open thread is read while it shows, and again as its replies land.
+  // The open thread is read while it shows, and again as its replies and runs land.
   $effect(() => {
     const threadId = listedThreadId
-    const updatedAt = Date.parse(threadSummaries.find(summary => summary.threadId === threadId)?.updatedAt ?? '')
-    void agentListing
-    // A mark already newer than the thread's last change stays, so the sidebar input stays the same.
-    if (threadId) untrack(() => { if (!(Date.parse(readState.read[threadId] ?? '') >= updatedAt)) readState = markRead(readState, threadId) })
+    const changedAt = threadChangedAt(threadId, { threads: sidebarFeed.threads, latestRuns: agentListing.latestRuns, needsYou: needsYouItems })
+    // A mark already as new as the thread's last change stays, so the sidebar
+    // input stays the same. A run time ahead of this clock, from another
+    // machine, still reads as read.
+    if (threadId) untrack(() => { if (!(Date.parse(readState.read[threadId] ?? '') >= changedAt)) readState = markRead(readState, threadId, new Date(Math.max(Date.now(), changedAt))) })
   })
   const sidebarProjectById = $derived(Object.fromEntries(sidebarArrangement.projects.map(project => [project.id, project])))
   // The machine that holds each project another member shares.
