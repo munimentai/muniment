@@ -11,6 +11,9 @@ afterEach(cleanup)
 const at = (minutes) => new Date(Date.now() - minutes * 60_000).toISOString()
 const run = (id, status, extra = {}) => ({ id, agent_id: 'scout', thread_id: `thread-${id}`, trigger: { kind: 'cron' }, status, created_at: at(5), updated_at: at(4), result_summary: null, silent: false, error: null, ...extra })
 const local = { id: 'local', name: 'This computer' }
+// Failure texts an older runtime stored for an agent run whose OpenAI token expired.
+const STORED_EXPIRED = '{ "error": { "message": "Your authentication token has expir…'
+const STORED_EXPIRED_FULL = 'The model could not complete this reply. No eligible model served this turn. { "error": { "message": "Your authentication token has expired.", "code": "token_expired" }, "status": 401 } openai/gpt-6-astra answered 401.'
 const page = (extra = {}) => ({
   needs_you: [
     { kind: 'input', id: 'r1', machine: local, agent_id: 'scout', agent_name: 'Lead scout', run: run('r1', 'waiting_input'), detail: 'Which total?', at: at(3) },
@@ -148,6 +151,25 @@ describe('Notifications page', () => {
     await fireEvent.click(within(item).getByRole('button', { name: 'Open thread' }))
     expect(onopen).toHaveBeenCalledWith(expect.objectContaining({ id: 'r6', thread_id: 'thread-r6' }))
     expect(pointsToModels('The model could not complete this reply.')).toBe(false)
+  })
+
+  it('reads an old stored failure as the thread reply does, in its row and in Needs you', async () => {
+    expect(resultLine({ status: 'failed', run: { error: STORED_EXPIRED } })).toBe('The sign-in expired. Sign in again in Models.')
+    const failed = { kind: 'failed', id: 'r6', machine: local, agent_id: 'scout', agent_name: 'Tauri Morning', run: run('r6', 'failed', { error: STORED_EXPIRED_FULL }), detail: STORED_EXPIRED_FULL, at: at(2) }
+    const days = [{ day: 'today', entries: [{ status: 'failed', machine: local, agent_name: 'Tauri Morning', run: run('r7', 'failed', { error: STORED_EXPIRED }), unread: false }] }]
+    const invoke = vi.fn(async (command) => command === 'notifications_list' ? page({ needs_you: [failed], days }) : {})
+    const onmodels = vi.fn()
+    render(NotificationsPage, { tauri: { invoke }, runtimeList: null, onmodels })
+    const item = await screen.findByRole('article', { name: 'Run failed: Tauri Morning' })
+    expect(item.querySelector('.detail')).toHaveTextContent(/^The OpenAI sign-in expired\. Sign in again in Models\.$/)
+    const log = within(item).getByText('Show log').closest('details')
+    expect(log).not.toHaveAttribute('open')
+    expect(log.querySelector('pre')).toHaveTextContent('"code": "token_expired"')
+    await fireEvent.click(within(item).getByRole('button', { name: 'Open Models' }))
+    expect(onmodels).toHaveBeenCalledOnce()
+    const row = screen.getByRole('button', { name: 'Tauri Morning, Failed: The sign-in expired. Sign in again in Models.' })
+    expect(row.querySelector('.result')).toHaveTextContent(/^The sign-in expired\. Sign in again in Models\.$/)
+    expect(row).not.toHaveTextContent('{')
   })
 
   it('asks again for the failed view', async () => {

@@ -17,6 +17,7 @@
   // for a panel that draws its own, such as the agent card's History.
   import LucideIcon from '../lib/LucideIcon.svelte'
   import { runOutcome, runTimeLabel, runTitle } from '../lib/agent-labels.js'
+  import { runFailureText } from '../lib/run-failure.js'
   import { loadReplays, replayRun } from './replays.js'
 
   let { tauri, agent, runs = [], limit = 20, embedded = false, disabled = false, onopen = null, onrun = () => {} } = $props()
@@ -69,7 +70,7 @@
       <li class="run" data-light={runLight(run)}>
         <button type="button" class="open" aria-label={`${title}, ${when}`} disabled={!onopen} onclick={() => onopen(run)}>
           <span class="light"><LucideIcon name={runIcon(run)} variant="action" size={14} /></span>
-          <span class="text"><span class="title">{title}</span><time datetime={startedAt(run)}>{when}</time>{#if run.status === 'failed' && run.error}<span class="reason">{run.error}</span>{/if}</span>
+          <span class="text"><span class="title">{title}</span><time datetime={startedAt(run)}>{when}</time>{#if run.status === 'failed' && runFailureText(run.error)}<span class="reason">{runFailureText(run.error)}</span>{/if}</span>
         </button>
         {#if replay}<button type="button" class="retry" aria-label={`Retry ${title}`} disabled={disabled || !!busy} onclick={() => retry(replay)}><LucideIcon name={busy === replay.replay_id ? 'loader-circle' : 'refresh-cw'} variant="action" size={14} /></button>{/if}
       </li>

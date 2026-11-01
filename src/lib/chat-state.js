@@ -1,6 +1,7 @@
 import { modelLabel, modelReason, receiptNames } from './model-label.js'
 import { shortcutDisplayLabel } from './artifact-rail-state.js'
 import { receiptTime } from './execution-time.js'
+import { runFailureRaw, runFailureText } from './run-failure.js'
 import { formatClock } from './time-format.svelte.js'
 
 export function composerAction(event, text, active) {
@@ -225,70 +226,21 @@ const runPhaseAnnouncements = {
   interrupted: 'Reply interrupted.',
 }
 
-// Strip known retry guidance, not punctuation inside file names or recorded causes.
-const retryGuidance = new RegExp(`(?:^|(?<=[.!?])\\s)(?:${[
-  'Try again',
-  'Check the key and try again',
-  'Check the files and try again',
-  'Choose a smaller image before sending again',
-  'Remove an image before sending again',
-  'Remove images or choose smaller images before sending again',
-  'Choose a PNG, JPEG, GIF, or WebP image before sending again',
-].join('|')})\\.?$`, 'i')
-
-// A runtime rejection the transport passes through as a log record, such as
-// `code="invalid_request" reason="…"`. The UI shows a sentence for its code
-// and keeps the record under Details.
-const RAW_REJECTION = /\bcode="([a-z_]+)"/
-const REJECTIONS = {
-  invalid_request: 'The runtime rejected the request.',
-  unauthorized: 'The runtime refused the request. Sign in again.',
-  persistence_failed: 'The runtime could not save the request.',
-  runtime_draining: 'The runtime is restarting. Try again shortly.',
-}
-
-function failureText(run) {
-  return typeof run?.failureReason === 'string' ? uniqueSentences(run.failureReason.trim().replace(/\s+/g, ' ')) : ''
-}
-
-// A reason that says one sentence twice, as a stored reply from an older
-// router can, keeps the first of each.
-function uniqueSentences(text) {
-  const seen = new Set()
-  return text.split(/(?<=[.!?])\s+/).filter((sentence) => {
-    const key = sentence.toLowerCase()
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  }).join(' ')
-}
-
-// The retry button carries the next step, not the recorded cause.
-// The router opens a refusal with the route's `family/model` id. The reply
-// names the model as the picker does, so a stored reply reads the same.
-const routeId = /(^|[.!?]\s+)[a-z][\w-]*\/(\S+?): /g
-function namedRoutes(text) {
-  return text.replace(routeId, (_, start, model) => `${start}${modelLabel(model)}: `)
-}
-
+// A failed reply reads its recorded cause as every other surface reads a
+// run's failure, through `run-failure.js`.
 export function runFailureMessage(run) {
-  const recorded = namedRoutes(failureText(run))
-  const raw = RAW_REJECTION.exec(recorded)
-  if (raw) return REJECTIONS[raw[1]] ?? 'The runtime rejected the request.'
-  const reason = recorded.replace(retryGuidance, '').trim()
+  const reason = runFailureText(run?.failureReason)
   if (run?.text?.trim() && (!reason || /reply (could not be started|did not start)/i.test(reason))) return 'The reply stopped before it finished.'
-  if (!reason) return 'Reply failed.'
-  return /[.!?]$/.test(reason) ? reason : `${reason}.`
+  return reason || 'Reply failed.'
 }
 
 // What a failed reply's Details disclosure holds: the provider's own reason
-// when core reports one, and a raw runtime record the message replaced.
+// when core reports one, and the recorded text the message replaced.
 export function runFailureDetails(run) {
   const details = []
   const detail = [run?.failureDetail, run?.failure_detail, run?.detail].find((value) => typeof value === 'string' && value.trim())
   if (detail) details.push(detail.trim())
-  const recorded = failureText(run)
-  if (RAW_REJECTION.test(recorded)) details.push(recorded)
+  for (const raw of runFailureRaw(run?.failureReason)) if (!details.includes(raw)) details.push(raw)
   return details
 }
 

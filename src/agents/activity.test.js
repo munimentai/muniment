@@ -9,6 +9,10 @@ it('names each state and its action', () => {
   expect(activityLabel(event.activity)).toBe('Waiting for you: Run git push origin main in Lead-scout')
   expect(activityLabel({ state: 'running', action: 'Waits to start' })).toBe('Running: Waits to start')
   expect(activityLabel({ state: 'error' })).toBe('Last run failed')
+  // A tooltip reads an old stored failure as its thread reply does.
+  expect(activityLabel({ state: 'error', action: '{ "error": { "message": "Your authentication token has expir…' })).toBe('Last run failed: The sign-in expired. Sign in again in Models.')
+  expect(activityLabel({ state: 'error', action: 'No eligible model served this turn. No eligible model served this turn. openai/gpt-6.1-sol: Every account for this provider is temporarily unavailable.' }))
+    .toBe('Last run failed: No eligible model served this turn. GPT-6.1 Sol: Every account for this provider is temporarily unavailable.')
   expect(activityLabel({ state: 'idle', since: null })).toBe('Idle')
   expect(activityState({ state: 'sleeping' })).toBe('idle')
   expect(activityState(undefined)).toBe('idle')

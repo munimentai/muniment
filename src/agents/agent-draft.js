@@ -6,6 +6,7 @@
 // shapes the form and builds the `agent.save` body. Core owns the draft, the
 // trigger reading and every check on save.
 import { agentRequest } from './agent-runtime.js'
+import { runFailureText } from '../lib/run-failure.js'
 
 // How often the builder asks after a draft, and how long it waits in all.
 export const DRAFT_POLL_MS = 250
@@ -77,7 +78,10 @@ export function draftAgent(form, { saved = null, test = false, projectId = null 
 export function testRunLine(run) {
   const status = run?.status ?? 'queued'
   if (status === 'completed') return { text: run.silent ? 'Test run finished with nothing to post.' : 'Test run finished.', done: true, failed: false }
-  if (status === 'failed' || status === 'interrupted') return { text: run.error ? `Test run failed. ${run.error}` : 'Test run failed.', done: true, failed: true }
+  if (status === 'failed' || status === 'interrupted') {
+    const reason = runFailureText(run.error)
+    return { text: reason ? `Test run failed. ${reason}` : 'Test run failed.', done: true, failed: true }
+  }
   if (status === 'cancelled') return { text: 'Test run cancelled.', done: true, failed: false }
   if (status === 'waiting_input') return { text: 'Test run waits for your answer.', done: false, failed: false }
   if (status === 'running') return { text: 'Test run running. Its triggers stay off until you save.', done: false, failed: false }

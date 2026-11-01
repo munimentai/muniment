@@ -137,6 +137,11 @@ it('shows each state in words with its stoplight signal at the row end', () => {
     expect(failed.querySelector('svg')).toHaveAttribute('data-icon', 'circle-x')
     // The card names why the last run failed.
     expect(screen.getByText('The thread was not found.')).toBeInTheDocument()
+    // An old stored failure reads as its thread reply does.
+    view.rerender({ agent: { ...agent, online: false }, latestRun: { id: 'r3', status: 'failed', error: '{ "error": { "message": "Your authentication token has expir…', updated_at: new Date().toISOString() } })
+  }).then(() => {
+    expect(screen.getByText('The sign-in expired. Sign in again in Models.')).toBeInTheDocument()
+    expect(document.body).not.toHaveTextContent('{ "error"')
   })
 })
 
@@ -268,14 +273,20 @@ it('lists runs in its History as the profile does and opens a run\'s conversatio
   const machineCore = core()
   const run = { id: 'r1', agent_id: 'scout', thread_id: 't1', status: 'failed', error: 'The thread was not found.', trigger: { kind: 'cron', routine_id: 'daily' }, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
   const invoke = machineCore.tauri.invoke
-  machineCore.tauri.invoke = vi.fn(async (command, args) => command === 'agent_request' && args.operation === 'agent.runs' ? { runs: [run], next_cursor: null } : invoke(command, args))
+  const expired = { ...run, id: 'r0', thread_id: 't0', error: '{ "error": { "message": "Your authentication token has expir…', created_at: new Date(Date.now() - 60_000).toISOString() }
+  machineCore.tauri.invoke = vi.fn(async (command, args) => command === 'agent_request' && args.operation === 'agent.runs' ? { runs: [run, expired], next_cursor: null } : invoke(command, args))
   const onopenrun = vi.fn()
   show({ tauri: machineCore.tauri, onopenrun })
   await fireEvent.click(screen.getByRole('tab', { name: 'History' }))
   const history = await screen.findByRole('region', { name: 'History' })
-  const row = await within(history).findByRole('button', { name: /^Daily brief, Today at / })
+  const rows = await within(history).findAllByRole('button', { name: /^Daily brief, / })
+  const row = rows[0]
+  expect(row).toHaveAccessibleName(/^Daily brief, Today at /)
   expect(row.closest('li')).toHaveAttribute('data-light', 'red')
   expect(row).toHaveTextContent('The thread was not found.')
+  // An old stored failure reads as its thread reply does.
+  expect(rows[1]).toHaveTextContent(/The sign-in expired\. Sign in again in Models\.$/)
+  expect(history).not.toHaveTextContent('{ "error"')
   expect(machineCore.tauri.invoke).toHaveBeenCalledWith('agent_request', { runtime: 'box', operation: 'agent.runs', body: { agent_id: 'scout', limit: 20 } })
   await fireEvent.click(row)
   expect(onopenrun).toHaveBeenCalledWith(expect.objectContaining({ id: 'r1', thread_id: 't1', runtimeId: 'box' }))

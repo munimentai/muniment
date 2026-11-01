@@ -6,6 +6,7 @@ import { agentRequest } from '../agents/agent-runtime.js'
 import { LOCAL_RUNTIME_ID } from '../runtimes/runtimes.js'
 import { routineIcon } from '../agents/routine-labels.js'
 import { markdownPlainText } from '../lib/assistant-markdown.js'
+import { runFailureText } from '../lib/run-failure.js'
 import { displayZone, formatClock, formatDate, sameDay, zoneOffsetMinutes } from '../lib/time-format.svelte.js'
 
 export const NOTIFICATION_VIEWS = [
@@ -104,7 +105,7 @@ export function dayLabel(day) {
 export function resultLine(entry) {
   const run = entry?.run ?? {}
   const summary = markdownPlainText(run.result_summary)
-  if (entry?.status === 'failed') return run.error || 'The run failed.'
+  if (entry?.status === 'failed') return runFailureText(run.error) || 'The run failed.'
   if (entry?.status === 'needs_you') return summary || 'Waiting for your answer.'
   if (entry?.status === 'cancelled') return 'Stopped before it finished.'
   if (entry?.status === 'running') return 'Running now.'

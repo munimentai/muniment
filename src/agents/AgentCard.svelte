@@ -18,6 +18,7 @@
   import ModePicker from '../composer/ModePicker.svelte'
   import { panelScroll } from '../lib/panel-scroll.js'
   import { runActive, runLight, runStatusLabel, whenLabel } from '../lib/agent-labels.js'
+  import { runFailureText } from '../lib/run-failure.js'
   import { agentRequest, saveAgentPatch } from './agent-runtime.js'
   import InlineEdit from './InlineEdit.svelte'
   import RoutineRow from './RoutineRow.svelte'
@@ -232,7 +233,7 @@
           <div class="fact"><dt>Next run</dt><dd class="record">{nextRunLabel(agent)}</dd></div>
           <div class="fact"><dt>Last run</dt><dd class="record signaled">{#if latestRun}{@const state = runStatusLabel(latestRun.status)}<span class="words">{whenLabel(latestRun.updated_at)}</span><span class="signal" data-light={runLight(latestRun)} role="img" aria-label={state} data-tooltip={state}><LucideIcon name={runIcon(latestRun)} variant="action" size={14} /></span>{:else}<span class="words">Never</span>{/if}</dd></div>
         </dl>
-        {#if latestRun?.status === 'failed' && latestRun.error}<p class="run-reason">{latestRun.error}</p>{/if}
+        {#if latestRun?.status === 'failed' && runFailureText(latestRun.error)}<p class="run-reason">{runFailureText(latestRun.error)}</p>{/if}
         {#each cutShort as routine (routine.id)}
           <p class="note cut-short" role="note"><LucideIcon name="triangle-alert" variant="action" size={12} /><span><strong>{routine.name}</strong> {CUT_SHORT_NOTE} <button type="button" class="note-action" aria-label={`Edit ${routine.name} in the profile`} disabled={readOnly} onclick={() => onprofile(agent)}>Edit</button></span></p>
         {/each}

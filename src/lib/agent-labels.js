@@ -1,6 +1,7 @@
 // The words the agent profile, the routines and Notifications show for a run and
 // a trigger. The runtime decides every state, and these only name it.
 import { executionTime } from './execution-time.js'
+import { runFailureText } from './run-failure.js'
 import { dayNumber, formatClock, formatDate, sameYear } from './time-format.svelte.js'
 
 const runWords = {
@@ -54,7 +55,7 @@ export function runDuration(run, now = Date.now()) {
 // A run's one-line summary: the routine result, the error or nothing.
 export function runNote(run) {
   if (run?.silent) return 'No reply needed'
-  return run?.error || run?.result_summary || ''
+  return runFailureText(run?.error) || run?.result_summary || ''
 }
 
 export function whenLabel(value, now = Date.now()) {

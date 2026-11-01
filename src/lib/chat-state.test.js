@@ -191,6 +191,13 @@ describe('chat composer and projection', () => {
     expect(runAnnouncement({ phase: 'failed', failureReason })).toBe('No eligible model served this turn.')
   })
 
+  it('reads an old stored expired-token answer as the step that fixes it, with the answer behind Show log', () => {
+    const failureReason = '{ "error": { "message": "Your authentication token has expir…'
+    const restored = historyMessages([{ runId: 'r', phase: 'failed', text: '', failureReason }])[0].run
+    expect(runFailureMessage(restored)).toBe('The sign-in expired. Sign in again in Models.')
+    expect(runFailureDetails(restored)).toEqual([failureReason])
+  })
+
   it('names a refused route by its model name, live and restored, and leaves addresses alone', () => {
     const failureReason = 'openai/gpt-6.1-sol: Every account for this provider is temporarily unavailable.'
     const restored = historyMessages([{ runId: 'r', phase: 'failed', text: '', failureReason }])[0].run

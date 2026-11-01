@@ -12,11 +12,15 @@
   import { agentRequest } from '../agents/agent-runtime.js'
   import { memberMachine } from '../agents/swarm.js'
   import { resetsIn } from '../usage/usage.js'
+  import { runFailureRaw, runFailureText } from '../lib/run-failure.js'
   import { clockTime, needsMark, pointsToModels, runWithMachine } from './notifications.js'
 
   let { tauri, item, agents = [], swarm = null, runtimeList = null, showMachine = false, now = Date.now(), onopen = () => {}, onanswered = () => {}, onapprovalopen = null, onmodels = null } = $props()
   const mark = $derived(needsMark(item.kind))
   const agent = $derived(agents.find((entry) => entry.id === item.agent_id) ?? (item.agent_id ? { id: item.agent_id, name: item.agent_name } : null))
+  // A failed run reads as its thread reply reads, with a stored raw answer behind Show log.
+  const failure = $derived(item.kind === 'failed' ? runFailureText(item.detail) : '')
+  const failureLog = $derived(item.kind === 'failed' ? runFailureRaw(item.detail) : [])
   const resetPassed = $derived(Number.isFinite(item.resets_at_ms) && item.resets_at_ms <= now)
   let reply = $state('')
   let busy = $state(false)
@@ -76,9 +80,10 @@
           <Button onclick={() => onopen(runWithMachine(item.run, item.machine))}>Open thread</Button>
         </div>
       {:else if item.kind === 'failed'}
-        <p class="detail">{item.detail || 'The run failed.'}</p>
+        <p class="detail">{failure || 'The run failed.'}</p>
+        {#if failureLog.length}<details class="log"><summary>Show log</summary>{#each failureLog as entry, index (index)}<pre>{entry}</pre>{/each}</details>{/if}
         <div class="actions">
-          {#if onmodels && pointsToModels(item.detail)}<Button icon="settings" onclick={() => onmodels()}>Open Models</Button>{/if}
+          {#if onmodels && pointsToModels(failure)}<Button icon="settings" onclick={() => onmodels()}>Open Models</Button>{/if}
           <Button disabled={!item.run?.thread_id} onclick={() => onopen(runWithMachine(item.run, item.machine))}>Open thread</Button>
         </div>
       {:else}
@@ -104,6 +109,9 @@
   [data-kind="offline"] .kind, [data-kind="failed"] .kind { color: var(--danger); }
   time { margin-left: auto; color: var(--muted); font-size: var(--text-12); }
   .detail, .note { margin: 0; color: var(--muted); font-size: var(--text-13); overflow-wrap: anywhere; }
+  .log { color: var(--muted); font-size: var(--text-12); }
+  .log summary { cursor: pointer; width: max-content; }
+  .log pre { margin: 4px 0 0; padding: 8px; overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--faint); font: var(--text-12) var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
   .actions, .reply { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
   .reply input { flex: 1; min-width: 160px; min-height: 32px; box-sizing: border-box; padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-13) var(--font-human); }
 </style>

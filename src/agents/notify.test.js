@@ -25,6 +25,7 @@ describe('run notifications', () => {
 
   it('says what happened and where to look', () => {
     expect(notificationText(run('failed', { error: 'The model refused.' }), 'Scout')).toEqual({ title: 'Scout failed', body: 'The model refused.' })
+    expect(notificationText(run('failed', { error: '{ "error": { "message": "Your authentication token has expir…' }), 'Scout').body).toBe('The sign-in expired. Sign in again in Models.')
     expect(notificationText(run('waiting_input'), 'Scout').title).toBe('Scout is waiting for you')
     expect(notificationText(run('completed', { result_summary: 'Three new leads.' }), 'Scout').body).toBe('Three new leads.')
     expect(notificationText(run('completed', { silent: true }), '').title).toBe('An agent finished')

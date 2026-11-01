@@ -34,6 +34,7 @@ it('times a settled run by its record and a live run until now', () => {
 it('summarizes a run by its silence, error or result', () => {
   expect(runNote({ silent: true, result_summary: 'x' })).toBe('No reply needed')
   expect(runNote({ error: 'The model refused.', result_summary: 'x' })).toBe('The model refused.')
+  expect(runNote({ error: '{ "error": { "message": "Your authentication token has expir…' })).toBe('The sign-in expired. Sign in again in Models.')
   expect(runNote({ result_summary: 'Three new leads.' })).toBe('Three new leads.')
   expect(runNote(null)).toBe('')
 })
