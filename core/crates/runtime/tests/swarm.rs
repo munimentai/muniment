@@ -1966,9 +1966,12 @@ fn an_action_on_another_members_item_reaches_its_owner_through_a_relay_once() {
         .unwrap()
         .unwrap();
     assert_eq!(first["op_id"], again["op_id"]);
+    // A refuses a run now while the agent has a pending run, so the east
+    // run ends first.
     assert!(wait(|| {
         a.tick();
         prompted(&a, &scout.id, "Then the east region.") == 1
+            && a.runs(&scout.id).iter().all(|run| !run.status.is_active())
     }));
 
     // Running A's agent from C runs it on A.
@@ -1979,10 +1982,15 @@ fn an_action_on_another_members_item_reaches_its_owner_through_a_relay_once() {
         )
         .unwrap();
     assert_eq!(ran["forwarded"], true, "{ran}");
-    assert!(wait(|| {
-        a.tick();
-        prompted(&a, &scout.id, "Run it from C.") == 1
-    }));
+    let ran_op = ran["op_id"].as_str().unwrap_or_default().to_owned();
+    assert!(
+        wait(|| {
+            a.tick();
+            prompted(&a, &scout.id, "Run it from C.") == 1
+        }),
+        "A never ran the agent: {}",
+        op_status(&mut device, &ran_op)
+    );
     assert!(c.runs(&scout.id).is_empty());
 
     // The owner checks the scopes the actor and its member share: a
