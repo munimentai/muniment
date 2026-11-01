@@ -223,12 +223,16 @@ impl AdmissionDiagnostic {
         self.record_envelope(self.envelope(phase, error, closed_by));
     }
 
-    /// A desktop client whose code check matched and whose admission took
-    /// less than half its bound, with a code check under a second.
+    /// A desktop client or its approval presenter whose code check matched
+    /// and whose admission took less than half its bound, with a code check
+    /// under a second.
     fn usual(&self) -> bool {
         let admission = self.admission_started.elapsed();
-        matches!(self.route, MacosAttachConnectionRoute::DesktopClient { .. })
-            && self.code_check["matched"] == serde_json::json!(true)
+        matches!(
+            self.route,
+            MacosAttachConnectionRoute::DesktopClient { .. }
+                | MacosAttachConnectionRoute::ApprovalPresenter
+        ) && self.code_check["matched"] == serde_json::json!(true)
             && admission * 2 < self.bound
             && self.code_check["elapsed_ms"]
                 .as_u64()
@@ -867,6 +871,32 @@ mod tests {
         );
         slow.record("desktop-handshake", None, "none");
         assert_eq!(slow.records.borrow()[0]["phase"], "desktop-handshake");
+    }
+
+    #[test]
+    fn a_usual_presenter_admission_writes_no_record_and_an_unusual_one_does() {
+        let presenter = |matched: bool, bound: Duration| {
+            let mut diagnostic = AdmissionDiagnostic::route(
+                &Reader(matched),
+                &std::env::current_exe().unwrap(),
+                bound,
+            );
+            diagnostic.route = MacosAttachConnectionRoute::ApprovalPresenter;
+            diagnostic
+        };
+        let usual = presenter(true, Duration::from_secs(5));
+        usual.record("presenter-handshake", None, "none");
+        assert!(usual.records.borrow().is_empty());
+        usual.record("presenter-handshake", Some("Timeout"), "runtime");
+        assert_eq!(usual.records.borrow().len(), 1);
+
+        let unmatched = presenter(false, Duration::from_secs(5));
+        unmatched.record("presenter-handshake", None, "none");
+        assert_eq!(unmatched.records.borrow()[0]["route"], "ApprovalPresenter");
+
+        let slow = presenter(true, Duration::ZERO);
+        slow.record("presenter-handshake", None, "none");
+        assert_eq!(slow.records.borrow()[0]["phase"], "presenter-handshake");
     }
 
     #[test]
