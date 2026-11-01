@@ -1459,8 +1459,18 @@ pub struct Scope {
 /// The name of a member the window does not ask and no copy names.
 pub const UNLISTED_MACHINE: &str = "Another machine";
 
-/// The row name of a member whose runs count from the copies others hold.
-fn absent_name(origin: &str, scope: &Scope, held: &BTreeMap<String, HeldRun>) -> String {
+/// The row name of a member whose runs count from the copies others hold:
+/// a machine asked that failed to answer by its window name, else an
+/// offline member.
+fn absent_name(
+    origin: &str,
+    scope: &Scope,
+    failed: &BTreeMap<String, String>,
+    held: &BTreeMap<String, HeldRun>,
+) -> String {
+    if let Some(name) = failed.get(origin) {
+        return format!("{name} (did not answer)");
+    }
     let name = scope
         .members
         .iter()
@@ -1487,9 +1497,9 @@ pub fn merge(answers: Vec<MachineAnswer>, now_ms: i64) -> FleetSummary {
 /// pooled once however many machines hold it. Each run counts once, on the
 /// machine that ran it: an answer leaves out the copies it holds, and an
 /// answer that counts its copies takes its runs from the copies the other
-/// machines hold of them, each run id once. A member the window did not ask
-/// counts from the copies the others hold, under a row of its own, so no
-/// held run drops out. With a machine filter that names such a member, the
+/// machines hold of them, each run id once. A member the window did not ask,
+/// or one that failed to answer, counts from the copies the others hold,
+/// under a row of its own, so no held run drops out. With a machine filter that names such a member, the
 /// view counts only those copies.
 pub fn merge_scoped(answers: Vec<MachineAnswer>, scope: &Scope, now_ms: i64) -> FleetSummary {
     let mut held: BTreeMap<String, HeldRun> = BTreeMap::new();
@@ -1504,9 +1514,19 @@ pub fn merge_scoped(answers: Vec<MachineAnswer>, scope: &Scope, now_ms: i64) -> 
                 .or_insert_with(|| run.clone());
         }
     }
-    // Each asked machine counts its own runs, under the id the window names
-    // it by and under the member id its copies carry.
-    let mut asked: BTreeSet<String> = answers.iter().map(|answer| answer.id.clone()).collect();
+    // Each machine that answers counts its own runs, under the id the window
+    // names it by and under the member id its copies carry. A machine that
+    // failed to answer counts from the copies the others hold.
+    let failed: BTreeMap<String, String> = answers
+        .iter()
+        .filter(|answer| answer.summary.is_err())
+        .map(|answer| (answer.id.clone(), answer.name.clone()))
+        .collect();
+    let mut asked: BTreeSet<String> = answers
+        .iter()
+        .filter(|answer| answer.summary.is_ok())
+        .map(|answer| answer.id.clone())
+        .collect();
     asked.extend(
         answers
             .iter()
@@ -1539,7 +1559,7 @@ pub fn merge_scoped(answers: Vec<MachineAnswer>, scope: &Scope, now_ms: i64) -> 
     let absent: Vec<(String, String, Summary)> = absent
         .into_iter()
         .map(|origin| {
-            let name = absent_name(&origin, scope, &held);
+            let name = absent_name(&origin, scope, &failed, &held);
             let summary = own_runs(template.clone(), &origin, &held);
             (origin, name, summary)
         })
@@ -3081,22 +3101,60 @@ mod tests {
     }
 
     #[test]
-    fn a_member_that_failed_to_answer_stays_named_and_left_out() {
-        let docker = [run("d1", NOW - HOUR, "anthropic/claude", 30, None)];
+    fn a_member_that_failed_to_answer_stays_named_and_counts_from_the_copies_held() {
+        let own = [run("a", NOW - HOUR, "openai-codex/gpt", 50, None)];
+        let docker = [
+            run("d1", NOW - HOUR, "anthropic/claude", 30, None),
+            run("d2", NOW - 2 * HOUR, "anthropic/claude", 20, None),
+        ];
         let fleet = merge_scoped(
             vec![
-                answer("local", "This computer", this_computer(&[], &docker)),
+                answer("local", "This computer", this_computer(&own, &docker)),
                 MachineAnswer {
                     id: DOCKER.into(),
                     name: "Docker container".into(),
-                    summary: Err("That machine is offline.".into()),
+                    summary: Err("The request timed out.".into()),
+                },
+            ],
+            &Scope::default(),
+            NOW,
+        );
+        // The note still names the machine that did not answer.
+        assert!(fleet.partial);
+        let state = fleet
+            .machines
+            .iter()
+            .find(|machine| machine.id == DOCKER)
+            .unwrap();
+        assert_eq!(state.state, "error");
+        let joined = fleet.summary;
+        assert_eq!(joined.totals.runs, 3);
+        assert_eq!(total_series_runs(&joined), 3);
+        assert_eq!(machine_row(&joined, "local").amount.runs, 1);
+        let row = machine_row(&joined, DOCKER);
+        assert_eq!(row.label, "Docker container (did not answer)");
+        assert_eq!(row.amount.runs, 2);
+        assert_eq!(joined.breakdown.machine.len(), 2);
+    }
+
+    #[test]
+    fn a_member_that_failed_to_answer_with_no_copies_held_has_no_row() {
+        let own = [run("a", NOW - HOUR, "openai-codex/gpt", 50, None)];
+        let fleet = merge_scoped(
+            vec![
+                answer("local", "This computer", this_computer(&own, &[])),
+                MachineAnswer {
+                    id: DOCKER.into(),
+                    name: "Docker container".into(),
+                    summary: Err("The request timed out.".into()),
                 },
             ],
             &Scope::default(),
             NOW,
         );
         assert!(fleet.partial);
-        assert_eq!(fleet.summary.totals.runs, 0);
+        assert_eq!(fleet.summary.totals.runs, 1);
+        assert_eq!(fleet.summary.breakdown.machine.len(), 1);
     }
 
     #[test]
