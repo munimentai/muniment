@@ -4175,6 +4175,29 @@ describe('sidebar collapse', () => {
     expect(screen.getAllByRole('textbox', { name: 'Message' })).toHaveLength(1)
   })
 
+  it('lands an agent chat opened from its card at the newest message', async () => {
+    const original = invoke.getMockImplementation()
+    const history = Array.from({ length: 6 }, (_, index) => ({ role: index % 2 ? 'assistant' : 'user', content: `Message ${index}` }))
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args)
+      ? agentListAnswer([{ id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null }], { 'agent-1': 'agent-thread' })
+      : command === 'chat_thread_summaries' ? { summaries: [{ threadId: 'agent-thread', title: 'Scout chat', updatedAt: '2026-01-01T00:00:00Z' }], nextCursor: null }
+      : command === 'chat_thread_open' && args?.threadId === 'agent-thread' ? history
+      : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
+    render(App)
+    const thread = await screen.findByRole('region', { name: /Transcript:/ })
+    const box = layoutThread(thread, 1000)
+    await openSidebarPage('Agents')
+    const catalog = await screen.findByRole('region', { name: 'Agents', exact: true })
+    await fireEvent.click(within(await within(catalog).findByRole('article', { name: 'Scout' })).getByRole('button', { name: 'Open chat' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'agent-thread', limit: 100 }))
+    await waitFor(() => expect(document.querySelector('.workspace')).not.toHaveClass('agents-open'))
+    // The thread shows at the newest message once it draws, with no later
+    // message or poll to scroll it there.
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    expect(thread.scrollTop).toBe(box.bottom())
+  })
+
   it('creates the first agent chat once and keeps its project assignment', async () => {
     const original = invoke.getMockImplementation()
     const listing = agentListAnswer([{ id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: 'project-1', schedule: null }])
@@ -9825,6 +9848,55 @@ it('returns to the thread view from Settings opened over Notifications, by Back 
     expect(document.querySelector('.catalog-title')?.textContent ?? '').not.toContain('Notifications')
     expect(within(foot()).getByRole('button', { name: 'Notifications' })).toHaveAttribute('aria-pressed', 'false')
   }
+})
+
+// A transcript box whose scroll obeys layout: a hidden thread (the catalog
+// pages hide it with display none) ignores a scroll, as a real one does.
+// The agent profile beside the thread narrows it, so its content grows taller.
+function layoutThread(thread, height) {
+  let scrollHeight = height
+  Object.defineProperties(thread, {
+    scrollHeight: { configurable: true, get: () => scrollHeight + (document.querySelector('.workspace.agent-profile-open') ? 117 : 0) },
+    clientHeight: { configurable: true, value: 400 },
+  })
+  thread.scrollTo = ({ top }) => {
+    if (document.querySelector('.workspace.agents-open')) return
+    thread.scrollTop = Math.max(0, Math.min(top, thread.scrollHeight - 400))
+  }
+  return { grow: (by) => { scrollHeight += by }, bottom: () => thread.scrollHeight - 400 }
+}
+
+it('lands Back to threads at the newest message after the thread reflowed under Settings', async () => {
+  render(App)
+  await findReadyWorkspaceComposer()
+  const thread = await screen.findByRole('region', { name: /Transcript:/ })
+  const box = layoutThread(thread, 1000)
+  thread.scrollTop = box.bottom()
+  await fireEvent.scroll(thread)
+  await openSettings()
+  // The thread's width changed while Settings showed, so its last reply now
+  // sits under the composer.
+  box.grow(117)
+  await fireEvent.click(screen.getByRole('button', { name: 'Back to threads' }))
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument())
+  await waitFor(() => expect(thread.scrollTop).toBe(box.bottom()))
+})
+
+it('keeps the place a reader scrolled to when Back to threads returns to the same thread', async () => {
+  render(App)
+  await findReadyWorkspaceComposer()
+  const thread = await screen.findByRole('region', { name: /Transcript:/ })
+  const box = layoutThread(thread, 1000)
+  thread.scrollTop = box.bottom()
+  await fireEvent.scroll(thread)
+  thread.scrollTop = 120
+  await fireEvent.scroll(thread)
+  await openSettings()
+  thread.scrollTop = 0
+  box.grow(117)
+  await fireEvent.click(screen.getByRole('button', { name: 'Back to threads' }))
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument())
+  await waitFor(() => expect(thread.scrollTop).toBe(120))
 })
 
 describe('runtimes', () => {

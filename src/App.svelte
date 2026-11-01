@@ -1644,8 +1644,38 @@
   })
   function transcriptScrolled() {
     handleThreadScroll()
+    if (threadView) readerTop = thread.scrollTop
     void transcriptView.scrolled()
   }
+  // A thread that shows again, from Settings, a catalog page or a full page,
+  // lands at its newest message. Only a reader who scrolled up in that same
+  // thread before it left keeps their place. A hidden thread has no layout,
+  // so the scroll waits for the shown one. While pinned, a change of the
+  // thread's box or the composer's height keeps the newest message in view.
+  let readerTop = 0
+  let parkedThread = null
+  $effect(() => {
+    const shown = threadView
+    untrack(() => {
+      if (!shown) { parkedThread ??= { threadId: currentThreadId, top: pinned ? null : readerTop }; return }
+      const left = parkedThread
+      parkedThread = null
+      if (!left) return
+      if (left.threadId === currentThreadId && left.top != null) {
+        void tick().then(() => { if (!thread) return; thread.scrollTop = left.top; transcriptController.syncScrollTop(thread.scrollTop) })
+        return
+      }
+      pinned = true
+      void followNewContent()
+    })
+  })
+  $effect(() => { void composerBoxHeight; untrack(() => { void followNewContent() }) })
+  $effect(() => {
+    if (!thread || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => { void followNewContent() })
+    observer.observe(thread)
+    return () => observer.disconnect()
+  })
   async function jumpToLatest() {
     transcriptWindow = tailWindow()
     await tick()
