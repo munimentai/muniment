@@ -154,7 +154,7 @@ checkable in the diff:
   seconds to its first reply event, and an acknowledgment does not count. A
   timeout records a failed reply with its cause in the run journal and shell.
   The runtime logs the run start, Pi spawn, first reply, provider outcome and
-  stderr tail by run id. A provider that refuses a sign-in or key fails the reply with the step that fixes it and Open Models, keeps its answer behind Show log, and marks the account in Settings → Models until a turn succeeds. A thread's next reply takes the Pi process its last completed reply left idle when the launch, the files Pi read at start and the saved conversation are unchanged and the process waited under 15 minutes. Any other reply starts a new process, and the log names each reuse or miss.
+  stderr tail by run id. A provider that refuses a sign-in or key fails the reply with the step that fixes it and Open Models, keeps its answer behind Show log, and marks the account in Settings → Models until a turn succeeds. A thread's next reply takes the Pi process its last completed reply left idle when the launch, the files Pi read at start and the saved conversation are unchanged and the process waited under 15 minutes. When the thread's folder takes its title, the idle process reopens the conversation in the renamed folder, its working-directory fact names that folder, and it takes the reply. Any other reply starts a new process, and the log names each reuse or miss.
 - Pi harness contents, below.
 
 ## First run
