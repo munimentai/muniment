@@ -64,6 +64,11 @@ impl RuntimeAttachState {
         {
             return Ok(());
         }
+        // The repairs a list leaves undone. A failure, such as a full disk,
+        // waits for a later pass and stops no schedule.
+        if let Err(error) = agents::mend(profile) {
+            muniment_core::runtime_eprintln!("agent_schedule: agent repair failed error={error}");
+        }
         let store = RunStore::open(profile)?;
         let listing = agents::list(profile)?;
         for error in &listing.errors {

@@ -118,6 +118,7 @@ A module that `muniment-core` re-exports from another workspace crate keeps its 
 | module | shared_models | It shares model connections between paired machines and with the account's model vault. |
 | module | sidecar | It supervises Pi and its RPC transport. |
 | module | state_root | It resolves the one state root every local file sits under. |
+| module | disk_full | It names a full disk in plain words wherever a write fails for want of space. |
 | module | swarm | It links one owner's runtimes, replicates agent and group threads on the journal, delivers agent messages, moves and approvals between them, and seals shared credentials to each member's fleet key. |
 | module | thread_history | It reads journal-backed thread history. |
 | module | thread_ownership | It checks journal subject ownership. |

@@ -36,6 +36,29 @@ pub fn basename(name: &str, id: &str) -> String {
     format!("{clean}-{short}")
 }
 
+/// The folder name the index records for `id` under `root`, read without a
+/// lock or a write. An index that names a path, not one folder, is refused.
+pub fn recorded(profile: &Path, root: &Path, id: &str) -> Result<Option<String>, String> {
+    let names: BTreeMap<String, String> = match fs::read(profile.join("workspace-names.json")) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| e.to_string())?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.to_string()),
+    };
+    let Some(name) = names.get(&format!("{}:{id}", root.display())) else {
+        return Ok(None);
+    };
+    let mut components = Path::new(name).components();
+    match (components.next(), components.next()) {
+        (Some(std::path::Component::Normal(_)), None) => Ok(Some(name.clone())),
+        _ => Err("Invalid workspace folder name.".into()),
+    }
+}
+
+/// An I/O error as text: plain words for a full disk, else the error itself.
+fn io_text(error: std::io::Error) -> String {
+    crate::disk_full::or_message(&error, &error.to_string())
+}
+
 pub fn resolve(
     profile: &Path,
     root: &Path,
@@ -56,16 +79,16 @@ pub fn resolve(
     }
     crate::state_root::guard_owner_data(root, "a workspace folder");
     crate::state_root::guard_owner_data(profile, "the workspace name index");
-    fs::create_dir_all(profile).map_err(|e| e.to_string())?;
-    fs::create_dir_all(root).map_err(|e| e.to_string())?;
+    fs::create_dir_all(profile).map_err(io_text)?;
+    fs::create_dir_all(root).map_err(io_text)?;
     let lock = fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .read(true)
         .write(true)
         .open(profile.join("workspace-names.lock"))
-        .map_err(|e| e.to_string())?;
-    lock.lock_exclusive().map_err(|e| e.to_string())?;
+        .map_err(io_text)?;
+    lock.lock_exclusive().map_err(io_text)?;
     let index = profile.join("workspace-names.json");
     let mut names: BTreeMap<String, String> = match fs::read(&index) {
         Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| e.to_string())?,
@@ -115,9 +138,9 @@ pub fn resolve(
         if target.exists() && !same_source(&target) {
             return Err("A workspace folder with that identifier already exists.".into());
         }
-        fs::rename(&source, &target).map_err(|e| e.to_string())?;
+        fs::rename(&source, &target).map_err(io_text)?;
     }
-    fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+    fs::create_dir_all(&target).map_err(io_text)?;
     let leaf = target.file_name().unwrap().to_string_lossy().into_owned();
     if names.get(&key) != Some(&leaf) {
         names.insert(key, leaf);
@@ -126,8 +149,8 @@ pub fn resolve(
             &temp,
             serde_json::to_vec(&names).map_err(|e| e.to_string())?,
         )
-        .map_err(|e| e.to_string())?;
-        crate::atomic_file::replace(&temp, &index).map_err(|e| e.to_string())?;
+        .map_err(io_text)?;
+        crate::atomic_file::replace(&temp, &index).map_err(io_text)?;
     }
     Ok(target)
 }
@@ -145,8 +168,8 @@ pub fn remove_unused_untitled(profile: &Path, root: &Path) -> Result<usize, Stri
         .read(true)
         .write(true)
         .open(profile.join("workspace-names.lock"))
-        .map_err(|e| e.to_string())?;
-    lock.lock_exclusive().map_err(|e| e.to_string())?;
+        .map_err(io_text)?;
+    lock.lock_exclusive().map_err(io_text)?;
     let names: BTreeMap<String, String> = match fs::read(profile.join("workspace-names.json")) {
         Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| e.to_string())?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),

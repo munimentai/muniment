@@ -238,9 +238,49 @@ fn root(profile: &Path) -> Result<PathBuf, String> {
     fs::create_dir_all(&root).map_err(|_| "The agents folder is unavailable.")?;
     Ok(root)
 }
+/// Where an agent's folder is, found without a write.
+enum Location {
+    /// The folder the name index records.
+    Recorded(PathBuf),
+    /// A folder whose `agent.md` holds the agent, which no save recorded
+    /// yet, with the agent's name.
+    Unrecorded(PathBuf, String),
+    Missing,
+}
+fn locate(profile: &Path, id: &str) -> Result<Location, String> {
+    let root = crate::memory_files::home(profile)?.join("agents");
+    if let Some(name) = crate::workspace_names::recorded(profile, &root, id)? {
+        return Ok(Location::Recorded(root.join(name)));
+    }
+    let Ok(entries) = fs::read_dir(&root) else {
+        return Ok(Location::Missing);
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_symlink() {
+            continue;
+        }
+        if let Ok(agent) = read_file(&path.join("agent.md"), Some(id)) {
+            return Ok(Location::Unrecorded(path, agent.name));
+        }
+    }
+    Ok(Location::Missing)
+}
+/// An agent's folder for a write. A folder no save recorded yet is recorded
+/// under its agent's name.
 pub fn folder(profile: &Path, id: &str) -> Result<PathBuf, String> {
     uuid::Uuid::parse_str(id).map_err(|_| "The agent identifier is invalid.")?;
-    let folder = crate::workspace_names::resolve(profile, &root(profile)?, id, None, None)?;
+    let (name, legacy) = match locate(profile, id)? {
+        Location::Unrecorded(folder, name) => (Some(name), Some(folder)),
+        _ => (None, None),
+    };
+    let folder = crate::workspace_names::resolve(
+        profile,
+        &root(profile)?,
+        id,
+        name.as_deref(),
+        legacy.as_deref(),
+    )?;
     if folder.is_symlink() {
         return Err("The agent folder must not be a symbolic link.".into());
     }
@@ -278,6 +318,10 @@ fn write_with(
     result
 }
 fn write_error(step: &str, error: std::io::Error) -> String {
+    use crate::disk_full::DiskFull;
+    if error.is_disk_full() {
+        return crate::disk_full::DISK_FULL_MESSAGE.into();
+    }
     let code = error
         .raw_os_error()
         .map(|code| code.to_string())
@@ -303,12 +347,25 @@ pub fn persist_state(profile: &Path, state: &State) -> Result<(), String> {
         &serde_json::to_vec(state).map_err(|_| "Agent state cannot be saved.")?,
     )
 }
+/// Reads one agent. A read writes nothing: it finds a folder no save
+/// recorded yet and records none.
 pub fn get(profile: &Path, id: &str) -> Result<Agent, String> {
-    let path = folder(profile, id)?.join("agent.md");
+    uuid::Uuid::parse_str(id).map_err(|_| "The agent identifier is invalid.")?;
+    let folder = match locate(profile, id)? {
+        Location::Recorded(folder) | Location::Unrecorded(folder, _) => folder,
+        Location::Missing => return Err("The agent is unavailable.".into()),
+    };
+    if folder.is_symlink() {
+        return Err("The agent folder must not be a symbolic link.".into());
+    }
+    read_file(&folder.join("agent.md"), Some(id))
+}
+/// Reads one `agent.md`. With `id`, the file must hold that agent.
+fn read_file(path: &Path, id: Option<&str>) -> Result<Agent, String> {
     if path.is_symlink() {
         return Err("The agent file must not be a symbolic link.".into());
     }
-    if fs::metadata(&path)
+    if fs::metadata(path)
         .map_err(|_| "The agent is unavailable.")?
         .len()
         > 128 * 1024
@@ -325,9 +382,10 @@ pub fn get(profile: &Path, id: &str) -> Result<Agent, String> {
         .ok_or("The agent format is invalid.")?;
     let mut agent: Agent =
         serde_json::from_str(metadata).map_err(|_| "The agent settings are invalid.")?;
-    if agent.id != id {
+    if id.is_some_and(|id| agent.id != id) {
         return Err("The agent identifier does not match its folder.".into());
     }
+    uuid::Uuid::parse_str(&agent.id).map_err(|_| "The agent identifier is invalid.")?;
     agent.instructions = instructions.trim_end().into();
     migrate(&mut agent)?;
     validate(&agent)?;
@@ -404,16 +462,21 @@ fn apply_schedule(agent: &mut Agent) -> Result<(), String> {
     Ok(())
 }
 /// Lists every agent. A folder whose `agent.md` does not load is left out
-/// and named in `errors`.
+/// and named in `errors`. A list only reads: it renames no folder and saves
+/// no state, so it answers on a full or read-only disk. [`mend`] makes the
+/// repairs a list would need.
 pub fn list(profile: &Path) -> Result<AgentList, String> {
     let mut agents = Vec::new();
     let mut errors = Vec::new();
-    {
-        // Each entry names its folder after the name in its file. A save
-        // renames the folder first, so the scan waits for it and never reads
-        // the old name back into the folder.
-        let _lock = lock(profile)?;
-        for entry in fs::read_dir(root(profile)?).map_err(|_| "The agents could not be read.")? {
+    let root = crate::memory_files::home(profile)?.join("agents");
+    if root.is_symlink() {
+        return Err("The agents folder must not be a symbolic link.".into());
+    }
+    if root.is_dir() {
+        // A save renames the folder first, so the scan waits for it and
+        // never sees an agent in neither folder.
+        let _lock = read_lock(profile)?;
+        for entry in fs::read_dir(&root).map_err(|_| "The agents could not be read.")? {
             let Ok(entry) = entry else {
                 continue;
             };
@@ -422,22 +485,18 @@ pub fn list(profile: &Path) -> Result<AgentList, String> {
                 continue;
             }
             let folder = entry.file_name().to_string_lossy().into_owned();
-            match load_entry(profile, &entry.path(), &path) {
-                Ok(Some(agent)) => agents.push(agent),
-                Ok(None) => {}
+            match read_file(&path, None) {
+                Ok(agent) => agents.push(agent),
                 Err(error) => errors.push(AgentLoadError { folder, error }),
             }
         }
     }
     agents.sort_by(|a, b| a.name.cmp(&b.name));
     errors.sort_by(|a, b| a.folder.cmp(&b.folder));
-    with_state(profile, |state| {
-        for agent in &agents {
-            ensure_primary(state, &agent.id);
-        }
-        Ok(())
-    })?;
-    let state = state(profile)?;
+    let mut state = state(profile)?;
+    for agent in &agents {
+        ensure_primary(&mut state, &agent.id);
+    }
     for agent in &mut agents {
         apply_routine_state(agent, &state);
     }
@@ -447,24 +506,67 @@ pub fn list(profile: &Path) -> Result<AgentList, String> {
         errors,
     })
 }
-fn load_entry(profile: &Path, folder: &Path, path: &Path) -> Result<Option<Agent>, String> {
-    let text = fs::read_to_string(path).map_err(|_| "The agent file could not be read.")?;
-    let Some(metadata) = text
-        .strip_prefix("```json\n")
-        .and_then(|s| s.split_once("\n```\n\n").map(|(m, _)| m))
-    else {
-        return Err("The agent format is invalid.".into());
+/// The agents lock for a reader: the lock a save holds, when one exists. A
+/// profile no save has touched has no lock file, and a read creates none.
+fn read_lock(profile: &Path) -> Result<Option<fs::File>, String> {
+    let file = match fs::File::open(profile.join("agents.lock")) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err("Agent settings are unavailable.".into()),
     };
-    let agent: Agent =
-        serde_json::from_str(metadata).map_err(|_| "The agent settings are invalid.")?;
-    crate::workspace_names::resolve(
-        profile,
-        &root(profile)?,
-        &agent.id,
-        Some(&agent.name),
-        Some(folder),
-    )?;
-    get(profile, &agent.id).map(Some)
+    file.lock_shared().map_err(|_| "Agent settings are busy.")?;
+    Ok(Some(file))
+}
+/// Makes the repairs a list leaves undone: names each agent's folder after
+/// the name in its file, records a folder the name index lacks, and saves
+/// each agent's primary thread once. A consistent profile writes nothing.
+/// The schedule pass runs it and logs a failure, so a full disk delays a
+/// repair and fails no read.
+pub fn mend(profile: &Path) -> Result<(), String> {
+    let root = crate::memory_files::home(profile)?.join("agents");
+    if root.is_symlink() || !root.is_dir() {
+        return Ok(());
+    }
+    let mut ids = Vec::new();
+    {
+        // Each entry names its folder after the name in its file. A save
+        // renames the folder first, so the pass waits for it and never reads
+        // the old name back into the folder.
+        let _lock = lock(profile)?;
+        for entry in fs::read_dir(&root).map_err(|_| "The agents could not be read.")? {
+            let Ok(entry) = entry else {
+                continue;
+            };
+            let path = entry.path().join("agent.md");
+            if entry.path().is_symlink() || !path.is_file() {
+                continue;
+            }
+            let Ok(agent) = read_file(&path, None) else {
+                continue;
+            };
+            crate::workspace_names::resolve(
+                profile,
+                &root,
+                &agent.id,
+                Some(&agent.name),
+                Some(&entry.path()),
+            )?;
+            ids.push(agent.id);
+        }
+    }
+    let mut pinned = state(profile)?;
+    let unpinned = ids.iter().any(|id| {
+        !pinned.primary_threads.contains_key(id) && ensure_primary(&mut pinned, id).is_some()
+    });
+    if unpinned {
+        with_state(profile, |state| {
+            for id in &ids {
+                ensure_primary(state, id);
+            }
+            Ok(())
+        })?;
+    }
+    Ok(())
 }
 /// Fills each routine's last fire time, result, poll and next fire time
 /// from the runtime's state.
@@ -743,12 +845,22 @@ pub(crate) fn save_definition(
             ),
         });
     }
+    // A folder no save recorded yet, such as a hand-written one, becomes
+    // this agent's folder instead of a second one.
+    let legacy = if creating {
+        None
+    } else {
+        match locate(profile, &agent.id)? {
+            Location::Unrecorded(folder, _) => Some(folder),
+            _ => None,
+        }
+    };
     let directory = crate::workspace_names::resolve(
         profile,
         &root(profile)?,
         &agent.id,
         Some(&agent.name),
-        None,
+        legacy.as_deref(),
     )?;
     fs::create_dir_all(&directory).map_err(|_| "The agent folder could not be created.")?;
     let mut metadata = agent.clone();
@@ -1358,12 +1470,22 @@ pub fn operation(
         "agent.list" => {
             parse::<Empty>(body)?;
             let listing = list(profile)?;
-            let store = RunStore::open(profile)?;
+            // The latest runs are a view of the history. A history that
+            // cannot be read, such as on a full disk, fails no list.
             let mut latest = serde_json::Map::new();
-            for agent in &listing.agents {
-                if let Some(run) = store.latest(&agent.id)? {
-                    latest.insert(agent.id.clone(), json!(run));
+            let read = RunStore::read(profile).and_then(|store| {
+                let Some(store) = store else {
+                    return Ok(());
+                };
+                for agent in &listing.agents {
+                    if let Some(run) = store.latest(&agent.id)? {
+                        latest.insert(agent.id.clone(), json!(run));
+                    }
                 }
+                Ok(())
+            });
+            if let Err(error) = read {
+                crate::runtime_eprintln!("agent.list: run history unread error={error}");
             }
             let ids: Vec<String> = listing
                 .agents
@@ -1717,6 +1839,119 @@ mod tests {
         drop(locked);
         write(&path, b"replacement").unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"replacement");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_full_disk_reads_as_plain_words_in_an_agent_save() {
+        #[cfg(unix)]
+        let full = std::io::Error::from_raw_os_error(28);
+        #[cfg(windows)]
+        let full = std::io::Error::from_raw_os_error(112);
+        assert_eq!(
+            write_error("create_temp", full),
+            "The disk is full. Free some space, then try again."
+        );
+    }
+
+    /// Every file and folder under `root`, a file with its size, inode and
+    /// change time, so a comparison catches a write, a replacement and a
+    /// rename. A folder keeps its times out: SQLite opens and removes its
+    /// shared-memory file beside a database it reads.
+    #[cfg(unix)]
+    fn tree(root: &Path) -> Vec<(PathBuf, u64, u64, i64, i64)> {
+        use std::os::unix::fs::MetadataExt;
+        let mut entries = Vec::new();
+        let mut pending = vec![root.to_path_buf()];
+        while let Some(directory) = pending.pop() {
+            for entry in fs::read_dir(&directory).unwrap().flatten() {
+                let metadata = entry.metadata().unwrap();
+                if metadata.is_dir() {
+                    pending.push(entry.path());
+                    entries.push((entry.path(), 0, metadata.ino(), 0, 0));
+                    continue;
+                }
+                entries.push((
+                    entry.path(),
+                    metadata.len(),
+                    metadata.ino(),
+                    metadata.mtime_nsec(),
+                    metadata.ctime_nsec(),
+                ));
+            }
+        }
+        entries.sort();
+        entries
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_list_writes_nothing_and_answers_when_no_write_can_land() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        fs::create_dir_all(&root).unwrap();
+        let profile = root.join("private");
+        crate::home::confirm_home(&profile, &root.join("muniment")).unwrap();
+        let agent = save(
+            &profile,
+            Agent {
+                name: "Scout".into(),
+                instructions: "Find sources.".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        RunStore::open(&profile).unwrap();
+        // A thread with no saved primary: a list that pinned it would save.
+        with_state(&profile, |state| {
+            state.threads.insert("first-chat".into(), agent.id.clone());
+            Ok(())
+        })
+        .unwrap();
+        // The folder name no longer matches the name: a list that renamed
+        // the folder would write.
+        let file = folder(&profile, &agent.id).unwrap().join("agent.md");
+        let text = fs::read_to_string(&file).unwrap();
+        fs::write(&file, text.replace("\"Scout\"", "\"Scout Prime\"")).unwrap();
+
+        let before = tree(&root);
+        let listing = operation(&profile, "agent.list", serde_json::json!({})).unwrap();
+        assert_eq!(tree(&root), before);
+        assert_eq!(listing["agents"][0]["name"], "Scout Prime");
+        assert_eq!(listing["primary_threads"][&agent.id], "first-chat");
+
+        // With every folder read-only no write can land, as on a full disk,
+        // and the list still answers.
+        let folders: Vec<PathBuf> = before
+            .iter()
+            .map(|entry| entry.0.clone())
+            .filter(|path| path.is_dir())
+            .chain([root.clone()])
+            .collect();
+        let set_mode = |mode| {
+            for path in &folders {
+                fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+            }
+        };
+        set_mode(0o555);
+        let listing = operation(&profile, "agent.list", serde_json::json!({}));
+        set_mode(0o755);
+        let listing = listing.unwrap();
+        assert_eq!(listing["agents"][0]["id"], agent.id.as_str());
+        assert!(listing["errors"].as_array().unwrap().is_empty());
+
+        // The mend pass makes the repairs the list left undone.
+        mend(&profile).unwrap();
+        assert!(folder(&profile, &agent.id)
+            .unwrap()
+            .ends_with(crate::workspace_names::basename("Scout Prime", &agent.id)));
+        assert_eq!(
+            state(&profile).unwrap().primary_threads[&agent.id],
+            "first-chat"
+        );
+        let mended = tree(&root);
+        mend(&profile).unwrap();
+        assert_eq!(tree(&root), mended);
         fs::remove_dir_all(root).unwrap();
     }
 
