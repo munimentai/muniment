@@ -11,7 +11,7 @@
   import ProviderLogo from './ProviderLogo.svelte'
   import LucideIcon from './LucideIcon.svelte'
   import { classifierProvider } from './classifier-catalog.js'
-  import { pickerGroups, providerName } from './provider-catalog.js'
+  import { modelDisplayName, pickerGroups, providerName } from './provider-catalog.js'
   import { compactsOnSwitch, windowTokens } from './context-usage.js'
 
   // `source` names where the model in use comes from, such as `from project
@@ -136,7 +136,7 @@
     </div>
   </div>
   {#if source && current}
-    {@const label = groups.flatMap((group) => group.models).find(inUse)?.label ?? current.model}
+    {@const label = groups.flatMap((group) => group.models).find(inUse)?.label ?? modelDisplayName(inventory, current.provider, current.model)}
     <div class="picker-source">
       <span class="source-line">{label} · {source}</span>
       {#each actions as action (action.id)}<button type="button" class="quiet source-action" {disabled} onclick={() => onaction(action.id)}>{action.label}</button>{/each}

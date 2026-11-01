@@ -266,6 +266,23 @@ export function modelChipLabel(inventory) {
   return current.label
 }
 
+// A model's name wherever the app shows one, the same name its picker row and
+// the composer chip show. `model` is a row's choice, its id or a router
+// `family/model` key. A model no row lists reads as its formatted id, and a
+// local or custom server's model as served.
+export function modelDisplayName(inventory, provider, model) {
+  if (model === undefined || model === null || model === '') return null
+  const id = String(model)
+  const bare = id.split('/').filter(Boolean).at(-1) ?? id
+  const rows = pickerGroups(inventory, '', { all: true }).flatMap((group) => group.models)
+  const row = rows.find((entry) => entry.provider === provider && entry.choice === id)
+    ?? rows.find((entry) => entry.choice === id || entry.id === id)
+    ?? rows.find((entry) => entry.id === bare)
+  if (row) return row.label
+  const source = inventory?.providers?.find((entry) => entry.id === provider)?.source
+  return source === 'local' || source === 'custom' ? modelName(id) : modelLabel(bare)
+}
+
 // How many models one connected provider serves, as its card names it.
 export function modelCountLabel(count) {
   if (!count) return 'No models'

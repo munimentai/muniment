@@ -5,7 +5,7 @@
 // with a row per window.
 import { agentRuntimes } from '../agents/agent-runtime.js'
 import { LOCAL_RUNTIME_ID, machineName } from '../runtimes/runtimes.js'
-import { familyName, providerName } from '../lib/provider-catalog.js'
+import { familyName, modelDisplayName, providerName } from '../lib/provider-catalog.js'
 import { displayZone, formatDate, formatHour, zoneOffsetMinutes } from '../lib/time-format.svelte.js'
 
 export const USAGE_VIEWS = [
@@ -163,8 +163,10 @@ export function bucketLabel(startMs, bucket) {
 }
 
 // A breakdown row's name: the label core gives, else what an empty key means.
-export function rowLabel(row, breakdown) {
-  if (row?.label) return row.label
+// Core labels a model row with the model's id, which reads by the name the
+// composer gives it from `inventory`.
+export function rowLabel(row, breakdown, inventory = null) {
+  if (row?.label) return breakdown === 'model' ? modelDisplayName(inventory, row.provider ?? null, row.label) : row.label
   if (row?.key) return row.key
   return breakdown === 'agent' ? 'No agent' : breakdown === 'project' ? 'No project' : 'Unknown'
 }

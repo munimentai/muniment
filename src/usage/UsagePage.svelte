@@ -20,7 +20,7 @@
   import { LOCAL_RUNTIME_ID } from '../runtimes/runtimes.js'
   import { BREAKDOWNS, USAGE_RANGES, USAGE_VIEWS, machineRefs, providerOptions, readUsage, totalTiles } from './usage.js'
 
-  let { tauri, runtimeList = null, folderAccess = null, onconnect = null } = $props()
+  let { tauri, runtimeList = null, folderAccess = null, inventory = null, onconnect = null } = $props()
   let view = $state('limits')
   let range = $state('7d')
   let machine = $state('')
@@ -111,7 +111,7 @@
       </Group>
       <Group heading="Breakdown" plain>
         {#snippet actions()}<SegmentedField label="Breakdown" hideLabel value={breakdown} options={breakdowns} onchange={(value) => { breakdown = value }} />{/snippet}
-        <UsageBreakdown {rows} {breakdown} {view} />
+        <UsageBreakdown {rows} {breakdown} {view} {inventory} />
       </Group>
     {/if}
   </PanelPage>

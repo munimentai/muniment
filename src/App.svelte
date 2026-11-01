@@ -90,7 +90,7 @@
   import ContextMeter from './lib/ContextMeter.svelte'
   import ContextPanel from './lib/ContextPanel.svelte'
   import { compactCommand, contextMeterShown } from './lib/context-usage.js'
-  import { catalogProvider, currentModel, currentModelAvailable, modelChipLabel, modelKey, providerFamily, routerHidden } from './lib/provider-catalog.js'
+  import { catalogProvider, currentModel, currentModelAvailable, modelChipLabel, modelDisplayName, modelKey, providerFamily, routerHidden } from './lib/provider-catalog.js'
   import { classifierProvider } from './lib/classifier-catalog.js'
   import ProviderLogo from './lib/ProviderLogo.svelte'
   import LucideIcon from './lib/LucideIcon.svelte'
@@ -390,7 +390,7 @@
   // The model an agent chat's agent runs: its own, else the default.
   const agentChatModel = $derived.by(() => {
     const own = roster.find((agent) => agent.id === agentChat?.record?.resultId)?.model
-    if (own?.provider && own?.id && inventory) return modelChipLabel({ ...inventory, default_provider: own.provider, default_model: own.id })
+    if (own?.provider && own?.id) return modelDisplayName(inventory, own.provider, own.id)
     const fallback = inventory ? modelChipLabel(inventory) : ''
     return fallback ? `${fallback} · default` : ''
   })
@@ -4348,7 +4348,7 @@
             <button type="button" onclick={() => { retryReview = null; draft = ''; pickerOpen = false }}>Cancel retry</button>
           </section>
         {/if}
-        {#if contextOpen && contextUsage}<ContextPanel usage={contextUsage} active={!!active} {compacting} error={compactError} oncompact={(instructions) => compactThread(instructions)} onsettings={() => openSettings('context')} onclose={() => { contextOpen = false; compactError = '' }} />{/if}
+        {#if contextOpen && contextUsage}<ContextPanel usage={contextUsage?.model ? { ...contextUsage, model: modelDisplayName(threadInventory, null, contextUsage.model) } : contextUsage} active={!!active} {compacting} error={compactError} oncompact={(instructions) => compactThread(instructions)} onsettings={() => openSettings('context')} onclose={() => { contextOpen = false; compactError = '' }} />{/if}
         {#if pickerOpen}
           <ModelPicker {inventory} {contextUsage} current={chipModel} source={modelSource} actions={modelActions} onaction={runModelAction} onchoose={chooseModel} onvisibility={setModelShown} onmanage={openModelSettings} onrouting={() => openSettings('decisions')} onclose={closePicker} />
         {/if}
@@ -4563,7 +4563,7 @@
     {/if}
   {#if browserPanel}<div class="artifact-divider workspace-divider" role="separator" aria-label="Workspace panel width" aria-orientation="vertical" aria-valuemin="340" aria-valuemax={workspacePanelMaximum} aria-valuenow={workspacePanelWidth} tabindex="0" onpointerdown={workspaceResize.pointerDown} onpointermove={workspaceResize.pointerMove} onpointerup={workspaceResize.pointerEnd} onpointercancel={workspaceResize.pointerEnd} onkeydown={workspaceResize.keydown}><span class="divider-grip" aria-hidden="true"><LucideIcon name="ellipsis-vertical" size={14} variant="action" /></span></div>{/if}
   <WorkspacePanel ondirty={value => { workspaceDirty = value }} context={fileContext} {requestedArtifact} {tauri} onfolder={path => { workspaceDirectory = path; if (mention) updateMention() }} navigation={requestedNavigation} onnavigationhandled={request => { if (requestedNavigation === request) requestedNavigation = null }} selected={browserPanel} onselect={showBrowser} threadId={currentThreadId} projectId={selectedProject} requestedFile={requestedWorkspaceFile} suspended={!!deletingThreadId} />
-  {#if fullPage === 'usage'}<UsagePage {tauri} {runtimeList} {folderAccess} onconnect={() => openSettings('providers')} />{/if}
+  {#if fullPage === 'usage'}<UsagePage {tauri} {runtimeList} {folderAccess} {inventory} onconnect={() => openSettings('providers')} />{/if}
   {#if fullPage === 'notifications'}<NotificationsPage {tauri} {runtimeList} agents={roster} {swarm} refreshKey={notificationsKey} read={readState.read} onmodels={() => openSettings('providers')} onread={() => { void refreshNeedsYou() }} onopen={(run) => openRunThread(run).catch(error => { submitError = String(error) })}
     onapprovalopen={(approval) => openRunThread(approval).catch(error => { submitError = String(error) })} />{/if}
   {#if paletteOpen && tauri}<CommandPalette {tauri} input={paletteFor} onrun={runPaletteItem} onclose={() => { paletteOpen = false }} />{/if}

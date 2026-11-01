@@ -6,6 +6,7 @@ import { LOCAL_RUNTIME_ID, machineName as listedMachineName } from './runtimes.j
 import { memberMachine } from '../agents/swarm.js'
 import { formatClock, formatDateTime } from '../lib/time-format.svelte.js'
 import { providerName } from '../lib/provider-catalog.js'
+import { modelLabel } from '../lib/model-label.js'
 
 // The clock time as the Time setting shows times.
 export function clockTime(value) {
@@ -240,7 +241,9 @@ function connectionName(name, accounts, decisionModels = null) {
   const mcp = /^mcp(?:-oauth)?:(.+)$/.exec(text)
   if (mcp) return mcp[1]
   const decision = /^decision:(.+)$/.exec(text)
-  if (decision) return (decisionModels ?? []).find((entry) => entry?.id === decision[1])?.name || 'a decision model'
+  // A connection named by its model's id reads by the model's display name.
+  const model = decision && (decisionModels ?? []).find((entry) => entry?.id === decision[1])
+  if (decision) return (model?.name && model.name === model.connection?.model ? modelLabel(model.name) : model?.name) || 'a decision model'
   const search = /^search:(.+)$/.exec(text)
   if (search) return `${search[1].charAt(0).toUpperCase()}${search[1].slice(1)} search key`
   if (account?.label) return account.label

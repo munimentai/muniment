@@ -160,6 +160,24 @@ it('saves the project on a pick and picks the model and thinking level from the 
   await waitFor(() => expect(saved().model).toBeNull())
 })
 
+it('names the agent\'s model as the composer does, not by its id', async () => {
+  const { invoke } = machine()
+  const inventory = {
+    providers: [{ id: 'anthropic', name: 'Anthropic', source: 'oauth', models: [{ id: 'claude-fable-5-1' }] }, { id: 'muniment-router', name: 'Router', source: 'router', models: [] }],
+    router_models: [{ id: 'xai/grok-4.20-multi-agent-0309', family: 'xai', model: 'grok-4.20-multi-agent-0309', name: 'Grok 4.20 Multi Agent 0309', accounts: 1 }],
+  }
+  const view = render(AgentProfile, { agent: { ...agent, model: { provider: 'anthropic', id: 'claude-fable-5-1' } }, tauri: { invoke }, inventory, onchange: vi.fn() })
+  const model = screen.getByRole('region', { name: 'Model' })
+  expect(within(model).getByRole('button', { name: 'Model: Claude Fable 5.1' })).toHaveTextContent('Claude Fable 5.1')
+  await view.rerender({ agent: { ...agent, model: { provider: 'muniment-router', id: 'xai/grok-4.20-multi-agent-0309' } } })
+  expect(within(model).getByRole('button', { name: 'Model: Grok 4.20 Multi Agent 0309' })).toBeInTheDocument()
+  // A model no connected provider lists still reads formatted.
+  await view.rerender({ agent: { ...agent, model: { provider: 'gone', id: 'xai/grok-4.20-multi-agent-0309' } }, inventory: { providers: [] } })
+  await fireEvent.click(within(model).getByRole('button', { name: 'Model: Grok 4.20 Multi Agent 0309' }))
+  expect(within(model).getByText('Grok 4.20 Multi Agent 0309 · this agent')).toBeInTheDocument()
+  expect(model).not.toHaveTextContent(/grok-4\.20|claude-fable/)
+})
+
 it('saves the picked permission mode alone', async () => {
   const { invoke, saved } = machine(agent)
   render(AgentProfile, { agent, tauri: { invoke }, catalog, onchange: vi.fn() })

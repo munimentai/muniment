@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { PROVIDERS, catalogProvider, connectableProviders, currentModel, currentModelAvailable, methodLabel, modelChipLabel, pickerGroups, providerName, routerHidden, searchProviders, sourceTag } from './provider-catalog.js'
+import { PROVIDERS, catalogProvider, connectableProviders, currentModel, currentModelAvailable, methodLabel, modelChipLabel, modelDisplayName, pickerGroups, providerName, routerHidden, searchProviders, sourceTag } from './provider-catalog.js'
 
 const inventory = {
   providers: [
@@ -265,5 +265,31 @@ describe('model names in the picker', () => {
     }
     const labels = pickerGroups(named).flatMap((group) => group.models.map((model) => model.label))
     expect(labels).toEqual(expect.arrayContaining(['gpt-oss 20B', 'GPT-6 Astra']))
+  })
+})
+
+describe('model display names', () => {
+  const inventory = {
+    providers: [
+      { id: 'anthropic', name: 'Anthropic', source: 'oauth', models: [{ id: 'claude-fable-5-1' }] },
+      { id: 'custom-omlx', name: 'oMLX', source: 'custom', models: [{ id: 'gpt-oss-20b-MXFP4-Q8' }] },
+      { id: 'muniment-router', name: 'Router', source: 'router', models: [] },
+    ],
+    hidden: [], shown: [],
+    router_models: [{ id: 'xai/grok-4.20-multi-agent-0309', family: 'xai', model: 'grok-4.20-multi-agent-0309', name: 'Grok 4.20 Multi Agent 0309', accounts: 1 }],
+  }
+
+  it('names a model as its picker row and the composer chip do', () => {
+    expect(modelDisplayName(inventory, 'anthropic', 'claude-fable-5-1')).toBe('Claude Fable 5.1')
+    expect(modelDisplayName(inventory, 'muniment-router', 'xai/grok-4.20-multi-agent-0309')).toBe('Grok 4.20 Multi Agent 0309')
+    expect(modelDisplayName({ ...inventory, default_provider: 'anthropic', default_model: 'claude-fable-5-1' }, 'anthropic', 'claude-fable-5-1')).toBe(modelChipLabel({ ...inventory, default_provider: 'anthropic', default_model: 'claude-fable-5-1' }))
+    expect(modelDisplayName(inventory, 'custom-omlx', 'gpt-oss-20b-MXFP4-Q8')).toBe('gpt-oss-20b-MXFP4-Q8')
+  })
+
+  it('formats a model no row lists, without its provider folder', () => {
+    expect(modelDisplayName(null, 'anthropic', 'claude-fable-5-1')).toBe('Claude Fable 5.1')
+    expect(modelDisplayName(null, null, 'xai/grok-4.20-multi-agent-0309')).toBe('Grok 4.20 Multi Agent 0309')
+    expect(modelDisplayName(inventory, 'custom-omlx', 'Qwen3.6-35B-A3B-4bit')).toBe('Qwen3.6-35B-A3B-4bit')
+    expect(modelDisplayName(inventory, 'anthropic', '')).toBeNull()
   })
 })

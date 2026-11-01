@@ -14,6 +14,7 @@
   import { agentColor, newAvatar } from './agent-avatar.js'
   import { runActive, templateNote, whenLabel } from './agent-labels.js'
   import { modelThinking, thinkingLabel } from './thinking-level.js'
+  import { modelDisplayName } from './provider-catalog.js'
   import { agentMachine, agentRequest } from '../agents/agent-runtime.js'
   import { emptyCatalog, missingSkills } from '../agents/agent-tools.js'
   import { findMode, loadModes, modeIcon } from '../agents/permission-modes.js'
@@ -76,6 +77,8 @@
     return { value: member.runtime_id, label: machine.name, icon: kindIcon(machine), tag: member.online ? '' : 'Offline' }
   }))
   const projectName = $derived(projects.find(([id]) => id === agent.projectId)?.[1] ?? '')
+  // The agent's model by the name the composer and the picker give it.
+  const modelText = $derived(agent.model ? modelDisplayName(inventory, agent.model.provider, agent.model.id) : 'Default model')
   const thinking = $derived(agent.model ? modelThinking(inventory, { provider: agent.model.provider, model: agent.model.id }) : null)
   const thinkingLevel = $derived(thinking ? (thinking.levels.includes(agent.model.thinking) ? agent.model.thinking : thinking.level) : null)
   // The conversations the history does not reach, such as a chat with the agent.
@@ -231,7 +234,7 @@
       <section class="setting" aria-label="Model" data-profile-menu={menu === 'thinking' ? 'thinking' : 'model'}>
         <h3>Model</h3>
         <span class="control">
-          <ComposerMenuButton menu="agent-model" open={menu === 'model'} chevrons haspopup="dialog" label={`Model: ${agent.model ? agent.model.id : 'Default model'}`} text={agent.model ? agent.model.id : 'Default model'} disabled={busy} onclick={() => toggleMenu('model')}>{#snippet icon()}{#if agent.model}<ProviderLogo provider={agent.model.provider} size={14} />{:else}<LucideIcon name="cpu" size={14} />{/if}{/snippet}</ComposerMenuButton>
+          <ComposerMenuButton menu="agent-model" open={menu === 'model'} chevrons haspopup="dialog" label={`Model: ${modelText}`} text={modelText} disabled={busy} onclick={() => toggleMenu('model')}>{#snippet icon()}{#if agent.model}<ProviderLogo provider={agent.model.provider} size={14} />{:else}<LucideIcon name="cpu" size={14} />{/if}{/snippet}</ComposerMenuButton>
           {#if thinking}<ComposerMenuButton menu="agent-thinking" open={menu === 'thinking'} label={`Thinking level: ${thinkingLabel(thinkingLevel)}`} text={thinkingLabel(thinkingLevel)} disabled={busy} onclick={() => toggleMenu('thinking')}>{#snippet icon()}<LucideIcon name="brain" size={14} />{/snippet}</ComposerMenuButton>{/if}
         </span>
         {#if menu === 'model'}<ModelPicker {inventory} current={agent.model ? { provider: agent.model.provider, model: agent.model.id } : null} source="this agent" actions={agent.model ? [{ id: 'default', label: 'Use the default model' }] : []} onaction={() => { void closeMenu(); void change({ model: null }) }} onchoose={chooseModel} {onvisibility} onmanage={() => { menu = null; onmanagemodels() }} onrouting={() => { menu = null; onmanagemodels() }} onclose={closeMenu} />{/if}

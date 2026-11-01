@@ -18,7 +18,7 @@ const summary = (extra = {}) => ({
   range: '7d', bucket: 'day',
   totals: { processed: 15_300_000, cached_input: 9_500_000, uncached_input: 4_600_000, output: 1_200_000, cache_hit_percent: 67.4, runs: 50, cost_usd: 12.5, unpriced_runs: 3 },
   series: [{ start_ms: NOW - 24 * HOUR, providers: { anthropic: amount(900, 0.2) } }, { start_ms: NOW, providers: { anthropic: amount(300, 0.1), openai: amount(600, 0.3) } }],
-  breakdown: { model: [{ key: 'anthropic/claude', label: 'claude', provider: 'anthropic', ...amount(1200, 0.3) }], agent: [{ key: '', label: '', ...amount(1200, 0.3) }], project: [], machine: [{ key: 'local', label: 'This computer', ...amount(1200, 0.3) }] },
+  breakdown: { model: [{ key: 'anthropic/claude-fable-5-1', label: 'claude-fable-5-1', provider: 'anthropic', ...amount(1200, 0.3) }], agent: [{ key: '', label: '', ...amount(1200, 0.3) }], project: [], machine: [{ key: 'local', label: 'This computer', ...amount(1200, 0.3) }] },
   providers: ['anthropic', 'openai'],
   accounts: [
     account([limit(), limit({ kind: 'weekly', remaining_percent: 80, resets_at_ms: NOW + 50 * HOUR }), limit({ kind: 'weekly', scope: 'Fable', remaining_percent: 12, status: 'low' })]),
@@ -49,6 +49,10 @@ describe('usage words', () => {
     expect(dollars(0.004)).toBe('<$0.01')
     expect(dollars(1234.5)).toBe('$1,234.50')
     expect(rowLabel({ key: '' }, 'agent')).toBe('No agent')
+    // A model row reads by the composer's name for the model, not its id.
+    expect(rowLabel({ key: 'xai/grok-4.20-multi-agent-0309', label: 'grok-4.20-multi-agent-0309', provider: 'xai' }, 'model')).toBe('Grok 4.20 Multi Agent 0309')
+    expect(rowLabel({ key: 'anthropic/claude-fable-5-1', label: 'claude-fable-5-1', provider: 'anthropic' }, 'model', { providers: [{ id: 'anthropic', name: 'Anthropic', source: 'oauth', models: [{ id: 'claude-fable-5-1', name: 'Claude Fable 5.1 (preview)' }] }] })).toBe('Claude Fable 5.1 (preview)')
+    expect(rowLabel({ key: 'local', label: 'This computer' }, 'machine')).toBe('This computer')
     expect(rowLabel({ key: '' }, 'project')).toBe('No project')
     expect(providerLabel('anthropic')).toBe('Anthropic')
     expect(totalTiles(summary().totals, 'cost')[0]).toEqual({ label: 'API estimate', value: '$12.50' })
@@ -145,7 +149,8 @@ describe('Usage page', () => {
     await fireEvent.click(screen.getByRole('radio', { name: 'Tokens' }))
     expect(screen.getByText('15.3M')).toBeInTheDocument()
     expect(screen.getAllByRole('img').some((bar) => bar.getAttribute('aria-label')?.includes('OpenAI'))).toBe(true)
-    expect(screen.getByRole('list', { name: 'Usage by model' })).toHaveTextContent('claude')
+    expect(screen.getByRole('list', { name: 'Usage by model' })).toHaveTextContent('Claude Fable 5.1')
+    expect(screen.getByRole('list', { name: 'Usage by model' })).not.toHaveTextContent('claude-fable-5-1')
     await fireEvent.click(screen.getByRole('radio', { name: 'Agent' }))
     expect(screen.getByRole('list', { name: 'Usage by agent' })).toHaveTextContent('No agent')
     await fireEvent.click(screen.getByRole('radio', { name: 'Cost' }))

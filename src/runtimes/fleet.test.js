@@ -184,6 +184,9 @@ describe('the audit log', () => {
     const mcp = auditRow({ kind: 'sealed', actor_runtime: LAPTOP, record: { secret_id: `mcp:${LAPTOP}`, keys: ['mcp:github', 'mcp-oauth:linear'] } }, swarm)
     expect(mcp.detail).toBe('MCP connections of This computer · github, linear')
     expect(auditRow({ kind: 'sealed', actor_runtime: LAPTOP, record: { keys: ['endpoint:ollama', 'decision:01a17921-b66d-77e8-bc7e-815e81b4df15', 'other:0193aaaa-0000-7000-8000-000000000000'] } }, swarm).detail).toBe('Ollama, a decision model, a connection')
+    // A decision model connection named by its model's id reads by the model's display name.
+    const byId = [{ id: '01a17921-b66d-77e8-bc7e-815e81b4df15', name: 'claude-fable-5-1', connection: { kind: 'key', model: 'claude-fable-5-1' } }]
+    expect(auditRow({ kind: 'sealed', actor_runtime: LAPTOP, record: { secret_id: `keys:${LAPTOP}`, keys: ['decision:01a17921-b66d-77e8-bc7e-815e81b4df15'] } }, swarm, accounts, byId).detail).toBe('Keys of This computer · Claude Fable 5.1')
     for (const row of [keys, mcp]) expect(row.detail).not.toMatch(/(decision|search|mcp|mcp-oauth|models|router|endpoint|keys):/)
   })
 
