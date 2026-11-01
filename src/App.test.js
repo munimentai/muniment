@@ -7756,8 +7756,8 @@ it('does not offer another-model retry in a completed reply', async () => {
       runId: 'run-thinking', phase: 'thinking', text: '', prompt: 'A question',
       receipt: null, toolActivity: [], resumable: false,
     }])
-    const chip = await screen.findByText('Routing')
-    const mark = screen.getByLabelText('Routing')
+    const chip = await screen.findByText('Starting')
+    const mark = screen.getByLabelText('Starting')
     expect(mark.querySelector('path.torso').getAttribute('d')).toMatch(/^M160 0 H274/)
     expect(mark.querySelector('path.accent')).toBeInTheDocument()
 
@@ -7787,7 +7787,7 @@ it('does not offer another-model retry in a completed reply', async () => {
       runId: 'run-tool', phase: 'thinking', text: '', prompt: 'A question',
       receipt: null, toolActivity: [], resumable: false,
     }])
-    const chip = await screen.findByText('Routing')
+    const chip = await screen.findByText('Starting')
     chatListener({ payload: {
       runId: 'run-tool', phase: 'thinking', text: '', turnStarted: true,
       receipt: null, toolActivity: [{ effectId: 'e1', displayName: 'grep', status: 'running' }], pendingPermission: null,
@@ -7808,7 +7808,7 @@ it('does not offer another-model retry in a completed reply', async () => {
         runId: 'run-reduced', phase: 'thinking', text: '', prompt: 'A question',
         receipt: null, toolActivity: [], resumable: false,
       }])
-      const chip = await screen.findByText('Routing')
+      const chip = await screen.findByText('Starting')
 
       chatListener({ payload: {
         runId: 'run-reduced', phase: 'complete', text: 'First token',

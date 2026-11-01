@@ -183,7 +183,7 @@ export function toolVerb(name = '') {
   return 'Working'
 }
 
-const stageWords = { 'choosing-model': 'Choosing model', 'waiting-for-account': 'Waiting for account', fallback: 'Trying another route', routing: 'Routing', thinking: 'Thinking', writing: 'Writing' }
+const stageWords = { 'choosing-model': 'Choosing model', 'waiting-for-account': 'Waiting for account', fallback: 'Trying another route', routing: 'Starting', thinking: 'Thinking', writing: 'Writing' }
 
 export function stageWord(stage = 'routing') {
   if (typeof stage === 'string' && stage.startsWith('tool:')) {
@@ -196,7 +196,7 @@ export function stageWord(stage = 'routing') {
 }
 
 // A projection names what the run does now: the tool that runs, text that grew
-// since the last projection, or the thought between them. Routing holds until
+// since the last projection, or the thought between them. Starting holds until
 // the runtime reports the started turn.
 export function runStage(previous, next) {
   const running = [...(next.toolActivity ?? [])].reverse().find((tool) => tool.status === 'running')

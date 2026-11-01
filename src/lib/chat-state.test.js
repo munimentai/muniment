@@ -92,9 +92,9 @@ describe('chat composer and projection', () => {
 
   it('tracks the in-flight word from the projections: Routing, Thinking, the tool verb, Writing', () => {
     let run = { id: 'r', phase: 'thinking', text: '' }
-    expect(stageWord(run.stage)).toBe('Routing')
+    expect(stageWord(run.stage)).toBe('Starting')
     run = applyChatEvent(run, { runId: 'r', phase: 'thinking', text: '', toolActivity: [] })
-    expect(stageWord(run.stage)).toBe('Routing')
+    expect(stageWord(run.stage)).toBe('Starting')
     run = applyChatEvent(run, { runId: 'r', phase: 'thinking', text: '', turnStarted: true, toolActivity: [] })
     expect(stageWord(run.stage)).toBe('Thinking')
     run = applyChatEvent(run, { runId: 'r', phase: 'thinking', text: '', turnStarted: true, toolActivity: [{ effectId: 'e1', displayName: 'bash', status: 'running' }] })
@@ -119,7 +119,7 @@ describe('chat composer and projection', () => {
     run = applyChatEvent(run, { runId: 'r', phase: 'acquiring-pi', text: '', routingStage: 'folder-access', toolActivity: [] })
     expect(stageWord(run.stage)).toBe('macOS is asking for access to this folder. Choose Allow.')
     run = applyChatEvent(run, { runId: 'r', phase: 'thinking', text: '', routingStage: null, toolActivity: [] })
-    expect(stageWord(run.stage)).toBe('Routing')
+    expect(stageWord(run.stage)).toBe('Starting')
   })
 
   it('names every tool by a plain verb and never by a vendor, a model or a harness', () => {
@@ -132,8 +132,8 @@ describe('chat composer and projection', () => {
     expect(toolVerb('mcp')).toBe('Calling a server')
     expect(toolVerb('mcp__github__search')).toBe('Calling github')
     expect(toolVerb('unknown_tool')).toBe('Working')
-    expect(stageWord(undefined)).toBe('Routing')
-    for (const word of ['Routing', 'Thinking', 'Writing', toolVerb('subagent')]) expect(word).not.toMatch(/pi|muniment|claude|openai|gpt/i)
+    expect(stageWord(undefined)).toBe('Starting')
+    for (const word of ['Starting', 'Thinking', 'Writing', toolVerb('subagent')]) expect(word).not.toMatch(/pi|muniment|claude|openai|gpt/i)
   })
 
   it('moves thinking to streaming and removes signal on every terminal event', () => {
