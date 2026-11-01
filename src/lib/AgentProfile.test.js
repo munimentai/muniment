@@ -552,3 +552,22 @@ it('opens at its delete confirmation when a card asks to delete the agent', asyn
   await view.rerender({ deleteAsked: 2 })
   expect(await screen.findByRole('button', { name: 'Confirm delete' })).toBeInTheDocument()
 })
+
+it('scrolls a card\'s delete confirmation into view and focuses its safe choice', async () => {
+  const { invoke } = machine()
+  const scrolled = []
+  const scrollIntoView = vi.fn(function (options) { scrolled.push([this.getAttribute('aria-label'), options]) })
+  Element.prototype.scrollIntoView = scrollIntoView
+  try {
+    const view = render(AgentProfile, { agent, tauri: { invoke }, onchange: vi.fn(), ondelete: vi.fn() })
+    await view.rerender({ deleteAsked: 1 })
+    const confirm = await screen.findByRole('group', { name: 'Delete agent' })
+    await waitFor(() => expect(scrolled).toEqual([['Delete agent', { block: 'center' }]]))
+    expect(document.activeElement).toBe(within(confirm).getByRole('button', { name: 'Cancel' }))
+    // A second ask while the confirmation shows scrolls to it again.
+    document.activeElement.blur()
+    await view.rerender({ deleteAsked: 2 })
+    await waitFor(() => expect(scrolled).toHaveLength(2))
+    expect(document.activeElement).toBe(within(confirm).getByRole('button', { name: 'Cancel' }))
+  } finally { delete Element.prototype.scrollIntoView }
+})

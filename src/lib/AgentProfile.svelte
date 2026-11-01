@@ -87,11 +87,20 @@
     return threads.filter((thread) => !thread.primary && !reached.has(thread.thread_id))
   })
   let instructionsOpen = $state(false)
-  // A card's Delete opens the profile at this confirmation.
+  // A card's Delete opens the profile at this confirmation. The profile can
+  // draw its body after the ask, so the confirmation scrolls into view and
+  // its safe choice takes focus once it shows.
+  let confirmBox = $state()
+  let revealDelete = $state(0)
   $effect(() => {
     if (!deleteAsked) return
-    untrack(() => { deleting = true })
-    void tick().then(() => panel?.querySelector('[aria-label="Delete agent"]')?.scrollIntoView?.({ block: 'nearest' }))
+    untrack(() => { deleting = true; revealDelete = deleteAsked })
+  })
+  $effect(() => {
+    if (!confirmBox || !revealDelete) return
+    untrack(() => { revealDelete = 0 })
+    confirmBox.scrollIntoView?.({ block: 'center' })
+    confirmBox.querySelector('[data-safe]')?.focus({ preventScroll: true })
   })
   const fieldLabel = (field) => field === 'label' ? 'job title' : field
 
@@ -299,9 +308,9 @@
         {#if menu === 'export'}<ChoiceMenu label="Export agent" options={[{ value: 'muniment', label: 'Muniment agent file', icon: 'download' }, { value: 'grok_bot', label: 'Grok Bot notes', icon: 'file-text' }]} onchoose={chooseExport} onclose={closeMenu} />{/if}
       </div>
       {#if deleting}
-        <div class="confirm" role="group" aria-label="Delete agent">
+        <div class="confirm" role="group" aria-label="Delete agent" bind:this={confirmBox}>
           <label class="check"><input type="checkbox" bind:checked={removeMemory} disabled={busy} />Also delete its memory</label>
-          <div class="actions"><Button variant="danger" disabled={busy} onclick={() => action(async () => { await agentRequest(tauri, agent.runtimeId, 'agent.delete', { id: agent.id, remove_memory: removeMemory }); ondelete() })}>Confirm delete</Button><Button disabled={busy} onclick={() => { deleting = false; removeMemory = false }}>Cancel</Button></div>
+          <div class="actions"><Button variant="danger" disabled={busy} onclick={() => action(async () => { await agentRequest(tauri, agent.runtimeId, 'agent.delete', { id: agent.id, remove_memory: removeMemory }); ondelete() })}>Confirm delete</Button><Button data-safe disabled={busy} onclick={() => { deleting = false; removeMemory = false }}>Cancel</Button></div>
         </div>
       {:else}<div class="delete-row"><Button variant="danger" icon="trash-2" disabled={busy || runActive(run?.status)} onclick={() => { deleting = true }}>Delete agent</Button></div>{/if}
     </div>
