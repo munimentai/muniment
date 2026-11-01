@@ -174,11 +174,18 @@ export async function nameFirstThread(context, complete) {
 
 export default function (pi) {
   installBunStreamReleaseFix()
+  // Naming runs beside the reply, so the first turn starts at once. The run
+  // ends only once naming settles, inside its own bound, so the title is
+  // saved while the runtime still answers the run's requests.
+  let naming = null
   pi.on('before_agent_start', async (event, context) => {
     if (context?.model) {
-      await nameFirstThread(context, completeSimple)
+      const pending = nameFirstThread(context, completeSimple).catch(() => {})
+      naming = pending
+      void pending.finally(() => { if (naming === pending) naming = null })
     }
     return { systemPrompt: neutralSystemPrompt(event.systemPrompt) }
   })
+  pi.on('agent_end', async () => { await naming })
   pi.on('before_provider_request', (event) => neutralPayload(event.payload))
 }

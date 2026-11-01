@@ -1260,9 +1260,15 @@ pub(crate) fn complete(
         session.failures = failures.min(100);
     }
     let started = std::time::Instant::now();
-    state
-        .progress
-        .stage(progress, "choosing-model", (state.now_ms)());
+    let requested = wire::requested_model(request).unwrap_or(config::AUTO_MODEL);
+    // A turn that names its model runs no routing, so it reports no routing
+    // stage until it falls back to another account.
+    let routed = requested == config::AUTO_MODEL;
+    if routed {
+        state
+            .progress
+            .stage(progress, "choosing-model", (state.now_ms)());
+    }
     let run_budget = match hooks.budget() {
         Ok(budget) => budget,
         Err((status, body)) => {
@@ -1284,7 +1290,6 @@ pub(crate) fn complete(
         );
         return;
     }
-    let requested = wire::requested_model(request).unwrap_or(config::AUTO_MODEL);
     // Endpoint, capability, context and budget limits run before any
     // classifier or model receives text.
     let config = super::constraints::filter(
@@ -1512,7 +1517,7 @@ pub(crate) fn complete(
                 )
             {
                 state.progress.stage(progress, "fallback", (state.now_ms)());
-            } else {
+            } else if routed {
                 state
                     .progress
                     .stage(progress, "waiting-for-account", (state.now_ms)());
@@ -2555,6 +2560,29 @@ mod tests {
             "stream": stream,
             "messages": [{ "role": "user", "content": "Why did the build fail?" }]
         })
+    }
+
+    #[test]
+    fn a_turn_that_names_its_model_reports_no_routing_stage() {
+        let agent = agent_dir();
+        let (url, _) = upstream(vec![(200, answer("hello", 1, 1), false)]);
+        config::save(&agent, &config(vec![account("a", &url)])).unwrap();
+        let handle = start_with_clock(agent, fixed_clock).unwrap();
+        let endpoint = handle.endpoint();
+        let id = uuid::Uuid::new_v4().to_string();
+        ureq::post(&format!("{}/chat/completions", endpoint.base_url()))
+            .set("authorization", &format!("Bearer {}", endpoint.token))
+            .set("x-muniment-routing-id", &id)
+            .send_json(turn("fast", false))
+            .unwrap()
+            .into_string()
+            .unwrap();
+        let path = format!("/v1/routing-progress/{id}");
+        let (status, body) = call(endpoint, "GET", &path, None, &endpoint.token);
+        assert_eq!(status, 200);
+        let snapshot: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(snapshot["stages"], json!(["thinking"]));
+        assert_eq!(snapshot["done"], true);
     }
 
     #[test]
