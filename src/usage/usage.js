@@ -35,6 +35,15 @@ export function machineRefs(runtimeList) {
   }))
 }
 
+// The note for a machine that failed to answer. Core counts the copies of
+// its runs that the machines that answer hold, under a row of its own.
+export function failedNote(entry, summary) {
+  const counted = (summary?.breakdown?.machine ?? []).some((row) => row.key === entry.id && row.runs > 0)
+  return counted
+    ? `${entry.name} did not answer. The totals count the copies of its runs that other machines hold.`
+    : `${entry.name} did not answer. The totals leave it out.`
+}
+
 // Each paired machine that does not answer, by its Machines list name. Core
 // counts its runs from the copies the machines that answer hold.
 export function offlineMembers(runtimeList) {

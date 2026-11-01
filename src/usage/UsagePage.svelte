@@ -18,7 +18,7 @@
   import UsageBreakdown from './UsageBreakdown.svelte'
   import { accountCache } from '../lib/account-cache.js'
   import { LOCAL_RUNTIME_ID } from '../runtimes/runtimes.js'
-  import { BREAKDOWNS, USAGE_RANGES, USAGE_VIEWS, machineRefs, offlineMembers, providerOptions, readUsage, totalTiles } from './usage.js'
+  import { BREAKDOWNS, USAGE_RANGES, USAGE_VIEWS, failedNote, machineRefs, offlineMembers, providerOptions, readUsage, totalTiles } from './usage.js'
 
   let { tauri, runtimeList = null, folderAccess = null, inventory = null, onconnect = null } = $props()
   let view = $state('limits')
@@ -90,7 +90,7 @@
     </div>
 
     {#if error}<p class="note error" role="alert">{error}</p>{/if}
-    {#each failed as entry (entry.id)}<p class="note" role="status"><LucideIcon name="globe-off" size={14} />{entry.id === LOCAL_RUNTIME_ID && folderAccess ? folderAccess.message : `${entry.name} did not answer. The totals leave it out.`}</p>{/each}
+    {#each failed as entry (entry.id)}<p class="note" role="status"><LucideIcon name="globe-off" size={14} />{entry.id === LOCAL_RUNTIME_ID && folderAccess ? folderAccess.message : failedNote(entry, summary)}</p>{/each}
 
     {#if !summary && !error}
       <p class="note" role="status">Reading usage…</p>

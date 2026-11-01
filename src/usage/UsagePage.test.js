@@ -5,7 +5,7 @@ import UsagePage from './UsagePage.svelte'
 import LimitBanner from './LimitBanner.svelte'
 import LimitCard from './LimitCard.svelte'
 import { machineRows } from '../runtimes/machines.js'
-import { composerLimit, compactTokens, dollars, isUsageShortcut, machineRefs, meterLevel, providerLabel, resetsIn, rowLabel, totalTiles, unmeteredSubtitle, windowLabel } from './usage.js'
+import { composerLimit, compactTokens, dollars, failedNote, isUsageShortcut, machineRefs, meterLevel, providerLabel, resetsIn, rowLabel, totalTiles, unmeteredSubtitle, windowLabel } from './usage.js'
 
 afterEach(cleanup)
 
@@ -125,6 +125,15 @@ describe('Usage page', () => {
     // The page shows no meter legend.
     expect(screen.queryByText(/75% or more/)).not.toBeInTheDocument()
     expect(screen.getByRole('status')).toHaveTextContent('Build box did not answer. The totals leave it out.')
+  })
+
+  it('says the totals count the copies of a silent machine that other machines hold', async () => {
+    const box = { id: 'box', name: 'Build box', state: 'error', error: 'timeout' }
+    const counted = summary({ breakdown: { ...summary().breakdown, machine: [{ key: 'local', label: 'This computer', ...amount(1200, 0.3) }, { key: 'box', label: 'Build box (did not answer)', ...amount(300, 0.1) }] } })
+    expect(failedNote(box, counted)).toBe('Build box did not answer. The totals count the copies of its runs that other machines hold.')
+    expect(failedNote(box, summary())).toBe('Build box did not answer. The totals leave it out.')
+    render(UsagePage, { tauri: { invoke: vi.fn(async () => counted) }, runtimeList })
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Build box did not answer. The totals count the copies of its runs that other machines hold.'))
   })
 
   it('names a pending folder prompt in place of a silent computer', async () => {
