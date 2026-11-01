@@ -60,7 +60,7 @@ void muniment_cef_bounds(void *handle, double x, double y, double width, double 
 // A native timer runs outside Tao's callback lock. CEF can then dispatch menu
 // actions without reentering the callback that queued its work.
 void muniment_cef_start_pump(void (*callback)(void)) {
-    pumpTimer = [NSTimer timerWithTimeInterval:0.01 repeats:YES block:^(NSTimer *timer) {
+    pumpTimer = [NSTimer timerWithTimeInterval:0.01 repeats:YES block:^(NSTimer * __unused timer) {
         if (pumping) return;
         pumping = YES;
         @try { callback(); } @finally { pumping = NO; }
