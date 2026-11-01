@@ -152,7 +152,7 @@ impl MacosAttachRouteReader for NativeMacosAttachRouteReader<'_> {
     }
 
     fn peer_closed(&self) -> bool {
-        self.peer_closed.get()
+        self.peer_closed.get() || peer_sent_end_of_stream(self.stream)
     }
 
     fn code_check_diagnostic(&self) -> serde_json::Value {
@@ -172,6 +172,22 @@ impl MacosAttachRouteReader for NativeMacosAttachRouteReader<'_> {
             self.code_check.borrow()
         );
     }
+}
+
+/// Whether the peer closed with nothing unread, read without consuming a byte.
+/// A peer that sent a frame before it closed still has bytes to read.
+fn peer_sent_end_of_stream(stream: &UnixStream) -> bool {
+    let mut byte = 0_u8;
+    // SAFETY: the descriptor and one-byte buffer remain valid for this call.
+    let read = unsafe {
+        libc::recv(
+            stream.as_raw_fd(),
+            (&mut byte as *mut u8).cast(),
+            1,
+            libc::MSG_PEEK | libc::MSG_DONTWAIT,
+        )
+    };
+    read == 0
 }
 
 /// `audit_token_t` from <bsm/audit.h>: eight 32-bit words.
@@ -721,6 +737,27 @@ int main(int argc, char **argv) {
             MacosAttachConnectionRoute::Companion { peer_pid: 0 }
         );
         assert!(!reader.code_check.borrow().audit_token);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_probe_that_closes_after_the_pid_read_is_closed_and_a_frame_is_not() {
+        use std::io::Write;
+
+        let (client, server, directory) = connected_pair();
+        let reader = NativeMacosAttachRouteReader::new(&server);
+        assert!(reader.peer_process().is_ok());
+        assert!(!reader.peer_closed());
+        drop(client);
+        assert!(reader.peer_closed());
+        std::fs::remove_dir_all(directory).unwrap();
+
+        let (mut client, server, directory) = connected_pair();
+        let reader = NativeMacosAttachRouteReader::new(&server);
+        assert!(reader.peer_process().is_ok());
+        client.write_all(b"frame").unwrap();
+        drop(client);
+        assert!(!reader.peer_closed());
         std::fs::remove_dir_all(directory).unwrap();
     }
 

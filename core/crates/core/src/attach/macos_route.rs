@@ -26,8 +26,9 @@ pub trait MacosAttachRouteReader {
     /// the desktop binary after it connects never matches.
     fn peer_code_matches(&self, expected_desktop_executable: &Path) -> bool;
 
-    /// Whether the peer closed before its process could be read, as a
-    /// readiness probe does when it connects and closes without a frame.
+    /// Whether the peer closed without sending a frame, as a readiness probe
+    /// does. Another runtime's bind connects once to learn whether the
+    /// endpoint is live, then closes.
     fn peer_closed(&self) -> bool {
         false
     }
@@ -80,12 +81,15 @@ pub fn name_macos_attach_connection_route(
     {
         MacosAttachConnectionRoute::DesktopClient { peer_pid }
     } else {
-        reader.log_companion_fallback(
-            peer_pid,
-            path_match,
-            Some(&peer_image_path),
-            expected_desktop_executable,
-        );
+        // A probe that closed sends nothing to route, so its failed check logs nothing.
+        if !reader.peer_closed() {
+            reader.log_companion_fallback(
+                peer_pid,
+                path_match,
+                Some(&peer_image_path),
+                expected_desktop_executable,
+            );
+        }
         MacosAttachConnectionRoute::Companion { peer_pid }
     }
 }
@@ -242,6 +246,44 @@ mod tests {
                     expected: expected.to_owned(),
                 })
             );
+        }
+    }
+
+    #[test]
+    fn a_probe_that_closed_after_its_pid_read_logs_no_failed_check() {
+        struct Reader {
+            closed: bool,
+            logged: std::cell::Cell<bool>,
+        }
+        impl MacosAttachRouteReader for Reader {
+            fn peer_process(&self) -> Result<(u32, PathBuf), MacosPeerReadError> {
+                Ok((
+                    91743,
+                    PathBuf::from("/Applications/Muniment.app/Contents/Library/LaunchServices/muniment-runtime"),
+                ))
+            }
+            fn peer_code_matches(&self, _: &Path) -> bool {
+                false
+            }
+            fn peer_closed(&self) -> bool {
+                self.closed
+            }
+            fn log_companion_fallback(&self, _: u32, _: bool, _: Option<&Path>, _: &Path) {
+                self.logged.set(true);
+            }
+        }
+        let bundle = Bundle::new();
+        for closed in [true, false] {
+            let reader = Reader {
+                closed,
+                logged: std::cell::Cell::new(false),
+            };
+            assert_eq!(
+                name_macos_attach_connection_route(&reader, &bundle.executable),
+                MacosAttachConnectionRoute::Companion { peer_pid: 91743 }
+            );
+            // Only a peer that stays to talk logs the failed check.
+            assert_eq!(reader.logged.get(), !closed);
         }
     }
 
