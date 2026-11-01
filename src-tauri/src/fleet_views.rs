@@ -76,13 +76,28 @@ fn without_zone_again(
         .collect()
 }
 
-/// Usage on the named machines, joined by core.
+/// Usage on the named machines, joined by core. `machine` is the one
+/// machine the filter names, and `members` names the fleet members the
+/// window does not ask, whose runs count from the copies the others hold.
 #[tauri::command]
 pub async fn usage_summary(
     app: tauri::AppHandle,
     machines: Vec<MachineRef>,
     body: Value,
+    machine: Option<String>,
+    members: Option<Vec<MachineRef>>,
 ) -> Result<Value, String> {
+    let scope = usage_report::Scope {
+        machine,
+        members: members
+            .unwrap_or_default()
+            .into_iter()
+            .map(|member| usage_report::Member {
+                id: member.id,
+                name: member.name,
+            })
+            .collect(),
+    };
     tauri::async_runtime::spawn_blocking(move || {
         let answers = ask_all(&app, &machines, "usage.summary", &body);
         let answers = without_zone_again(&body, answers, |index, body| {
@@ -105,8 +120,12 @@ pub async fn usage_summary(
                 }),
             })
             .collect();
-        serde_json::to_value(usage_report::merge(answers, Utc::now().timestamp_millis()))
-            .map_err(|_| "Usage could not be shown.".to_string())
+        serde_json::to_value(usage_report::merge_scoped(
+            answers,
+            &scope,
+            Utc::now().timestamp_millis(),
+        ))
+        .map_err(|_| "Usage could not be shown.".to_string())
     })
     .await
     .map_err(|_| crate::auth::background_service_error())?

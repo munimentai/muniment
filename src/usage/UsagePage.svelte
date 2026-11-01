@@ -18,7 +18,7 @@
   import UsageBreakdown from './UsageBreakdown.svelte'
   import { accountCache } from '../lib/account-cache.js'
   import { LOCAL_RUNTIME_ID } from '../runtimes/runtimes.js'
-  import { BREAKDOWNS, USAGE_RANGES, USAGE_VIEWS, machineRefs, providerOptions, readUsage, totalTiles } from './usage.js'
+  import { BREAKDOWNS, USAGE_RANGES, USAGE_VIEWS, machineRefs, offlineMembers, providerOptions, readUsage, totalTiles } from './usage.js'
 
   let { tauri, runtimeList = null, folderAccess = null, inventory = null, onconnect = null } = $props()
   let view = $state('limits')
@@ -31,18 +31,21 @@
   let error = $state('')
   let now = $state(Date.now())
   const machines = $derived(machineRefs(runtimeList))
-  const asked = $derived(machine ? machines.filter((entry) => entry.id === machine) : machines)
-  const machineOptions = $derived([{ value: '', label: 'All machines' }, ...machines.map((entry) => ({ value: entry.id, label: entry.name }))])
+  // A machine that does not answer counts from the copies the others hold,
+  // so its filter asks every machine that answers.
+  const members = $derived(offlineMembers(runtimeList))
+  const asked = $derived(machines.some((entry) => entry.id === machine) ? machines.filter((entry) => entry.id === machine) : machines)
+  const machineOptions = $derived([{ value: '', label: 'All machines' }, ...machines.map((entry) => ({ value: entry.id, label: entry.name })), ...members.map((entry) => ({ value: entry.id, label: `${entry.name} (offline)` }))])
   const failed = $derived((summary?.machines ?? []).filter((entry) => entry.state !== 'ok'))
   const rows = $derived(breakdown === 'machine' ? summary?.breakdown?.machine ?? [] : summary?.breakdown?.[breakdown] ?? [])
-  const breakdowns = $derived(machines.length > 1 ? BREAKDOWNS : BREAKDOWNS.filter((entry) => entry.value !== 'machine'))
+  const breakdowns = $derived(machines.length + members.length > 1 ? BREAKDOWNS : BREAKDOWNS.filter((entry) => entry.value !== 'machine'))
   let request = 0
 
   async function refresh() {
     const ticket = ++request
     loading = true
     try {
-      const next = await readUsage(tauri, asked, { range, provider: provider || null })
+      const next = await readUsage(tauri, asked, { range, provider: provider || null, machine, members })
       if (ticket !== request) return
       summary = next
       error = ''
@@ -60,7 +63,7 @@
     await refresh()
   }
 
-  $effect(() => { void range; void provider; void asked.map((entry) => entry.id).join(); void refresh() })
+  $effect(() => { void range; void provider; void machine; void asked.map((entry) => entry.id).join(); void refresh() })
   onMount(() => {
     const poll = () => { if (!document.hidden) void refresh() }
     const timer = setInterval(poll, 60_000)

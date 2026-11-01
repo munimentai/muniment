@@ -93,7 +93,7 @@ describe('Usage page', () => {
     const invoke = vi.fn(async () => summary())
     render(UsagePage, { tauri: { invoke }, runtimeList })
     const card = await screen.findByRole('article', { name: 'Anthropic, sam@example.com · max' })
-    expect(invoke).toHaveBeenCalledWith('usage_summary', { machines: [{ id: 'local', name: 'This computer' }, { id: 'box', name: 'Build box' }], body: expect.objectContaining({ range: '7d' }) })
+    expect(invoke).toHaveBeenCalledWith('usage_summary', { machines: [{ id: 'local', name: 'This computer' }, { id: 'box', name: 'Build box' }], body: expect.objectContaining({ range: '7d' }), members: [{ id: 'studio', name: 'Studio' }] })
     expect(within(card).getByRole('heading', { name: 'Anthropic' })).toBeInTheDocument()
     expect(within(card).getAllByText('sam@example.com · max')).toHaveLength(1)
     expect(within(card).queryByRole('img')).not.toBeInTheDocument()
@@ -157,6 +157,23 @@ describe('Usage page', () => {
     expect(screen.getByText('API estimate', { selector: 'dt' })).toBeInTheDocument()
     await fireEvent.click(screen.getByRole('radio', { name: '30d' }))
     await vi.waitFor(() => expect(invoke).toHaveBeenLastCalledWith('usage_summary', expect.objectContaining({ body: expect.objectContaining({ range: '30d' }) })))
+  })
+
+  it('lists a machine that does not answer and counts it from the copies the others hold', async () => {
+    const invoke = vi.fn(async () => summary())
+    render(UsagePage, { tauri: { invoke }, runtimeList })
+    await screen.findByRole('article', { name: 'Anthropic, sam@example.com · max' })
+    await fireEvent.click(screen.getByRole('button', { name: 'Machine: All machines' }))
+    await fireEvent.click(screen.getByRole('menuitemradio', { name: 'Studio (offline)' }))
+    await vi.waitFor(() => expect(invoke).toHaveBeenLastCalledWith('usage_summary', {
+      machines: [{ id: 'local', name: 'This computer' }, { id: 'box', name: 'Build box' }],
+      body: expect.objectContaining({ range: '7d' }),
+      machine: 'studio',
+      members: [{ id: 'studio', name: 'Studio' }],
+    }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Machine: Studio (offline)' }))
+    await fireEvent.click(screen.getByRole('menuitemradio', { name: 'Build box' }))
+    await vi.waitFor(() => expect(invoke).toHaveBeenLastCalledWith('usage_summary', expect.objectContaining({ machines: [{ id: 'box', name: 'Build box' }], machine: 'box' })))
   })
 
   it('asks each account again on Refresh, then reads usage', async () => {

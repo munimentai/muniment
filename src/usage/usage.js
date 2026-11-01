@@ -35,13 +35,25 @@ export function machineRefs(runtimeList) {
   }))
 }
 
+// Each paired machine that does not answer, by its Machines list name. Core
+// counts its runs from the copies the machines that answer hold.
+export function offlineMembers(runtimeList) {
+  return (runtimeList?.runtimes ?? [])
+    .filter((runtime) => !runtime.local && runtime.id !== LOCAL_RUNTIME_ID && runtime.status !== 'online')
+    .map((runtime) => ({ id: runtime.id, name: machineName(runtime) }))
+}
+
 // One request through the window: each named machine answers and core joins them.
 // Days start at the shown zone's own midnight. A machine whose runtime
-// predates the zone answers at the offset alone.
-export function readUsage(tauri, machines, { range = '7d', provider = null } = {}) {
+// predates the zone answers at the offset alone. `machine` is the machine
+// filter, and `members` names the machines that do not answer.
+export function readUsage(tauri, machines, { range = '7d', provider = null, machine = '', members = [] } = {}) {
   const body = { range, utc_offset_minutes: zoneOffsetMinutes(), time_zone: displayZone() }
   if (provider) body.provider = provider
-  return tauri.invoke('usage_summary', { machines, body })
+  const args = { machines, body }
+  if (machine) args.machine = machine
+  if (members.length) args.members = members
+  return tauri.invoke('usage_summary', args)
 }
 
 // Each provider's bar color: its brand's own hue, a neutral for the rest.
