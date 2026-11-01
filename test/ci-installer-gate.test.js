@@ -196,7 +196,7 @@ describe('Core path tiers', () => {
     expect(smoke).toContain("- name: Shared core consumer tests\n        if: needs.changes.outputs.reuse != 'true' && (needs.changes.outputs.core_shared == 'true')")
     expect(smoke).toContain('--package muniment-cli --package muniment-runtime')
     expect(desktopCompile).toContain("    if: needs.changes.outputs.desktop == 'true' || needs.changes.outputs.core_shared == 'true'\n")
-    expect(desktopCompile).toContain("        if: needs.changes.outputs.desktop == 'true' || matrix.platform == 'linux'\n")
+    expect(desktopCompile).toContain("        if: matrix.platform == 'linux' || (matrix.platform == 'windows' && needs.changes.outputs.windows == 'true') || (matrix.platform == 'macos' && needs.changes.outputs.macos == 'true')\n")
   })
 
   it('checks the fixtures against the core exporters in core/', () => {
@@ -342,5 +342,43 @@ it.each([
       expect(routing.desktopPlatforms(scheduled)).toEqual([])
       expect(routing.boundaryChecks(routing.route(mirror, [file], { ...options, reuse: 'true' }).scheduled)).toEqual([])
     }
+  }
+})
+
+it('exports the native platform flags and gates each native preflight on its own flag', () => {
+  for (const mirror of routing.mirrors) {
+    const text = fs.readFileSync(path.join(root, mirror), 'utf8')
+    const changesJob = text.slice(text.indexOf('  changes:\n'), text.indexOf('  smoke:\n'))
+    expect(changesJob, mirror).toContain('windows: ${{ steps.changes.outputs.windows }}')
+    expect(changesJob, mirror).toContain('macos: ${{ steps.changes.outputs.macos }}')
+    expect(text.slice(text.indexOf('  desktop-compile:\n')), mirror)
+      .toContain("    if: needs.changes.outputs.desktop == 'true' || needs.changes.outputs.core_shared == 'true'\n")
+  }
+  expect(classifier).toContain('echo "windows=$windows"')
+  expect(classifier).toContain('echo "macos=$macos"')
+})
+
+it.each([
+  'src-tauri/tauri.conf.json', 'src-tauri/tauri.machine.conf.json', 'src-tauri/windows/per-machine.wxs',
+  'src-tauri/packaging/notes.txt', 'src-tauri/capabilities/default.json', '.github/build-linux.sh',
+  '.github/build-windows-installers.mjs', '.github/lib/windows-signing.mjs', '.github/upload-nightly-assets.mjs',
+  '.github/workflows/ci.yml', '.forgejo/workflows/ci.yml', 'test/e2e/spec.js', 'test/windows-installers.ps1',
+  'src-tauri/Cargo.lock',
+])('runs all three desktop preflights for %s alone', (file) => {
+  for (const mirror of routing.mirrors) {
+    const { outputs, scheduled } = routing.route(mirror, [file])
+    expect(outputs, mirror).toMatchObject({ desktop: 'true', windows: 'true', macos: 'true' })
+    expect(routing.desktopPlatforms(scheduled), mirror).toEqual(['linux', 'macos', 'windows'])
+  }
+})
+
+it.each([
+  ['src/lib/ModelAccounts.svelte', ['linux']],
+  ['src-tauri/src/keychain_macos.c', ['linux', 'macos']],
+  ['src-tauri/src/cef_windows.rs', ['linux', 'windows']],
+  ['core/crates/core/src/lib.rs', ['linux']],
+])('runs only the routed desktop preflights for %s', (file, expected) => {
+  for (const mirror of routing.mirrors) {
+    expect(routing.desktopPlatforms(routing.route(mirror, [file]).scheduled), mirror).toEqual(expected)
   }
 })

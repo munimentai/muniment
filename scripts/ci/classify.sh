@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Classify a diff between BASE and HEAD into the CI lane flags.
-# Prints the ten key=value lines. The workflow step appends them to
+# Prints the twelve key=value lines. The workflow step appends them to
 # GITHUB_OUTPUT. A pull request and a push with a known base classify their
 # diff. A dispatch, a new branch or a base outside the clone runs every lane.
 set -eu
@@ -21,6 +21,10 @@ desktop=false
 core_shared=false
 core_support=false
 installer=false
+# The Windows and macOS preflights run only for a change that can break
+# that platform's build. Linux runs whenever the desktop compile job runs.
+windows=false
+macos=false
 release_tooling=false
 release_only=true
 # A pull request and a push with a known base classify their diff. A
@@ -44,6 +48,8 @@ if [ "$classify" != true ]; then
   core_shared=true
   core_support=true
   installer=true
+  windows=true
+  macos=true
   release_only=false
 fi
 while IFS= read -r path; do
@@ -121,12 +127,42 @@ while IFS= read -r path; do
     src-tauri/tauri*.conf.json|src-tauri/windows/*|src-tauri/packaging/*|src-tauri/capabilities/*|.github/build-*.mjs|.github/build-*.sh|.github/lib/*|.github/upload-nightly-assets.mjs|.github/workflows/ci.yml|.forgejo/workflows/ci.yml|test/e2e/*|test/windows-installers.ps1)
       # The installer, packaging, workflow and e2e paths are the ones
       # the nightly cannot prove one merge later without a red run,
-      # so only these run the three-platform build on the PR.
+      # so only these build the installers on all three platforms on the PR.
       installer=true
+      ;;
+  esac
+  case "$path" in
+    src-tauri/Cargo.toml|src-tauri/Cargo.lock|src-tauri/build.rs|scripts/check-cef-windows.ps1|scripts/prepare-cef-macos.sh|.github/build-*)
+      # The manifest, lockfile, build script and build helpers feed every
+      # native build, and the CEF helpers stage each platform's browser runtime.
+      windows=true
+      macos=true
+      ;;
+    src-tauri/src/*)
+      # Shell sources route by their path under src-tauri/src. A platform
+      # name wins over the generic rules, so keychain_macos.c checks macOS
+      # only and cef_windows.rs checks Windows only. Other C sources and
+      # cef* files check both, and every other source checks Linux only.
+      source=${path#src-tauri/src/}
+      case "$source" in
+        *windows*|*macos*|*.m)
+          case "$source" in *windows*) windows=true ;; esac
+          case "$source" in *macos*|*.m) macos=true ;; esac
+          ;;
+        *.c|cef*|*/cef*)
+          windows=true
+          macos=true
+          ;;
+      esac
       ;;
   esac
 done < <(if [ "$classify" = true ]; then git diff --name-only --diff-filter=ACDMRT "$BASE_SHA" "$HEAD_SHA"; fi)
 [ "$release_tooling" = true ] || release_only=false
+# Every installer path builds the installers on all three platforms.
+if [ "$installer" = true ]; then
+  windows=true
+  macos=true
+fi
 # The workflow step appends these lines to GITHUB_OUTPUT. A direct call prints
 # the same lines, so either path yields one copy of each key.
 echo "release_tooling=$release_tooling"
@@ -139,3 +175,5 @@ echo "desktop=$desktop"
 echo "core_shared=$core_shared"
 echo "core_support=$core_support"
 echo "installer=$installer"
+echo "windows=$windows"
+echo "macos=$macos"
