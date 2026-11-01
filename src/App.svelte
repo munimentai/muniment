@@ -28,7 +28,7 @@
   import ToolCall from './activity/ToolCall.svelte'
   import { ruleInput } from './activity/tool-call.js'
   import { onMount, tick, untrack } from 'svelte'
-  import { workspaceOnNavigate } from './lib/workspace-panel-state.js'
+  import { profileOnNavigate, workspaceOnNavigate } from './lib/workspace-panel-state.js'
   import { awaitingFrom, keptInventory, loadInventory } from './lib/inventory-loader.js'
   import { getCurrentWebview } from '@tauri-apps/api/webview'
   import { getCurrentWindow, UserAttentionType } from '@tauri-apps/api/window'
@@ -526,6 +526,17 @@
   $effect(() => {
     const view = threadView
     untrack(() => { ({ panel: browserPanel, parked: parkedPanel } = workspaceOnNavigate({ panel: browserPanel, parked: parkedPanel }, view)) })
+  })
+  // The agent profile beside a thread comes back with that thread after a
+  // round trip to another page, unless a tool or a rail took its place.
+  let profileSide = { shown: null, parked: null }
+  $effect(() => {
+    const step = { threadView, threadId: currentThreadId, open: agentProfileOpen, switching: threadSwitching }
+    untrack(() => {
+      const next = profileOnNavigate(profileSide, step)
+      profileSide = { shown: next.shown, parked: next.parked }
+      if (next.restore && !browserPanel && railOccupant === null && profileAgent) { agentProfileOpen = true; agentResize.fit() }
+    })
   })
   // A page change or a hidden panel can leave focus on the hidden composer or
   // terminal, or on the body under the old caret. Two frames later, once the
@@ -3283,6 +3294,7 @@
   }
   async function showThread(threadId) {
     profileHeldFor = threadId
+    profileSide = { shown: null, parked: null }
     if ((threadId !== currentThreadId || freshThread) && !await chatController.openThread(threadId, true)) return false
     await tick()
     fullPage = null; agentsOpen = false; projectsOpen = false; artifactsOpen = false

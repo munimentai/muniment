@@ -4515,6 +4515,45 @@ describe('sidebar collapse', () => {
     expect(screen.getAllByRole('textbox', { name: 'Message' })).toHaveLength(1)
   })
 
+  it('opens the agent profile again when its thread shows after a round trip to Usage, and not beside another thread', async () => {
+    threadSummaryResult = [{ threadId: 'agent-thread', title: 'Scout chat', updatedAt: '2026-01-02T00:00:00Z' }, { threadId: 'ordinary-thread', title: 'Ordinary chat', updatedAt: '2026-01-01T00:00:00Z' }]
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args)
+      ? agentListAnswer([{ id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null }], { 'agent-1': 'agent-thread' })
+      : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
+    render(App)
+    await openSidebarPage('Agents')
+    const catalog = await screen.findByRole('region', { name: 'Agents', exact: true })
+    await fireEvent.click(within(await within(catalog).findByRole('article', { name: 'Scout' })).getByRole('button', { name: 'Open chat' }))
+    await screen.findByRole('complementary', { name: 'Agent profile' })
+    const sidebar = document.getElementById('sidebar')
+    const usage = () => within(sidebar).getAllByRole('button', { name: 'Usage', exact: true }).find((node) => node.closest('.side-action, .sidebar-actions'))
+
+    await fireEvent.click(usage())
+    await screen.findByRole('region', { name: 'Usage' })
+    expect(screen.queryByRole('complementary', { name: 'Agent profile' })).not.toBeInTheDocument()
+    await fireEvent.click(document.querySelector('#sidebar .thread-row[data-thread-id="agent-thread"]'))
+    expect(await screen.findByRole('complementary', { name: 'Agent profile' })).toBeInTheDocument()
+
+    // A profile the user closed stays closed after the round trip.
+    await fireEvent.click(screen.getByRole('button', { name: 'Collapse agent profile' }))
+    await fireEvent.click(usage())
+    await screen.findByRole('region', { name: 'Usage' })
+    await fireEvent.click(document.querySelector('#sidebar .thread-row[data-thread-id="agent-thread"]'))
+    await waitFor(() => expect(document.querySelector('.workspace')).not.toHaveClass('agents-open'))
+    expect(screen.queryByRole('complementary', { name: 'Agent profile' })).not.toBeInTheDocument()
+
+    // Another thread never takes the profile put aside.
+    await fireEvent.click(screen.getByRole('button', { name: 'Reveal agent profile' }))
+    await screen.findByRole('complementary', { name: 'Agent profile' })
+    await fireEvent.click(usage())
+    await screen.findByRole('region', { name: 'Usage' })
+    await fireEvent.click(document.querySelector('#sidebar .thread-row[data-thread-id="ordinary-thread"]'))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'ordinary-thread', limit: 100 }))
+    await waitFor(() => expect(document.querySelector('.workspace')).not.toHaveClass('agents-open'))
+    expect(screen.queryByRole('complementary', { name: 'Agent profile' })).not.toBeInTheDocument()
+  })
+
   it('lands an agent chat opened from its card at the newest message', async () => {
     const original = invoke.getMockImplementation()
     const history = Array.from({ length: 6 }, (_, index) => ({ role: index % 2 ? 'assistant' : 'user', content: `Message ${index}` }))
