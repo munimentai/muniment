@@ -1516,8 +1516,8 @@ mod tests {
 
     #[test]
     fn the_router_entry_lands_in_pi_models_and_leaves_when_it_is_turned_off() {
-        let agent =
-            std::env::temp_dir().join(format!("muniment-router-cmd-{}", uuid::Uuid::now_v7()));
+        let agent = muniment_core::state_root::test_root()
+            .join(format!("muniment-router-cmd-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir_all(&agent).unwrap();
         std::fs::write(
             agent.join("models.json"),

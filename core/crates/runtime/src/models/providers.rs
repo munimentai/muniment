@@ -1308,8 +1308,8 @@ llama     qwen3              32K      16.4K    yes       no\n";
     }
 
     fn temporary_directory() -> std::path::PathBuf {
-        let path =
-            std::env::temp_dir().join(format!("muniment-local-mode-{}", uuid::Uuid::new_v4()));
+        let path = muniment_core::state_root::test_root()
+            .join(format!("muniment-local-mode-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&path).unwrap();
         path
     }

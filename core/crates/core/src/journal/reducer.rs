@@ -1456,8 +1456,8 @@ mod tests {
 
     #[test]
     fn completed_receipts_lists_each_finished_run_after_the_bound() {
-        let path =
-            std::env::temp_dir().join(format!("muniment-receipts-{}.sqlite3", Uuid::now_v7()));
+        let path = crate::state_root::test_root()
+            .join(format!("muniment-receipts-{}.sqlite3", Uuid::now_v7()));
         let mut journal =
             RunJournal::open_with_busy_timeout(&path, Duration::from_secs(60)).unwrap();
         let with_receipt = Uuid::now_v7().to_string();

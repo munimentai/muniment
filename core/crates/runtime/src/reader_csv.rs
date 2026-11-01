@@ -377,18 +377,43 @@ fn hex_lower(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
-    fn temporary(label: &str, text: &str) -> PathBuf {
+    /// A CSV file in its own temporary directory, which goes when the value
+    /// drops, whether the test passes or fails.
+    struct Temporary {
+        directory: PathBuf,
+        path: PathBuf,
+    }
+
+    impl std::ops::Deref for Temporary {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl AsRef<Path> for Temporary {
+        fn as_ref(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for Temporary {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.directory);
+        }
+    }
+
+    fn temporary(label: &str, text: &str) -> Temporary {
         let directory = std::env::temp_dir().join(format!(
-            "muniment-reader-csv-{label}-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
+            "muniment-reader-csv-{label}-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
         ));
         fs::create_dir_all(&directory).unwrap();
         let path = directory.join("customers.csv");
         fs::write(&path, text).unwrap();
-        path
+        Temporary { directory, path }
     }
 
     #[test]
@@ -535,7 +560,6 @@ mod tests {
             reader.describe("/elsewhere.csv").unwrap_err().code(),
             "unknown_object"
         );
-        fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[test]
@@ -555,6 +579,5 @@ mod tests {
                 .code(),
             "unreadable"
         );
-        fs::remove_dir_all(directory).unwrap();
     }
 }

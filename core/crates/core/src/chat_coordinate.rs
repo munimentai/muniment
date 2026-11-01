@@ -3296,7 +3296,8 @@ mod tests {
         prefill: Option<&str>,
         failure: Option<MemoryFailure>,
     ) -> ExtensionUiAnswer {
-        let root = std::env::temp_dir().join(format!("muniment-memory-failure-{}", Uuid::now_v7()));
+        let root = crate::state_root::test_root()
+            .join(format!("muniment-memory-failure-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&root).unwrap();
         let sink = FakeChatEventSink;
         let shared = Arc::new(Mutex::new(crate::run_events::ChatStorage {

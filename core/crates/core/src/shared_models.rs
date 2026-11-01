@@ -1335,7 +1335,7 @@ pub(crate) mod tests {
 
     fn temp_dir() -> PathBuf {
         static SEQ: AtomicUsize = AtomicUsize::new(0);
-        let path = std::env::temp_dir().join(format!(
+        let path = crate::state_root::test_root().join(format!(
             "muniment-shared-{}-{}",
             std::process::id(),
             SEQ.fetch_add(1, Ordering::Relaxed)

@@ -34,19 +34,14 @@ static PROCESS_TOKEN: std::sync::LazyLock<String> =
 /// Points the state directory at one temporary directory for the test process
 /// unless a test already named one. A run's launch resolves the agent settings
 /// and package tree from the state directory, so without it a test writes the
-/// user's own `~/.muniment`. The name carries a random id besides the process
-/// id: test processes in separate containers can share one system temp
-/// directory and the same process id.
+/// user's own `~/.muniment`. The directory sits in the process's test root,
+/// which goes when the process exits.
 pub fn isolate_state_directory() {
     let variable = muniment_core::state_root::STATE_DIRECTORY_OVERRIDE;
     if std::env::var_os(variable).is_none() {
         std::env::set_var(
             variable,
-            std::env::temp_dir().join(format!(
-                "muniment-runtime-state-{}-{}",
-                std::process::id(),
-                *PROCESS_TOKEN
-            )),
+            muniment_core::state_root::test_root().join("runtime-state"),
         );
     }
 }
@@ -187,12 +182,7 @@ pub fn stage_pi_stub(temporary_root: &Path) -> PiArtifactDescriptor {
 /// Builds the sidecar test stub in its own target directory and returns its path.
 pub fn build_pi_stub() -> PathBuf {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let mut workspace_hasher = DefaultHasher::new();
-    manifest_dir.hash(&mut workspace_hasher);
-    let build_root = std::env::temp_dir().join(format!(
-        "muniment-runtime-sidecar-test-stub-{:x}",
-        workspace_hasher.finish()
-    ));
+    let build_root = stub_build_root(manifest_dir);
     let status = Command::new(env!("CARGO"))
         .args([
             "build",
@@ -219,4 +209,31 @@ pub fn build_pi_stub() -> PathBuf {
         "sidecar-test-stub"
     };
     build_root.join("debug").join(stub_name)
+}
+
+/// The target directory the sidecar test stub builds in: one per workspace
+/// under Cargo's temporary directory in the target directory, never the
+/// system temporary folder, so `cargo clean` removes it. Each build also
+/// removes the directory of a workspace that no longer exists, such as a
+/// removed git worktree, so stale builds never pile up.
+fn stub_build_root(manifest_dir: &Path) -> PathBuf {
+    let stubs = Path::new(env!("CARGO_TARGET_TMPDIR")).join("sidecar-test-stub");
+    if let Ok(entries) = fs::read_dir(&stubs) {
+        for entry in entries.flatten() {
+            let owner = fs::read_to_string(entry.path().join("workspace"));
+            if owner.is_ok_and(|owner| !Path::new(&owner).exists()) {
+                let _ = fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+    let mut workspace_hasher = DefaultHasher::new();
+    manifest_dir.hash(&mut workspace_hasher);
+    let build_root = stubs.join(format!("{:x}", workspace_hasher.finish()));
+    fs::create_dir_all(&build_root).unwrap();
+    fs::write(
+        build_root.join("workspace"),
+        manifest_dir.to_string_lossy().as_bytes(),
+    )
+    .unwrap();
+    build_root
 }

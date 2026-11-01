@@ -770,8 +770,8 @@ mod tests {
     use super::*;
 
     fn store() -> (PathBuf, RunStore) {
-        let root =
-            std::env::temp_dir().join(format!("muniment-agent-runs-{}", uuid::Uuid::new_v4()));
+        let root = crate::state_root::test_root()
+            .join(format!("muniment-agent-runs-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let store = RunStore::open(&root).unwrap();
         (root, store)

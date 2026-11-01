@@ -805,6 +805,9 @@ int main(int argc, char **argv) {
         .unwrap();
         let compile = |output: &Path, build: &str| {
             let mut command = Command::new("/usr/bin/clang");
+            // A universal build leaves an empty `peer-*` folder per run in
+            // the temporary folder. The fixture folder holds it instead.
+            command.env("TMPDIR", &fixture.directory);
             if from_clone {
                 command.args(["-arch", "arm64", "-arch", "x86_64"]);
             }

@@ -12,7 +12,7 @@ mod tests {
 
     #[test]
     fn the_marker_file_switches_local_mode() {
-        let root = std::env::temp_dir().join(format!(
+        let root = crate::state_root::test_root().join(format!(
             "muniment-local-mode-{}-{}",
             std::process::id(),
             uuid::Uuid::new_v4()

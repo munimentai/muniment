@@ -109,7 +109,8 @@ mod tests {
     use uuid::Uuid;
 
     fn journal_file() -> PathBuf {
-        std::env::temp_dir().join(format!("muniment-owned-threads-{}.sqlite3", Uuid::new_v4()))
+        crate::state_root::test_root()
+            .join(format!("muniment-owned-threads-{}.sqlite3", Uuid::new_v4()))
     }
 
     fn append_thread(journal: &mut RunJournal, run_id: &str, actor_id: &str, recorded_at: String) {
