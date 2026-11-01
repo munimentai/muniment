@@ -128,3 +128,22 @@ it('scrolls the profile\'s own delete confirmation into view and focuses Cancel,
   await userEvent.keyboard(' ')
   await expect.poll(group).toBeNull()
 })
+
+it('returns focus to Delete agent after Cancel, by pointer or by key, on the profile and the card path', async () => {
+  const remove = (aside) => [...aside.querySelectorAll('button')].find((button) => button.textContent.trim() === 'Delete agent')
+  const cancel = (aside) => [...aside.querySelectorAll('[role="group"][aria-label="Delete agent"] button')].find((button) => button.textContent.trim() === 'Cancel')
+  // The profile's own button opens the confirmation, and a click on Cancel closes it.
+  let aside = profile()
+  await userEvent.click(remove(aside))
+  await expect.poll(() => document.activeElement).toBe(cancel(aside))
+  await userEvent.click(cancel(aside))
+  await expect.poll(() => document.activeElement).toBe(remove(aside))
+  unmount(component)
+  document.body.replaceChildren()
+  // A card's Delete opens the profile at the confirmation, and Enter on Cancel closes it.
+  aside = profile({ deleteAsked: 1 })
+  await expect.poll(() => document.activeElement).toBe(cancel(aside))
+  await userEvent.keyboard('{Enter}')
+  await expect.poll(() => document.activeElement).toBe(remove(aside))
+  expect(aside.querySelector('[role="group"][aria-label="Delete agent"]')).toBeNull()
+})

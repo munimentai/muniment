@@ -121,6 +121,16 @@
     untrack(() => { revealDelete = 0; stopSettle?.(); stopSettle = settleDelete(box) })
   })
   $effect(() => () => stopSettle?.())
+  // Cancel puts Delete agent back in the confirmation's place, and focus
+  // returns to it. A card's Delete closed the card's page, so the profile's
+  // own button is the opener on that path too.
+  let deleteRow = $state()
+  async function cancelDelete() {
+    stopSettle?.(); stopSettle = null
+    deleting = false; removeMemory = false
+    await tick()
+    deleteRow?.querySelector('button:not(:disabled)')?.focus()
+  }
   function settleDelete(box) {
     const reveal = () => {
       if (!box.isConnected) return stop()
@@ -356,9 +366,9 @@
       {#if deleting}
         <div class="confirm" role="group" aria-label="Delete agent" bind:this={confirmBox}>
           <label class="check"><input type="checkbox" bind:checked={removeMemory} disabled={busy} />Also delete its memory</label>
-          <div class="actions"><Button variant="danger" disabled={busy} onclick={() => action(async () => { const answer = await agentRequest(tauri, agent.runtimeId, 'agent.delete', { id: agent.id, remove_memory: removeMemory }); ondelete(answer) })}>Confirm delete</Button><Button data-safe disabled={busy} onclick={() => { deleting = false; removeMemory = false }}>Cancel</Button></div>
+          <div class="actions"><Button variant="danger" disabled={busy} onclick={() => action(async () => { const answer = await agentRequest(tauri, agent.runtimeId, 'agent.delete', { id: agent.id, remove_memory: removeMemory }); ondelete(answer) })}>Confirm delete</Button><Button data-safe disabled={busy} onclick={cancelDelete}>Cancel</Button></div>
         </div>
-      {:else}<div class="delete-row"><Button variant="danger" icon="trash-2" disabled={busy || runActive(run?.status)} onclick={() => { deleting = true; revealDelete = -1 }}>Delete agent</Button></div>{/if}
+      {:else}<div class="delete-row" bind:this={deleteRow}><Button variant="danger" icon="trash-2" disabled={busy || runActive(run?.status)} onclick={() => { deleting = true; revealDelete = -1 }}>Delete agent</Button></div>{/if}
     </div>
     {/if}
     {#if notice}<p class="muted" role="status">{notice}</p>{/if}
