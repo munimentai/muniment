@@ -106,6 +106,51 @@ function setup(invoke = vi.fn(), { threadId = null, summaries = [], projectId = 
   }
 }
 
+describe('first thread page', () => {
+  const page = (from, count, nextCursor) => ({ summaries: Array.from({ length: count }, (_, index) => ({ threadId: `t${from + index}` })), nextCursor })
+
+  it('reads older pages until the list holds 20 threads the user did not archive', async () => {
+    const archived = new Set(Array.from({ length: 12 }, (_, index) => `t${index}`))
+    const invoke = vi.fn(async (command, args) => {
+      if (command === 'chat_thread_summaries') return args.cursor == null ? page(0, 20, 'c1') : args.cursor === 'c1' ? page(20, 20, 'c2') : page(40, 20, null)
+      if (command === 'chat_current_thread') return null
+      if (command === 'chat_thread_open') return { entries: [], nextCursor: null }
+      return null
+    })
+    const context = setup(invoke, { options: { readArchived: (id) => archived.has(id) } })
+    await context.controller.loadHistory()
+    await vi.waitFor(() => expect(context.summaries()).toHaveLength(40))
+    expect(context.summaries().filter((summary) => !archived.has(summary.threadId))).toHaveLength(28)
+    expect(invoke.mock.calls.filter(([command]) => command === 'chat_thread_summaries').map(([, args]) => args)).toEqual([{ limit: 20 }, { limit: 20, cursor: 'c1' }])
+    expect(context.onMoreThreads).toHaveBeenLastCalledWith(true)
+  })
+
+  it('stops when the list ends', async () => {
+    const invoke = vi.fn(async (command, args) => {
+      if (command === 'chat_thread_summaries') return args.cursor == null ? page(0, 20, 'c1') : page(20, 3, null)
+      if (command === 'chat_thread_open') return { entries: [], nextCursor: null }
+      return null
+    })
+    const context = setup(invoke, { options: { readArchived: () => true } })
+    await context.controller.loadHistory()
+    await vi.waitFor(() => expect(context.summaries()).toHaveLength(23))
+    expect(context.onMoreThreads).toHaveBeenLastCalledWith(false)
+    expect(invoke.mock.calls.filter(([command]) => command === 'chat_thread_summaries')).toHaveLength(2)
+  })
+
+  it('reads no further page when the first holds 20 threads to show', async () => {
+    const invoke = vi.fn(async (command) => {
+      if (command === 'chat_thread_summaries') return page(0, 20, 'c1')
+      if (command === 'chat_thread_open') return { entries: [], nextCursor: null }
+      return null
+    })
+    const context = setup(invoke)
+    await context.controller.loadHistory()
+    await Promise.resolve()
+    expect(invoke.mock.calls.filter(([command]) => command === 'chat_thread_summaries')).toHaveLength(1)
+  })
+})
+
 describe('deleted threads', () => {
   it('passes on the threads the first page names as deleted', async () => {
     const onDeletedThreads = vi.fn()

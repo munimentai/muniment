@@ -1917,6 +1917,7 @@
     readThreadId: () => currentThreadId,
     readLaunchThreadId: () => readOpenThread(),
     readThreadSummaries: () => threadSummaries,
+    readArchived: (threadId) => !!threadOrganization[threadId]?.archived,
     readRuntime: () => composerRuntime,
     blocked: () => dictationBusy() || runtimeUpgradePending() || !!unreachableMachine || modelChoicePending || compacting || !!retryReview?.chooseModel,
     onMessages: (next) => { messages = next },

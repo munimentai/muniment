@@ -57,6 +57,9 @@ export function createChatController({
   // still exists, or null.
   readLaunchThreadId = () => null,
   readThreadSummaries = () => [],
+  // Whether the user archived a thread. Archive state lives in the window,
+  // so the first page reads on until it holds a full page of other threads.
+  readArchived = () => false,
   // The machine the composer sends to. A run left running on one machine
   // does not hold a send to another.
   readRuntime = () => null,
@@ -134,6 +137,7 @@ export function createChatController({
   let threadPageCount = 1
   let nextThreadCursor = null
   let loadingOlderThreads = false
+  const threadPageSize = 20
   // The shell shows a fresh thread and the first load after sign-in the same way:
   // no thread id. loadHistory reads this flag back to tell the two apart.
   let freshThread = false
@@ -330,6 +334,7 @@ export function createChatController({
       const listed = firstPage.summaries.map((summary) => summary.replica && held.has(summary.threadId) ? held.get(summary.threadId) : summary)
       const summaries = [...listed, ...retainedSummaries]
       onThreadSummaries(summaries)
+      void fillThreads()
       const shownThreadId = currentThreadId ?? (freshThread ? null : readThreadId())
       onThreadSelected(shownThreadId)
       if (shownThreadId && summaries.some((summary) => summary.threadId === shownThreadId)) {
@@ -506,6 +511,8 @@ export function createChatController({
       nextThreadCursor = nextCursor
       onThreadSummaries(summaries)
       onMoreThreads(nextThreadCursor != null)
+      await fillThreads()
+      if (destroyed) return
       if (!summaries.length) {
         onHistoryError('')
         publishMessages([])
@@ -553,13 +560,25 @@ export function createChatController({
     }
   }
 
+  // Archived threads count toward a page, so the list reads older pages
+  // until it holds a page of threads the user did not archive or ends.
+  async function fillThreads() {
+    for (let pages = 0; pages < 10; pages += 1) {
+      if (destroyed || loadingOlderThreads || nextThreadCursor == null) return
+      const listed = readThreadSummaries()
+      const shown = listed.filter((summary) => !readArchived(summary.threadId)).length
+      if (shown >= threadPageSize || shown === listed.length) return
+      if (await loadOlderThreads() == null) return
+    }
+  }
+
   async function loadOlderThreads() {
     if (destroyed || loadingOlderThreads || nextThreadCursor == null) return null
     loadingOlderThreads = true
     const cursor = nextThreadCursor
     const sequence = threadRefreshSequence
     try {
-      const result = await invoke('chat_thread_summaries', { limit: 20, cursor })
+      const result = await invoke('chat_thread_summaries', { limit: threadPageSize, cursor })
       if (destroyed || sequence !== threadRefreshSequence) return null
       const firstThreadId = result.summaries[0]?.threadId ?? null
       onThreadSummaries([...readThreadSummaries(), ...result.summaries])
