@@ -276,6 +276,30 @@ pub fn saved_endpoint_key(models_file: &Path, provider: &str) -> Option<String> 
         .map(str::to_owned)
 }
 
+/// The limits an endpoint provider's saved models carry, by model id. A model
+/// with no known limit has no entry.
+fn saved_endpoint_windows(models_file: &Path, provider: &str) -> BTreeMap<String, Limits> {
+    let Some(root) = fs::read(models_file)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+    else {
+        return BTreeMap::new();
+    };
+    root["providers"][provider]["models"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            let limits = Limits::of_entry(entry);
+            let known = limits.context.is_some() || limits.output.is_some();
+            entry["id"]
+                .as_str()
+                .filter(|_| known)
+                .map(|id| (id.to_owned(), limits))
+        })
+        .collect()
+}
+
 pub fn valid_identifier(value: &str, limit: usize) -> bool {
     !value.is_empty()
         && value.len() <= limit
@@ -431,7 +455,23 @@ pub fn store_endpoint(
         .cloned()
         .collect();
     let mut decisions = None;
-    let mut windows = BTreeMap::new();
+    let mut windows = saved_endpoint_windows(&models_file, &provider);
+    windows.retain(|id, _| models.contains(id));
+    if !models.is_empty() && models.iter().any(|id| !windows.contains_key(id)) {
+        // A named list keeps the limits it holds and asks the server for the
+        // limits of every model it names for the first time.
+        if let Some(found) = discover_endpoint_models(
+            base_url,
+            resolve_key(key).as_deref().or(Some(key)),
+            DISCOVERY_TIMEOUT,
+        ) {
+            for (id, limits) in found.windows {
+                if models.contains(&id) {
+                    windows.entry(id).or_insert(limits);
+                }
+            }
+        }
+    }
     if models.is_empty() {
         let found = discover_endpoint_models(
             base_url,
@@ -760,6 +800,42 @@ mod tests {
         assert_eq!(
             models(&agent)["providers"]["lmstudio"]["models"],
             json!([{"id": "named"}])
+        );
+        fs::remove_dir_all(agent).unwrap();
+    }
+
+    #[test]
+    fn a_named_list_keeps_the_saved_limits_and_asks_the_server_for_new_ones() {
+        let agent = temporary_directory();
+        let url = serve_routes(vec![(
+            "GET /v1/models",
+            json!({"data": [
+                {"id": "qwen3", "max_model_len": 32768},
+                {"id": "gemma", "max_model_len": 8192}
+            ]}),
+        )]);
+        let id = store_endpoint(&agent, "custom", "oMLX", &url, "", &[]).unwrap();
+        // A limit the user set stays over the one the server reports.
+        let mut root = models(&agent);
+        root["providers"][&id]["models"][0]["contextWindow"] = 16384.into();
+        root["providers"][&id]["models"][0]["maxTokens"] = 4096.into();
+        fs::write(models_file(&agent), root.to_string()).unwrap();
+        store_endpoint(
+            &agent,
+            "custom",
+            "oMLX",
+            &url,
+            "",
+            &["qwen3".into(), "gemma".into(), "unlisted".into()],
+        )
+        .unwrap();
+        assert_eq!(
+            models(&agent)["providers"][&id]["models"],
+            json!([
+                {"id": "qwen3", "contextWindow": 16384, "maxTokens": 4096},
+                {"id": "gemma", "contextWindow": 8192},
+                {"id": "unlisted"}
+            ])
         );
         fs::remove_dir_all(agent).unwrap();
     }
