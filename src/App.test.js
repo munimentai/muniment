@@ -3324,6 +3324,9 @@ describe('thread name', () => {
     await fireEvent.contextMenu(screen.getByRole('button', { name: 'Project Contracts' }))
     await fireEvent.click(screen.getByRole('menuitem', { name: 'Rename', exact: true }))
     await waitFor(() => expect(screen.getByRole('textbox', { name: 'Project name' })).toHaveFocus())
+    // The old name is selected, so the first keystroke replaces it.
+    const renameField = screen.getByRole('textbox', { name: 'Project name' })
+    await waitFor(() => expect([renameField.selectionStart, renameField.selectionEnd]).toEqual([0, 'Contracts'.length]))
     await fireEvent.input(screen.getByRole('textbox', { name: 'Project name' }), { target: { value: 'Agreements' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await screen.findByRole('button', { name: 'Project Agreements' })

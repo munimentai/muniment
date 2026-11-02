@@ -26,8 +26,8 @@
   const freshAt = $derived(showFresh ? freshIndex(sidebar) : -1)
   const kbd = (shortcut) => shortcut.replace('Meta+', '⌘ ').replace('Control+', 'Ctrl ')
   // The name field takes focus as it opens, after a menu or the palette that
-  // opened it returns focus, so typing names the project.
-  const focusField = (node) => { void tick().then(() => node.focus()) }
+  // opened it returns focus, with its text selected so typing replaces the name.
+  const focusField = (node) => { void tick().then(() => { node.focus(); node.select() }) }
 </script>
 
 <div>
