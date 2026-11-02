@@ -150,6 +150,13 @@ fn tidy_deleted_thread(profile: &std::path::Path, thread_id: &str) -> Option<std
             None
         }
     };
+    // The thread leaves its project. The delete is committed, so a catalog
+    // error only logs, and the pass at start drops it later.
+    if let Err(error) = crate::projects::forget_thread(profile, thread_id) {
+        crate::runtime_eprintln!(
+            "thread_delete: project not updated thread={thread_id} error={error}"
+        );
+    }
     // An agent whose primary thread the user deletes starts a new one on its
     // next run. The delete is committed, so a state error only logs.
     let agent_thread = crate::agents::state(profile).is_ok_and(|state| {

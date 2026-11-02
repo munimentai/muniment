@@ -564,6 +564,64 @@ fn a_deleted_threads_session_folder_goes_unless_it_holds_the_users_files() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+#[test]
+fn a_deleted_thread_leaves_its_project_and_the_start_pass_drops_the_ones_left() {
+    let root = muniment_core::state_root::test_root()
+        .join(format!("muniment-thread-project-delete-{}", Uuid::new_v4()));
+    let profile = root.join("profile");
+    std::fs::create_dir_all(&profile).unwrap();
+    muniment_core::home::confirm_home(&profile, &root.join("muniment")).unwrap();
+    let project = muniment_core::projects::create(&profile, "Research").unwrap();
+    let mut journal = RunJournal::open(profile.join("runs.sqlite3")).unwrap();
+    let mut thread = || {
+        let thread = journal
+            .append_new_run("workspace-a", &run_started(Some("owner")))
+            .unwrap();
+        muniment_core::projects::assign(&profile, &thread, &project).unwrap();
+        thread
+    };
+    let (deleted, synced, live) = (thread(), thread(), thread());
+    let mapped = |thread: &str| {
+        muniment_core::projects::list(&profile)
+            .unwrap()
+            .threads
+            .contains_key(thread)
+    };
+
+    delete_thread_with_creation_now(
+        &mut journal,
+        &profile,
+        Some("owner"),
+        &deleted,
+        &provenance(Some("owner")),
+    )
+    .unwrap();
+    assert!(!mapped(&deleted));
+
+    // A delete that left its mapping, such as one a synced machine sent,
+    // is dropped at start, and a live thread keeps its project.
+    append_thread_delete_now(
+        &mut journal,
+        Some("owner"),
+        &synced,
+        &provenance(Some("owner")),
+    )
+    .unwrap();
+    assert!(mapped(&synced));
+    drop(journal);
+    assert_eq!(
+        muniment_core::projects::forget_deleted_threads(&profile).unwrap(),
+        1
+    );
+    assert!(!mapped(&synced));
+    assert!(mapped(&live));
+    assert_eq!(
+        muniment_core::projects::forget_deleted_threads(&profile).unwrap(),
+        0
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 fn save_creation(profile: &std::path::Path, thread_id: &str, agent: &str) {
     muniment_core::creations::save(
         profile,

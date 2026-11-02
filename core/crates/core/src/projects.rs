@@ -155,6 +155,9 @@ pub fn list(profile: &Path) -> Result<Catalog, String> {
             Err(_) => missing.push(id.clone()),
         }
     }
+    // A folder the name index records and no project holds is a deleted
+    // project's folder that kept the user's files, so it stays out.
+    let recorded = crate::workspace_names::recorded_names(profile, &root)?;
     let mut changed = false;
     for entry in fs::read_dir(&root).map_err(|_| "The projects folder cannot be read.")? {
         let entry = entry.map_err(|_| "A project folder cannot be read.")?;
@@ -168,6 +171,7 @@ pub fn list(profile: &Path) -> Result<Catalog, String> {
         let folder = entry.file_name().to_string_lossy().into_owned();
         if name(&folder).is_ok()
             && !known.contains(&entry.path())
+            && !recorded.contains(&folder)
             && !catalog.projects.values().any(|n| n == &folder)
         {
             catalog
@@ -261,6 +265,66 @@ pub fn rename(profile: &Path, id: &str, value: &str) -> Result<(), String> {
         return Err(error);
     }
     Ok(())
+}
+/// What a project delete says when the project's folder stays.
+pub const PROJECT_FOLDER_KEPT: &str = "The project's folder holds your files, so it stays.";
+
+/// Deletes a project of this computer. Its threads stay and leave it, each
+/// a project of its own, and its settings go. Its folder goes when it holds
+/// only Muniment's own files. A folder with the user's files stays out of
+/// the list, and the answer names it. A project an agent works in stays.
+pub fn delete(profile: &Path, id: &str) -> Result<Option<PathBuf>, String> {
+    if crate::agents::list(profile)?
+        .agents
+        .iter()
+        .any(|agent| agent.project_id.as_deref() == Some(id))
+    {
+        return Err("An agent works in this project. Move or delete the agent first.".into());
+    }
+    let root = root(profile)?;
+    {
+        let _guard = WRITE.lock().map_err(|_| "The project catalog is busy.")?;
+        let mut catalog = read(profile)?;
+        if !catalog.projects.contains_key(id) {
+            return Err("The project does not exist.".into());
+        }
+        // Resolving the folder records its name, so the removal finds it.
+        let _ = folder(profile, id);
+        catalog.projects.remove(id);
+        catalog.settings.remove(id);
+        catalog.threads.retain(|_, project| project != id);
+        save(profile, &catalog)?;
+    }
+    crate::workspace_names::remove_recorded(profile, &root, id, crate::agents::remove_folder)
+}
+/// Drops a deleted thread from its project.
+pub fn forget_thread(profile: &Path, thread: &str) -> Result<(), String> {
+    update(profile, |catalog| catalog.threads.remove(thread).is_some())
+}
+/// The pass at start over the catalog: it drops each thread the journal
+/// deleted from its project. Answers the count.
+pub fn forget_deleted_threads(profile: &Path) -> Result<usize, String> {
+    let journal_path = profile.join("runs.sqlite3");
+    if !journal_path.exists() || saved(profile)?.threads.is_empty() {
+        return Ok(0);
+    }
+    let mut journal = crate::journal::RunJournal::open(journal_path).map_err(|e| e.to_string())?;
+    let mut deleted = Vec::new();
+    for thread in saved(profile)?.threads.keys() {
+        if journal.thread_deleted(thread).map_err(|e| e.to_string())? {
+            deleted.push(thread.clone());
+        }
+    }
+    if !deleted.is_empty() {
+        update(profile, |catalog| {
+            let before = catalog.threads.len();
+            catalog
+                .threads
+                .retain(|thread, _| !deleted.contains(thread));
+            catalog.threads.len() != before
+        })?;
+    }
+    Ok(deleted.len())
 }
 pub fn assign(profile: &Path, thread: &str, project: &str) -> Result<(), String> {
     folder(profile, project)?;
@@ -800,6 +864,68 @@ mod tests {
         assert!(read(&profile).unwrap().projects.contains_key(&gone));
         fs::rename(fixture.0.join("away"), &folder_of_gone).unwrap();
         assert!(list(&profile).unwrap().projects.contains_key(&gone));
+    }
+    #[test]
+    fn a_deleted_project_leaves_its_threads_and_keeps_a_folder_with_the_users_files() {
+        let fixture = Fixture::new();
+        let profile = fixture.profile();
+        let empty = create(&profile, "Audit").unwrap();
+        let mine = create(&profile, "Contracts").unwrap();
+        assign(&profile, "thread-audit", &empty).unwrap();
+        assign(&profile, "thread-mine", &mine).unwrap();
+        save_settings(
+            &profile,
+            &empty,
+            &Settings {
+                defaults: Defaults {
+                    permission_mode: Some("plan".into()),
+                    ..Defaults::default()
+                },
+                instructions: None,
+            },
+        )
+        .unwrap();
+        let empty_folder = folder(&profile, &empty).unwrap();
+        fs::create_dir_all(empty_folder.join(".muniment/tasks")).unwrap();
+        let mine_folder = folder(&profile, &mine).unwrap();
+        fs::write(mine_folder.join("draft.txt"), "draft").unwrap();
+
+        assert_eq!(delete(&profile, &empty).unwrap(), None);
+        assert!(!empty_folder.exists());
+        let catalog = read(&profile).unwrap();
+        assert!(!catalog.projects.contains_key(&empty));
+        assert!(!catalog.settings.contains_key(&empty));
+        assert!(!catalog.threads.contains_key("thread-audit"));
+        assert_eq!(thread_project(&profile, "thread-audit").unwrap(), None);
+        assert_eq!(
+            thread_project(&profile, "thread-mine").unwrap(),
+            Some(mine.clone())
+        );
+
+        assert_eq!(delete(&profile, &mine).unwrap(), Some(mine_folder.clone()));
+        assert_eq!(
+            fs::read_to_string(mine_folder.join("draft.txt")).unwrap(),
+            "draft"
+        );
+        // The kept folder stays out of the list, and no project returns.
+        let listed = list(&profile).unwrap();
+        assert!(listed.projects.is_empty());
+        assert!(listed.threads.is_empty());
+        assert!(delete(&profile, &mine).is_err());
+
+        let homelab = create(&profile, "Homelab").unwrap();
+        crate::agents::save(
+            &profile,
+            crate::agents::Agent {
+                name: "Deploy bot".into(),
+                instructions: "Deploy the stack.".into(),
+                project_id: Some(homelab.clone()),
+                ..crate::agents::Agent::default()
+            },
+        )
+        .unwrap();
+        assert!(delete(&profile, &homelab).unwrap_err().contains("agent"));
+        assert!(list(&profile).unwrap().projects.contains_key(&homelab));
     }
     #[test]
     fn settings_keep_defaults_in_the_catalog_and_instructions_in_the_folder() {

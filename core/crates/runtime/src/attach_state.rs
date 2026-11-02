@@ -96,6 +96,15 @@ fn tidy_home(profile: &Path) -> Result<(), String> {
             "muniment-runtime: thread_folders outcome=failed error={error}"
         ),
     }
+    match muniment_core::projects::forget_deleted_threads(profile) {
+        Ok(0) => {}
+        Ok(forgotten) => muniment_core::runtime_eprintln!(
+            "muniment-runtime: project_threads forgot_deleted={forgotten}"
+        ),
+        Err(error) => muniment_core::runtime_eprintln!(
+            "muniment-runtime: project_threads outcome=failed error={error}"
+        ),
+    }
     muniment_core::projects::migrate_session_names(profile)
 }
 
