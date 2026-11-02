@@ -553,6 +553,12 @@ it('opens at its delete confirmation when a card asks to delete the agent', asyn
   expect(screen.getByRole('checkbox', { name: 'Also delete its memory' })).not.toBeChecked()
   expect(screen.getByText('Its threads move to Archived.')).toBeInTheDocument()
   await fireEvent.click(screen.getByRole('checkbox', { name: 'Also delete its threads' }))
+  // The sentence follows the checkbox.
+  expect(screen.getByText('Its threads will be deleted.')).toBeInTheDocument()
+  expect(screen.queryByText('Its threads move to Archived.')).not.toBeInTheDocument()
+  await fireEvent.click(screen.getByRole('checkbox', { name: 'Also delete its threads' }))
+  expect(screen.getByText('Its threads move to Archived.')).toBeInTheDocument()
+  await fireEvent.click(screen.getByRole('checkbox', { name: 'Also delete its threads' }))
   await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
   await view.rerender({ deleteAsked: 2 })
   expect(await screen.findByRole('checkbox', { name: 'Also delete its threads' })).not.toBeChecked()

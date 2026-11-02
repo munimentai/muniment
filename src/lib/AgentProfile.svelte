@@ -386,7 +386,7 @@
       </div>
       {#if deleting}
         <div class="confirm" role="group" aria-label="Delete agent" bind:this={confirmBox}>
-          <p class="muted">Its threads move to Archived.</p>
+          <p class="muted" aria-live="polite">{removeThreads ? 'Its threads will be deleted.' : 'Its threads move to Archived.'}</p>
           <label class="check"><input type="checkbox" bind:checked={removeMemory} disabled={busy} />Also delete its memory</label>
           <label class="check"><input type="checkbox" bind:checked={removeThreads} disabled={busy} />Also delete its threads</label>
           <div class="actions"><Button variant="danger" disabled={busy} onclick={() => action(async () => { const answer = await agentRequest(tauri, agent.runtimeId, 'agent.delete', { id: agent.id, remove_memory: removeMemory }); ondelete(answer, { removeThreads }) })}>Confirm delete</Button><Button data-safe disabled={busy} onclick={cancelDelete}>Cancel</Button></div>
