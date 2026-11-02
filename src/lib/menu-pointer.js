@@ -14,3 +14,13 @@ export function followPointer(node, selector = ITEM) {
   node.addEventListener('pointermove', move)
   return { destroy() { node.removeEventListener('pointermove', move) } }
 }
+
+// The index an arrow key, Home or End reaches in a menu of `count` items from
+// `index`. An index of -1 means no item shows yet, as in a menu a click opened:
+// Down then reaches the first item and Up the last, as in a native menu.
+export function menuStep(count, index, key) {
+  if (key === 'Home') return 0
+  if (key === 'End') return count - 1
+  if (index < 0) return key === 'ArrowUp' ? count - 1 : 0
+  return (index + (key === 'ArrowDown' ? 1 : -1) + count) % count
+}

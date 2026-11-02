@@ -54,6 +54,9 @@ it('names the keys when arrow keys and Enter choose the item after a click opene
   // main.js tracks the input in the popup window as in every window.
   const stop = trackFocusSource(document.documentElement)
   await opened({ pointer: true })
+  // The first Down shows the first item, and the second moves to the next.
+  await fireEvent.keyDown(screen.getByRole('menuitem', { name: 'New thread' }), { key: 'ArrowDown' })
+  expect(screen.getByRole('menuitem', { name: 'New thread' })).toHaveFocus()
   await fireEvent.keyDown(screen.getByRole('menuitem', { name: 'New thread' }), { key: 'ArrowDown' })
   expect(screen.getByRole('menuitem', { name: 'Settings' })).toHaveFocus()
   await fireEvent.keyDown(screen.getByRole('menuitem', { name: 'Settings' }), { key: 'Enter' })
@@ -69,4 +72,21 @@ it('names the pointer when a click chooses the item after the keys opened the me
   await fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }))
   await waitFor(() => expect(emitTo).toHaveBeenCalledWith('main', 'action-menu-select', { id: 'menu', item: 2, via: 'pointer' }))
   stop()
+})
+
+it('reaches the last item on the first Up arrow in a menu a click opened, and moves on from the first after the keys opened it', async () => {
+  await opened({ pointer: true })
+  await fireEvent.keyDown(screen.getByRole('menuitem', { name: 'New thread' }), { key: 'ArrowUp' })
+  expect(screen.getByRole('menuitem', { name: 'Rename' })).toHaveFocus()
+  cleanup()
+  await opened({ pointer: false })
+  await fireEvent.keyDown(screen.getByRole('menuitem', { name: 'New thread' }), { key: 'ArrowDown' })
+  expect(screen.getByRole('menuitem', { name: 'Settings' })).toHaveFocus()
+})
+
+it('moves on from the item the pointer reached', async () => {
+  await opened({ pointer: true })
+  await fireEvent.pointerMove(screen.getByRole('menuitem', { name: 'Settings' }))
+  await fireEvent.keyDown(screen.getByRole('menuitem', { name: 'Settings' }), { key: 'ArrowDown' })
+  expect(screen.getByRole('menuitem', { name: 'Rename' })).toHaveFocus()
 })

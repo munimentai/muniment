@@ -55,3 +55,25 @@ it('draws Delete, the one destructive item, in the danger color on agent, artifa
  expect(screen.getAllByRole('menuitem').filter(item=>item.hasAttribute('data-danger'))).toEqual([remove])
  expect(source).toMatch(/\.catalog-menu > button\[data-danger\]\s*\{\s*color:\s*var\(--danger\)\s*\}/)
 })
+it('shows the first item on the first Down arrow in a menu a click opened, and the first item again after the keys opened it',async()=>{
+ render(CatalogActions,{name:'Scout',onaction:vi.fn()})
+ // A click opens the menu: the pointer leads, and no item shows yet.
+ document.documentElement.dataset.pointer=''
+ await fireEvent.click(screen.getByRole('button',{name:'Actions for Scout'}))
+ expect(screen.getByRole('menuitem',{name:'Rename'})).toHaveFocus()
+ await fireEvent.keyDown(document.activeElement,{key:'ArrowDown'})
+ expect(screen.getByRole('menuitem',{name:'Rename'})).toHaveFocus()
+ await fireEvent.keyDown(document.activeElement,{key:'ArrowDown'})
+ expect(screen.getByRole('menuitem',{name:'Archive'})).toHaveFocus()
+ await fireEvent.keyDown(document,{key:'Escape'})
+ // Up from a click reaches the last item.
+ await fireEvent.click(screen.getByRole('button',{name:'Actions for Scout'}))
+ await fireEvent.keyDown(document.activeElement,{key:'ArrowUp'})
+ expect(screen.getByRole('menuitem',{name:'Delete'})).toHaveFocus()
+ await fireEvent.keyDown(document,{key:'Escape'})
+ // The keys opened it: the first item shows, and Down moves to the second.
+ delete document.documentElement.dataset.pointer
+ await fireEvent.click(screen.getByRole('button',{name:'Actions for Scout'}))
+ await fireEvent.keyDown(document.activeElement,{key:'ArrowDown'})
+ expect(screen.getByRole('menuitem',{name:'Archive'})).toHaveFocus()
+})

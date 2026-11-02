@@ -4,7 +4,7 @@
   import { listen, emitTo } from '@tauri-apps/api/event'
   import { applyTheme, readStoredTheme } from './theme-state.js'
   import LucideIcon from './LucideIcon.svelte'
-  import { followPointer } from './menu-pointer.js'
+  import { followPointer, menuStep } from './menu-pointer.js'
   import { inputLeads } from './focus-source.js'
   let selected = $state(null)
   let actionId = $state(null)
@@ -13,6 +13,9 @@
   let items = $state(workspaceItems)
   let menu
   let shown = false
+  // A click opens the menu with focus on its first item but no item shown,
+  // so the first arrow key shows an item rather than moving past the first.
+  let unshown = false
   const popup = getCurrentWindow()
   // One native window draws every menu, so each open names the window for
   // the menu it shows, and a screen reader announces that menu's name.
@@ -31,11 +34,12 @@
   async function choose(id) { const source = actionId; const via = inputLeads(); shown = false; await popup.hide(); await emitTo('main', source ? 'action-menu-select' : 'workspace-menu-select', source ? {id: source, item: id, via} : id) }
   function keys(event) {
     const buttons = [...menu.querySelectorAll('button:not(:disabled)')]
-    const index = buttons.indexOf(document.activeElement)
+    const index = unshown ? -1 : buttons.indexOf(document.activeElement)
     if (event.key === 'Escape') { event.preventDefault(); void close() }
     else if (['ArrowDown','ArrowUp','Home','End'].includes(event.key)) {
       event.preventDefault()
-      buttons[event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length]?.focus()
+      unshown = false
+      buttons[menuStep(buttons.length, index, event.key)]?.focus()
     }
   }
   onMount(() => {
@@ -47,6 +51,7 @@
       label = payload.label || 'Workspace tools'
       items = workspaceItems
       selected = payload.selected
+      unshown = !!payload.pointer
       markFocusSource(payload.pointer)
       applyTheme(document.documentElement, readStoredTheme())
       await name(label)
@@ -57,6 +62,7 @@
     }).then(retain)
     void listen('action-menu-open', async ({payload}) => {
       actionId = payload.id; label = payload.label || 'Actions'; items = payload.items; selected = null
+      unshown = !!payload.pointer
       markFocusSource(payload.pointer)
       applyTheme(document.documentElement, readStoredTheme())
       await name(label)
@@ -67,7 +73,7 @@
   })
 </script>
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-<div data-panel="workspace-menu" data-panel-variant="overlay" class="tools" role="menu" tabindex="-1" aria-label={label} bind:this={menu} use:followPointer onkeydown={keys}>
+<div data-panel="workspace-menu" data-panel-variant="overlay" class="tools" role="menu" tabindex="-1" aria-label={label} bind:this={menu} use:followPointer onpointermove={() => { unshown = false }} onkeydown={keys}>
   {#each items as item}
     <button type="button" role="menuitem" disabled={item.disabled} data-danger={item.danger || undefined} onclick={() => choose(item.id)}>{#if item.icon}<LucideIcon name={item.icon}/>{/if}<span>{item.name}</span>{#if !actionId && selected === item.id}<LucideIcon name="check"/>{/if}</button>
   {/each}

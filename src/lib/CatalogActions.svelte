@@ -1,11 +1,15 @@
 <script>
   import PopupClose from './PopupClose.svelte'
-  import { floatingMenu } from './floating-menu.js'
+  import { floatingMenu, pointerLeads } from './floating-menu.js'
+  import { menuStep } from './menu-pointer.js'
   import { tick, onMount } from 'svelte'
   import LucideIcon from './LucideIcon.svelte'
   let { name, archived = false, onaction, disabled = false, extraActions = [], allowRename = true, allowArchive = true, allowDelete = true, confirmDelete = true, maxNameLength = 160 } = $props()
   let open = $state(false), mode = $state('menu'), value = $state(''), error = $state(''), busy = $state(false)
   let trigger, menu
+  // A click opens the menu with focus on its first item but no item shown,
+  // so the first arrow key shows an item rather than moving past the first.
+  let unshown = false
   onMount(() => {
     document.addEventListener('keydown', keys, true)
     return () => document.removeEventListener('keydown', keys, true)
@@ -16,6 +20,8 @@
     node.style.left = `${Math.max(8, Math.min(rect.right - 220, innerWidth - 228))}px`
     node.style.top = `${Math.max(8, Math.min(rect.bottom + 4, innerHeight - 200))}px`
     node.querySelector('button')?.focus()
+    unshown = pointerLeads()
+    node.addEventListener('pointermove', () => { unshown = false })
     return { destroy() { node.remove() } }
   }
   function close() { if (!busy) { open = false; trigger?.focus() } }
@@ -31,8 +37,9 @@
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close() }
     if (mode === 'menu' && ['ArrowDown','ArrowUp','Home','End'].includes(event.key)) {
       event.preventDefault()
-      const items = [...menu.querySelectorAll('button')], index = items.indexOf(document.activeElement)
-      items[event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus()
+      const items = [...menu.querySelectorAll('button')], index = unshown ? -1 : items.indexOf(document.activeElement)
+      unshown = false
+      items[menuStep(items.length, index, event.key)]?.focus()
     }
   }
 </script>
