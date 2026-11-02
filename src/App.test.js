@@ -9012,6 +9012,25 @@ describe('active run composer queue', () => {
     expectQueuePayload({ runId: 'run-7', delivery: 'steer', message: 'Focus on the risks' })
   })
 
+  it('shows a steering message inside the reply before the text it changed, with no unanswered turn after it', async () => {
+    const composer = await startRun()
+    chatListener({ payload: { runId: 'run-7', type: 'text-delta', text: 'echo' } })
+    await screen.findByText('echo')
+    await fireEvent.input(composer, { target: { value: 'foxtrot' } })
+    await fireEvent.keyDown(composer, { key: 'Enter' })
+    expectQueuePayload({ runId: 'run-7', delivery: 'steer', message: 'foxtrot' })
+    const steer = await waitFor(() => { const node = document.querySelector('.response .steer-turn'); expect(node).not.toBeNull(); return node })
+    expect(steer).toHaveTextContent('foxtrot')
+    expect(steer).toHaveTextContent('Sent during the reply')
+    expect(composer).toHaveValue('')
+    chatListener({ payload: { runId: 'run-7', type: 'text-delta', text: 'foxtrot' } })
+    const response = steer.closest('.response')
+    const order = () => [...response.querySelectorAll('.steer-turn, p')].map((node) => node.classList.contains('steer-turn') ? 'steer' : node.textContent).filter((text) => ['echo', 'foxtrot', 'steer'].includes(text))
+    await waitFor(() => expect(order()).toEqual(['echo', 'steer', 'foxtrot']))
+    // The last turn in the transcript is the reply, not the steering message.
+    expect([...document.querySelectorAll('.user-turn')].filter((node) => !node.classList.contains('steer-turn')).map((node) => node.textContent)).not.toContainEqual(expect.stringContaining('foxtrot'))
+  })
+
   it('keeps focus on the same action control as it turns from send to stop', async () => {
     render(App)
     const composer = await findReadyWorkspaceComposer()

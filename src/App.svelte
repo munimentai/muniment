@@ -115,6 +115,7 @@
   import { createBackgroundServiceNotice } from './lib/background-service-notice.js'
   import { createFolderAccessWatch } from './lib/folder-access.js'
   import PocketFold from './lib/PocketFold.svelte'
+  import { readRunSteers, rememberRunSteer } from './lib/run-steers.js'
   import { codeDiffPermissionAnswer, composerAction, formatByteSize, messageLocalTime, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptProvider, receiptRows, receiptSummary, receiptUsageColumns, promptFolders, routedTurns, runAnnouncement, runFailureDetails, runFailureMessage, settledPhases } from './lib/chat-state.js'
   import ComposerExtensions from './extend/ComposerExtensions.svelte'
   import AppUpdate from './lib/AppUpdate.svelte'
@@ -1922,6 +1923,8 @@
     readThreadId: () => currentThreadId,
     readLaunchThreadId: () => readOpenThread(),
     readThreadSummaries: () => threadSummaries,
+    readSteers: () => readRunSteers(),
+    onSteer: (runId, steer) => rememberRunSteer(runId, steer),
     readArchived: (threadId) => !!threadOrganization[threadId]?.archived,
     readRuntime: () => composerRuntime,
     blocked: () => dictationBusy() || runtimeUpgradePending() || !!unreachableMachine || modelChoicePending || compacting || !!retryReview?.chooseModel,
@@ -4256,7 +4259,9 @@
                 <p class="thinking">{runAnnouncement(message.run)}</p>
               {/if}
               {#each parts as part, index}
-                {#if part.type === 'actions'}
+                {#if part.type === 'steer'}
+                  <div class="user-turn steer-turn"><div class="user-message"><p>{part.text}</p></div><p class="steer-note">Sent during the reply</p></div>
+                {:else if part.type === 'actions'}
                   <ActionFeedback onopenfile={openFile} loadoutput={(effectId) => runDetail(message.run.id, effectId, 'tool_output')} activities={part.activities} live={['thinking', 'streaming', 'pending-permission'].includes(message.run.phase)} />
                 {:else if message.run.phase === 'streaming'}
                   <div class="streaming"><AssistantMarkdown {tauri} onopenlink={openChatLink} text={part.text} caret={index === parts.length - 1} /></div>
@@ -5040,6 +5045,8 @@
   /* The two edges bracket the rendered window of the transcript. src/lib/transcript-window.js anchors on them. */
   .transcript-edge { display: none; }
   .user-turn { margin: 0 0 var(--turn-gap) auto; }
+  .steer-turn { margin-top: var(--turn-gap); }
+  .steer-note { margin: 4px 0 0; text-align: right; color: var(--muted); font: var(--text-12) var(--font-human); }
   .agent-turn { margin: 0 0 16px; }
   .thread-approvals { max-width: 760px; margin: 16px auto; }
   .user-message { width: fit-content; max-width: 78%; margin-left: auto; padding: 9px 13px; overflow-wrap: anywhere; background: var(--faint); border-radius: var(--radius-panel); }

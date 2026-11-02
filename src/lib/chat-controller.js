@@ -1,4 +1,4 @@
-import { applyChatEvent, historyMessages, settledPhases, unsettledRun, withFolders } from './chat-state.js'
+import { applyChatEvent, historyMessages, settledPhases, unsettledRun, withFolders, withSteers } from './chat-state.js'
 import { LOCAL_RUNTIME_ID } from '../runtimes/runtimes.js'
 
 const historyPageCap = 100
@@ -57,6 +57,10 @@ export function createChatController({
   // still exists, or null.
   readLaunchThreadId = () => null,
   readThreadSummaries = () => [],
+  // The messages sent during each reply, by run id, which the window keeps,
+  // and the call that keeps one more.
+  readSteers = () => ({}),
+  onSteer = () => {},
   // Whether the user archived a thread. Archive state lives in the window,
   // so the first page reads on until it holds a full page of other threads.
   readArchived = () => false,
@@ -672,7 +676,7 @@ export function createChatController({
         selected = true
         if (destroyed) return
       }
-      const published = historyMessages(history)
+      const published = withSteers(historyMessages(history), readSteers())
       // The runtime keeps driving an unsettled run while the window is away. The
       // desktop rejoins that run instead of starting one. handleEvent carries it
       // forward by run id from here.
@@ -801,7 +805,7 @@ export function createChatController({
         drainVisibleRun()
         return
       }
-      const published = historyMessages(history)
+      const published = withSteers(historyMessages(history), readSteers())
       const recorded = unsettledRun(published)
       // handleEvent buffered every event that landed during the re-read, and the
       // pages are stale by exactly those events. Only this site can apply them.
@@ -1198,9 +1202,19 @@ export function createChatController({
     const threadId = readThreadId()
     try {
       await invoke('chat_queue', { runId: run.id, delivery, message })
-      // The message joins the run's own transcript, not one the user opened since.
-      if (destroyed || readThreadId() !== threadId) return
-      publishMessages([...messages(), { role: 'user', text: message }])
+      if (destroyed) return
+      // The runtime took the message into the running reply, so it shows
+      // inside that reply where its text stood, never after it as a turn
+      // with no answer. It joins the run's own transcript, not one the user
+      // opened since.
+      const index = runIndex(run.id)
+      const shown = index < 0 ? run : messages()[index].run
+      const steer = { text: message, textOffset: (shown.text ?? '').length }
+      onSteer(run.id, steer)
+      if (readThreadId() !== threadId) return
+      if (index >= 0) replaceRun(index, { ...shown, steers: [...(shown.steers ?? []), steer] })
+      const running = active()
+      if (running?.id === run.id) onActive({ ...running, steers: [...(running.steers ?? []), steer] })
       onFollow()
       if (readDraft().trim() === message) onDraft('')
     } catch (error) {

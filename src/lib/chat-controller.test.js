@@ -2553,7 +2553,9 @@ describe('chat controller', () => {
     history.resolve({ entries: [{ runId: 'run-2', phase: 'streaming', text: 'Half an ans', prompt: 'A question', receipt: null, toolActivity: [] }], nextCursor: null })
     await refreshing
 
-    expect(context.messages().map((message) => message.text ?? message.run.text)).toEqual(['Half an answer', 'Hello'])
+    // The queued message sits inside the reply, where its text stood.
+    expect(context.messages().map((message) => message.text ?? message.run.text)).toEqual(['Half an answer'])
+    expect(context.messages()[0].run.steers).toEqual([{ text: 'Hello', textOffset: 11 }])
     expect(context.active()).toMatchObject({ id: 'run-2', phase: 'streaming', text: 'Half an answer' })
   })
 
@@ -3626,6 +3628,37 @@ describe('background runs', () => {
 
     context.event({ runId: 'run-1', threadId: 'thread-1', type: 'completed', receipt: {} })
     await expect(context.controller.deleteThread('thread-1')).resolves.toBe(true)
+  })
+
+  it('shows a steering message inside the reply where the runtime took it, and again after a reload', async () => {
+    const kept = {}
+    const threads = { 'thread-1': [streaming('run-1', 'echo')] }
+    const invoke = vi.fn((command, payload) => {
+      if (command === 'chat_thread_open') return Promise.resolve({ entries: threads[payload.threadId] ?? [], nextCursor: null })
+      return Promise.resolve()
+    })
+    const context = setup(invoke, { threadId: 'thread-1', options: {
+      readSteers: () => kept,
+      onSteer: (runId, steer) => { kept[runId] = [...(kept[runId] ?? []), steer] },
+    } })
+    context.onThreadSelected.mockImplementation((next) => context.setThreadId(next))
+    await context.start()
+    await context.controller.openThread('thread-1')
+    context.setDraft('foxtrot')
+
+    await context.controller.queue('steer')
+
+    expect(invoke).toHaveBeenCalledWith('chat_queue', { runId: 'run-1', delivery: 'steer', message: 'foxtrot' })
+    expect(context.draft()).toBe('')
+    // No user turn trails the reply: the message sits inside it at its offset.
+    expect(context.messages().filter((message) => message.role === 'user' && message.text === 'foxtrot')).toEqual([])
+    expect(context.messages().at(-1).run.steers).toEqual([{ text: 'foxtrot', textOffset: 4 }])
+    context.event({ runId: 'run-1', type: 'text-delta', text: 'foxtrot' })
+    expect(context.messages().at(-1).run).toMatchObject({ text: 'echofoxtrot', steers: [{ text: 'foxtrot', textOffset: 4 }] })
+
+    threads['thread-1'] = [complete('run-1', 'echofoxtrot', 'echo')]
+    await context.controller.openThread('thread-1')
+    expect(context.messages().at(-1).run).toMatchObject({ text: 'echofoxtrot', steers: [{ text: 'foxtrot', textOffset: 4 }] })
   })
 
   it('keeps a queued message off a thread the user opened since', async () => {

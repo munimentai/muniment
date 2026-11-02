@@ -158,7 +158,7 @@ opens with Add files and folders. Voice sits beside the send control. While it l
 end: absent while the draft is empty with its slot kept, an ink up-arrow button once the draft has
 text, and the same button with a filled stop square while a reply is in flight. Enter sends. A
 message sent while a reply is in flight steers it: the reply picks it up at its
-next check, and the stop control ends the reply. The band shows no hint in
+next check, the transcript shows it inside the reply where it was sent, and the stop control ends the reply. The band shows no hint in
 flight and names no delivery mode. The provenance line stays under each reply with
 the execution time and icon-only Copy at the far right. User messages show local send time and Copy on hover or focus. Copy controls show a hover label. An expanded
 receipt sits plain under it in mono, with no box. A receipt whose
