@@ -144,6 +144,8 @@ pub fn run() {
             window_state::restore_main_window(app)?;
             #[cfg(target_os = "macos")]
             launcher::setup(app.handle())?;
+            input_mark::refuse_affordance();
+            input_mark::log_focus_changes();
             app.manage(chat::ChatState::default());
             runtime_owner::setup(app.handle());
             #[cfg(target_os = "macos")]

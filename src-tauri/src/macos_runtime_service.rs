@@ -670,7 +670,7 @@ fn read_code_signature(executable: &Path) -> Option<String> {
     code_signature(&String::from_utf8_lossy(&output.stderr))
 }
 
-fn write_child_diagnostic(log_directory: &Path, record: &str) -> io::Result<()> {
+pub(crate) fn write_child_diagnostic(log_directory: &Path, record: &str) -> io::Result<()> {
     muniment_core::user_diagnostics::append_owner_only_record(
         log_directory,
         c"runtime.log",
