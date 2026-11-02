@@ -53,17 +53,17 @@
   })
   async function toggleMenu() {
     open = !open
-    if (open) { await tick(); menu?.querySelector('button:not(:disabled)')?.focus() }
+    if (open) { await tick(); menu?.querySelector('button:not(:disabled)')?.focus({ preventScroll: true }) }
   }
   function contextMenu(event) { if (!actions.length) return; event.preventDefault(); if (pressedElsewhere(event, row)) return; void toggleMenu() }
   function contextKey(event) { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) contextMenu(event) }
-  function choose(action) { open = false; trigger?.focus(); action() }
+  function choose(action) { open = false; trigger?.focus({ preventScroll: true }); action() }
   function menuKey(event) {
-    if (event.key === 'Escape') { event.preventDefault(); open = false; trigger?.focus(); return }
+    if (event.key === 'Escape') { event.preventDefault(); open = false; trigger?.focus({ preventScroll: true }); return }
     const items = [...menu.querySelectorAll('button:not(:disabled)')]
     const index = items.indexOf(document.activeElement)
     const next = event.key === 'ArrowDown' ? (index + 1) % items.length : event.key === 'ArrowUp' ? (index + items.length - 1) % items.length : event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : -1
-    if (next >= 0) { event.preventDefault(); items[next].focus() }
+    if (next >= 0) { event.preventDefault(); items[next].focus({ preventScroll: true }) }
     if (event.key === 'Tab') open = false
   }
 </script>
@@ -86,7 +86,7 @@
 
 <style>
   .project-row { display: flex; align-items: center; position: relative; border-radius: var(--radius-control); }
-  .project-title { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; min-height: var(--row-height); padding: var(--row-pad) 8px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--ink); font: var(--text-13) var(--font-human); text-align: left; }
+  .project-title { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; min-height: var(--row-height); padding: var(--row-pad) 8px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--ink); font: var(--text-13) var(--font-human); text-align: left; user-select: none; -webkit-user-select: none; }
   /* The name takes only the width the chips leave, so it clips before any of them. */
   .project-title > span { flex: 1 1 0; min-width: 0; overflow: hidden; white-space: nowrap; }
   .project-title :global(span[data-overflow="true"]) { mask-image: linear-gradient(to right, currentColor calc(100% - 28px), transparent); }

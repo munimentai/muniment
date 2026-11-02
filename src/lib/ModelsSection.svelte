@@ -599,7 +599,7 @@
       {/each}
       </Group>
       {#if formError}<p class="support" role="alert">{formError}</p>{/if}
-      <button type="button" data-variant="primary" disabled={pending || !key.trim() || keyFields.some(([name]) => !keySettings[name]?.trim())} onclick={saveKey}>Save key</button>
+      <button type="button" data-variant="primary" disabled={pending || !key.trim() || keyFields.some(([name]) => !keySettings[name]?.trim())} aria-busy={pending} onclick={saveKey}>{pending ? 'Saving…' : 'Save key'}</button>
     {:else if method === 'ollama'}
       <p class="support">Point Muniment at a running Ollama server. It asks the server for every model it serves.</p>
       <Group label="Ollama server">
@@ -607,7 +607,7 @@
       <div class="connection-field"><label for="ollama-key">API key (optional)</label><input id="ollama-key" type="password" autocomplete="off" placeholder={keptKeyHint('For a server behind a key')} bind:value={key} disabled={pending}></div>
       </Group>
       {#if formError}<p class="support" role="alert">{formError}</p>{/if}
-      <button type="button" data-variant="primary" disabled={pending || !baseUrl.trim()} onclick={saveOllama}>Save Ollama server</button>
+      <button type="button" data-variant="primary" disabled={pending || !baseUrl.trim()} aria-busy={pending} onclick={saveOllama}>{pending ? 'Saving…' : 'Save Ollama server'}</button>
     {:else if method === 'endpoint'}
       <p class="support">Any OpenAI-compatible server: {provider.id === 'lmstudio' ? 'LM Studio on this device.' : provider.id === 'vllm' ? 'a running vLLM server.' : 'a LiteLLM proxy or another gateway.'}</p>
       <Group label="Endpoint">
@@ -620,7 +620,7 @@
       <Row title="Send tools" description="Turn off for a server without tool calling. Chats then answer from text alone."><Toggle bind:checked={endpointTools} label="Send tools" disabled={pending} /></Row>
       </Group>
       {#if formError}<p class="support" role="alert">{formError}</p>{/if}
-      <button type="button" data-variant="primary" disabled={pending || !baseUrl.trim() || (provider.id === 'custom' && !endpointName.trim())} onclick={saveEndpoint}>Save endpoint</button>
+      <button type="button" data-variant="primary" disabled={pending || !baseUrl.trim() || (provider.id === 'custom' && !endpointName.trim())} aria-busy={pending} onclick={saveEndpoint}>{pending ? 'Saving…' : 'Save endpoint'}</button>
     {:else if method === 'account'}
       <p class="support">Sign in with your {methodLabel(provider, 'account')}. {provider.id === 'anthropic' ? 'The browser opens, and Claude Code keeps the token.' : 'The browser opens, and the token stays on this device.'}</p>
       {#if signedIn.length}

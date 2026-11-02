@@ -9,7 +9,20 @@ export function recordPress(event) {
   press = event.button === 2 || (event.button === 0 && event.ctrlKey) ? { target: event.target, time: event.timeStamp } : null
 }
 
-if (typeof document !== 'undefined') document.addEventListener('pointerdown', recordPress, true)
+// A secondary press on a sidebar row keeps its default off: WebKit selects
+// the word under the pointer and focuses the row, which scrolls the list.
+// The context menu still follows. A text field keeps its own menu.
+export function holdSecondaryPress(event) {
+  if (!(event.button === 2 || (event.button === 0 && event.ctrlKey))) return
+  const target = event.target instanceof Element ? event.target : event.target?.parentElement
+  if (!target?.closest('[data-panel="sidebar"]') || target.closest('input, textarea, [contenteditable]:not([contenteditable="false"])')) return
+  event.preventDefault()
+}
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('pointerdown', recordPress, true)
+  document.addEventListener('mousedown', holdSecondaryPress, true)
+}
 
 // Whether `event`, a pointer's context menu on `row`, follows a press that
 // began outside `row`. A keyboard context menu names no point and passes.

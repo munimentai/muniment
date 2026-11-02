@@ -2596,10 +2596,11 @@
     }
   }
 
-  function focusThreadRow(threadId) {
+  // A row a closed menu returns focus to is in view, so the list keeps its scroll.
+  function focusThreadRow(threadId, preventScroll = false) {
     void tick().then(() => {
       Array.from(document.querySelectorAll('[data-thread-id]'))
-        .find((row) => row.dataset.threadId === threadId)?.focus()
+        .find((row) => row.dataset.threadId === threadId)?.focus({ preventScroll })
     })
   }
 
@@ -2643,7 +2644,7 @@
       const items = [...event.currentTarget.querySelectorAll('button:not(:disabled)')]
       const index = items.indexOf(document.activeElement)
       const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length
-      items[next]?.focus()
+      items[next]?.focus({ preventScroll: true })
       return
     }
     if (event.key !== 'Escape' && event.key !== 'Tab') return
@@ -2652,14 +2653,15 @@
     const fromTitle = threadMenu?.fromTitle
     closeThreadMenu()
     if (fromTitle) void tick().then(() => titleActionsButton?.focus())
-    else focusThreadRow(threadId)
+    else focusThreadRow(threadId, true)
   }
 
   function focusMenuOnMount(element) {
     const bounds = element.getBoundingClientRect()
     element.style.left = `${Math.max(8, Math.min(threadMenu.x, window.innerWidth - bounds.width - 8))}px`
     element.style.top = `${Math.max(8, Math.min(threadMenu.y, window.innerHeight - bounds.height - 8))}px`
-    element.querySelector('button')?.focus()
+    // The menu sits in the scrolled list, so its focus keeps the list still.
+    element.querySelector('button')?.focus({ preventScroll: true })
   }
 
   function menuFocusOut(event) {
@@ -5042,7 +5044,7 @@
   .delete-titles { margin:4px 0 0; padding-left:18px; }
   .older-threads { width: 100%; margin-top: 4px; border-color: transparent; background: transparent; color: var(--muted); }
   /* The room the actions control takes at a row's right end: its width and its inset, less the row's own padding, and a gap before it. */
-  .thread-record { position: relative; --row-actions-room: 24px; }
+  .thread-record { position: relative; --row-actions-room: 24px; user-select: none; -webkit-user-select: none; }
   .thread-row { font: inherit; font-size: var(--text-13); color: var(--ink); border: 1px solid transparent; border-radius: var(--radius-control); user-select: none; -webkit-user-select: none; }
   /* Hover is a lighter wash than the open thread's faint row, as a selection is darker, so the three never look alike. */
   button.thread-row:hover:not([aria-disabled="true"]) { background: color-mix(in srgb, var(--faint) 55%, transparent); }

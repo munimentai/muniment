@@ -33,3 +33,18 @@ it('passes a context menu on the row the press began on, from the keyboard, or w
   press(title, { button: 0 })
   expect(menuOn(document.getElementById('b'))).toBe(false)
 })
+
+it('keeps the default off a secondary press on a sidebar row, so no word is selected and the list keeps its scroll', () => {
+  document.body.innerHTML = '<aside data-panel="sidebar"><button id="row"><span id="title">Plan the week</span></button><input id="field"></aside><main><p id="text">Reply</p></main>'
+  const down = (id, init) => {
+    const event = new MouseEvent('mousedown', { bubbles: true, cancelable: true, ...init })
+    document.getElementById(id).dispatchEvent(event)
+    return event.defaultPrevented
+  }
+  expect(down('title', { button: 2 })).toBe(true)
+  expect(down('row', { button: 0, ctrlKey: true })).toBe(true)
+  // A primary press, a text field and the rest of the window keep their defaults.
+  expect(down('title', { button: 0 })).toBe(false)
+  expect(down('field', { button: 2 })).toBe(false)
+  expect(down('text', { button: 2 })).toBe(false)
+})

@@ -36,6 +36,20 @@ it('offers only the actions the project has in its menu', async () => {
   expect(onsettings).toHaveBeenCalledOnce()
 })
 
+it('moves focus into and out of its menu without scrolling the sidebar', async () => {
+  const focus = vi.spyOn(HTMLElement.prototype, 'focus')
+  try {
+    render(ProjectItem, { name: 'Research', expanded: false, ontoggle: vi.fn(), onnew: vi.fn(), onrename: vi.fn() })
+    await fireEvent.contextMenu(screen.getByRole('button', { name: 'Project Research' }), { clientX: 10, clientY: 10 })
+    const first = await screen.findByRole('menuitem', { name: 'New thread' })
+    expect(first).toHaveFocus()
+    await fireEvent.keyDown(first, { key: 'Escape' })
+    expect(screen.queryByRole('menu')).toBeNull()
+    expect(focus.mock.calls.length).toBeGreaterThanOrEqual(2)
+    for (const [options] of focus.mock.calls) expect(options).toEqual({ preventScroll: true })
+  } finally { focus.mockRestore() }
+})
+
 it('shows the most urgent status of its threads in words', () => {
   render(ProjectItem, { name: 'Homelab', status: 'needs_you', statusLabel: 'Approve', expanded: false, ontoggle: vi.fn(), onnew: vi.fn() })
   const title = screen.getByRole('button', { name: 'Project Homelab, Approve' })

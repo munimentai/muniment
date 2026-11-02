@@ -320,6 +320,27 @@ it('fills the Edit form with the endpoint models and keeps them on a save with n
   })))
 })
 
+it('shows Saving… on a disabled Save while a save waits, then restores the button with the error', async () => {
+  const tauri = bridge()
+  const base = tauri.invoke.getMockImplementation()
+  let refuse
+  tauri.invoke.mockImplementation((command, payload) => command === 'local_mode_store_endpoint'
+    ? new Promise((_, reject) => { refuse = reject })
+    : base(command, payload))
+  render(ModelsSection, { props: { tauri, listen: async () => () => {}, inventory } })
+  await fireEvent.click(within(screen.getByRole('region', { name: 'oMLX' })).getByRole('button', { name: 'Edit oMLX' }))
+  await fireEvent.click(screen.getByRole('button', { name: 'Save endpoint' }))
+  const busy = await screen.findByRole('button', { name: 'Saving…' })
+  expect(busy).toBeDisabled()
+  expect(busy).toHaveAttribute('aria-busy', 'true')
+  expect(screen.queryByRole('button', { name: 'Save endpoint' })).toBeNull()
+  refuse(new Error('Muniment cannot save provider settings. Check folder access, then retry.'))
+  expect(await screen.findByText('Muniment cannot save provider settings. Check folder access, then retry.')).toBeInTheDocument()
+  const save = screen.getByRole('button', { name: 'Save endpoint' })
+  expect(save).toBeEnabled()
+  expect(save).toHaveAttribute('aria-busy', 'false')
+})
+
 it('saves an edited endpoint with its kept models and a model added to the list', async () => {
   const tauri = bridge()
   const base = tauri.invoke.getMockImplementation()

@@ -2059,7 +2059,10 @@ describe('workspace composer entry', () => {
     await fireEvent.click(within(dialog).getByRole('button', { name: 'Save Ollama server' }))
     expect(invoke).toHaveBeenCalledWith('local_mode_store_local_provider', { baseUrl: 'http://localhost:11434/v1', apiKey: fails ? 'sk-ollama' : null })
     expect(url).toBeDisabled()
-    expect(within(dialog).getByRole('button', { name: 'Save Ollama server' })).toBeDisabled()
+    // The save shows it is busy while it runs, as it does while it waits on a lock.
+    const busy = within(dialog).getByRole('button', { name: 'Saving…' })
+    expect(busy).toBeDisabled()
+    expect(busy).toHaveAttribute('aria-busy', 'true')
 
     if (fails) save.reject(new Error('Ollama setup failed. Check the URL, then retry.'))
     else save.resolve()
@@ -3291,6 +3294,27 @@ describe('thread name', () => {
     await fireEvent.pointerDown(thread, { button: 2 })
     await fireEvent.contextMenu(thread, { clientX: 40, clientY: 120 })
     expect(screen.getByRole('menu', { name: 'Run Saved Agent Instructions actions' })).toBeInTheDocument()
+  })
+
+  it('keeps the sidebar scroll and selects no title word when a right press opens and closes a thread row menu', async () => {
+    threadSummaryResult = [{ threadId: 'thread-9', title: 'Run Saved Agent Instructions', updatedAt: new Date().toISOString() }]
+    render(App)
+    const thread = (await screen.findByRole('button', { name: 'Actions for Run Saved Agent Instructions' })).closest('.thread-record')
+    const title = thread.querySelector('.thread-row-title')
+    // WebKit selects the word under a right press and scrolls to the row it focuses.
+    const down = new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 2 })
+    title.dispatchEvent(down)
+    expect(down.defaultPrevented).toBe(true)
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus')
+    try {
+      await fireEvent.pointerDown(title, { button: 2 })
+      await fireEvent.contextMenu(thread, { clientX: 40, clientY: 120 })
+      const menu = screen.getByRole('menu', { name: 'Run Saved Agent Instructions actions' })
+      await fireEvent.keyDown(menu, { key: 'Escape' })
+      await waitFor(() => expect(document.activeElement?.dataset.threadId).toBe('thread-9'))
+      expect(focus.mock.calls.length).toBeGreaterThanOrEqual(2)
+      for (const [options] of focus.mock.calls) expect(options).toEqual({ preventScroll: true })
+    } finally { focus.mockRestore() }
   })
 
   it('deletes a project from its menu after a confirm that says its threads stay', async () => {
