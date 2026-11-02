@@ -244,11 +244,14 @@
 
   // An endpoint provider edits through its own connect form, filled with what
   // it holds. The key field stays blank, and a blank key keeps the saved one.
+  // The models field lists every saved model, not the ones a search shows.
   function editProvider(entry) {
     chooseProvider(entry.id.startsWith('custom-') ? 'custom' : entry.id)
     editingEndpoint = entry.id
     baseUrl = entry.base_url ?? baseUrl
     if (entry.id.startsWith('custom-')) endpointName = entry.name
+    const saved = inventory?.providers?.find((other) => other.id === entry.id) ?? entry
+    endpointModels = (saved.models ?? []).map((model) => model.id).join('\n')
   }
 
   function chooseProvider(id) {

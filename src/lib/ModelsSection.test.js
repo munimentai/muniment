@@ -269,3 +269,16 @@ it('closes the decision-model Disconnect dialog on Cancel and on Escape, and dis
   expect(unplug).toHaveFocus()
   expect(tauri.invoke).not.toHaveBeenCalledWith('model_router_disconnect_classifier', expect.anything())
 })
+
+it('fills the Edit form with the endpoint models and keeps them on a save with no change', async () => {
+  const tauri = bridge()
+  const base = tauri.invoke.getMockImplementation()
+  tauri.invoke.mockImplementation(async (command, payload) => command === 'local_mode_store_endpoint' ? 'custom-omlx' : base(command, payload))
+  render(ModelsSection, { props: { tauri, listen: async () => () => {}, inventory } })
+  await fireEvent.click(within(screen.getByRole('region', { name: 'oMLX' })).getByRole('button', { name: 'Edit oMLX' }))
+  expect(screen.getByLabelText('Models, one per line')).toHaveValue('Qwen3.8-27B-4bit\ngemma-4-26b-a4b-it-4bit')
+  await fireEvent.click(screen.getByRole('button', { name: 'Save endpoint' }))
+  await waitFor(() => expect(tauri.invoke).toHaveBeenCalledWith('local_mode_store_endpoint', expect.objectContaining({
+    kind: 'custom', name: 'oMLX', models: ['Qwen3.8-27B-4bit', 'gemma-4-26b-a4b-it-4bit'],
+  })))
+})
