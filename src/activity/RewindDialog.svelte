@@ -57,11 +57,18 @@
     document.body.appendChild(node)
     return { destroy() { node.remove() } }
   }
+  // Escape from inside the panel stops at it, before the shell's document
+  // keys close the page or the side panel under it. The window answers it
+  // from anywhere else.
+  function keydown(event) {
+    if (event.key === 'Escape' && !pending) { event.preventDefault(); event.stopPropagation(); onclose?.() }
+  }
 </script>
 
-<svelte:window onkeydown={(event) => { if (event.key === 'Escape' && !pending) { event.preventDefault(); onclose?.() } }} />
+<svelte:window onkeydown={keydown} />
 <div class="rewind-backdrop" use:portal use:dialogDismiss={{ onclose: () => onclose?.(), disabled: pending }}>
-  <div data-panel="rewind" data-panel-variant="overlay" class="rewind-panel" role="dialog" aria-modal="true" aria-labelledby="rewind-title">
+  <!-- svelte-ignore a11y_interactive_supports_focus -->
+  <div data-panel="rewind" data-panel-variant="overlay" class="rewind-panel" role="dialog" aria-modal="true" aria-labelledby="rewind-title" onkeydown={keydown}>
     <header>
       <h2 id="rewind-title">Rewind to before this message</h2>
       <PopupClose label="Close rewind" disabled={pending} onclick={() => onclose?.()} />

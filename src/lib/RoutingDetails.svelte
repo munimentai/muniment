@@ -21,13 +21,20 @@
     document.body.appendChild(node)
     return { destroy() { node.remove() } }
   }
+  // Escape from inside the panel stops at it, before the shell's document
+  // keys close the page or the side panel under it. The window answers it
+  // from anywhere else.
+  function keydown(event) {
+    if (shown && event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close() }
+  }
 </script>
 
-<svelte:window onkeydown={(event) => { if (shown && event.key === 'Escape') { event.preventDefault(); close() } }} />
+<svelte:window onkeydown={keydown} />
 <button type="button" class="routing-trigger" aria-haspopup="dialog" bind:this={trigger} onclick={open}>{label}</button>
 {#if shown}
   <div class="routing-scrim" use:portal use:dialogDismiss={{ onclose: close }}>
-    <div data-panel data-panel-variant="overlay" class="routing-panel" role="dialog" aria-modal="true" aria-label="Routing details" bind:this={panel}>
+    <!-- svelte-ignore a11y_interactive_supports_focus -->
+    <div data-panel data-panel-variant="overlay" class="routing-panel" role="dialog" aria-modal="true" aria-label="Routing details" bind:this={panel} onkeydown={keydown}>
       <header data-panel-header class="routing-head">
         <h3>{label}</h3>
         <PopupClose label="Close routing details" onclick={close} />

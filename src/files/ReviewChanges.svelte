@@ -68,11 +68,18 @@
     document.body.appendChild(node)
     return { destroy() { node.remove() } }
   }
+  // Escape from inside the panel stops at it, before the shell's document
+  // keys close the page or the side panel under it. The window answers it
+  // from anywhere else.
+  function keydown(event) {
+    if (event.key === 'Escape' && !pending) { event.preventDefault(); event.stopPropagation(); onclose?.() }
+  }
 </script>
 
-<svelte:window onkeydown={(event) => { if (event.key === 'Escape' && !pending) { event.preventDefault(); onclose?.() } }} />
+<svelte:window onkeydown={keydown} />
 <div class="review-backdrop" use:portal use:dialogDismiss={{ onclose: () => onclose?.(), disabled: pending }}>
-  <div data-panel="review" data-panel-variant="overlay" class="review-panel" role="dialog" aria-modal="true" aria-labelledby="review-title" bind:this={panel}>
+  <!-- svelte-ignore a11y_interactive_supports_focus -->
+  <div data-panel="review" data-panel-variant="overlay" class="review-panel" role="dialog" aria-modal="true" aria-labelledby="review-title" bind:this={panel} onkeydown={keydown}>
     <header class="review-head">
       <h2 id="review-title">Review changes</h2>
       <PopupClose label="Close review" disabled={pending} onclick={() => onclose?.()} />

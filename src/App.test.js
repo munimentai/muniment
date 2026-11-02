@@ -9139,6 +9139,46 @@ describe('provenance line', () => {
     expect(asked.sort()).toEqual(['run-bash', 'run-push'])
   })
 
+  // A turn's dialogs sit over the thread. Escape in one closes it alone: the
+  // side panel beside the thread stays open and the thread stays in view.
+  it.each([
+    ['Routing details', 'Routing details', async () => {
+      await fireEvent.click(await screen.findByRole('button', { name: /^Expand receipt:/ }))
+      await fireEvent.click(screen.getByRole('button', { name: 'Routing details · 2 turns' }))
+    }],
+    ['Review changes', 'Review changes', async () => { await fireEvent.click(await screen.findByRole('button', { name: 'Review changes' })) }],
+    ['Rewind', 'Rewind to before this message', async () => { await fireEvent.click(await screen.findByRole('button', { name: 'Rewind to here' })) }],
+  ])('closes only the %s dialog on Escape and leaves the side panel and the thread', async (_name, dialogName, openDialog) => {
+    HTMLDialogElement.prototype.showModal = function () { this.open = true }
+    const edit = { effectId: 'e1', displayName: 'edit', status: 'completed', input: JSON.stringify({ path: 'notes.md', oldText: 'a', newText: 'b' }) }
+    const routing = [{ account: 'First account', selected_model: 'example', decision: 'Selected' }, { account: 'Second account', selected_model: 'fallback', decision: 'Fallback' }]
+    invoke.mockImplementation(async (command, args) => {
+      if (command === 'project_list') return { projects: {}, threads: {} }
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_thread_open') return [{ runId: 'run-edit', phase: 'complete', text: 'Edited the notes.', prompt: 'Edit the notes', receipt: { model: 'example', turns: 2, routing }, toolActivity: [edit] }]
+      if (command === 'agent_request' && args.operation === 'run.changes') return { run_id: args.body.run_id, available: true, more: 0, files: [], diff: { schemaVersion: 1, id: 'turn', truncated: false, files: [] } }
+      if (command === 'agent_request' && args.operation === 'thread.rewind_preview') return { thread_id: args.body.thread_id, run_id: args.body.run_id, available: true, turns: 1, conversation: 'restore', files: { files_available: true, restore: [], remove: [], cannot_restore: [], not_covered: [], token: 'token-1' }, irreversible: [] }
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'chat_select_thread') return undefined
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    expect(await screen.findByText('Edited the notes.')).toBeInTheDocument()
+    const toggle = screen.getByRole('button', { name: 'Artifacts' })
+    const mac = navigator.platform.startsWith('Mac')
+    await fireEvent.keyDown(document, { key: 'j', metaKey: mac, ctrlKey: !mac })
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-expanded', 'true'))
+    await openDialog()
+    const dialog = await screen.findByRole('dialog', { name: dialogName })
+    const inside = dialog.querySelector('button:not(:disabled)')
+    inside.focus()
+    await fireEvent.keyDown(inside, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: dialogName })).not.toBeInTheDocument())
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText('Edited the notes.')).toBeInTheDocument()
+  })
+
   it('renders a provenance line when a reply has no receipt', async () => {
     restore(null)
 
