@@ -290,19 +290,10 @@ export function applyBufferedChatEvents(run, events) {
   return events.reduce((projection, event) => applyChatEvent(projection, event), run)
 }
 
-// A message sent while a reply runs steers that reply, so it shows inside the
-// reply where it was sent: `steers` maps a run id to its messages, each with
-// the reply text's length when the runtime took it.
-export function withSteers(messages, steers = {}) {
-  return messages.map((message) => message.run?.id && steers[message.run.id]?.length && !message.run.steers?.length
-    ? { ...message, run: { ...message.run, steers: steers[message.run.id] } }
-    : message)
-}
-
 export function historyMessages(history) {
   return history.flatMap((entry) => [
     ...(entry.prompt || entry.attachments?.length ? [{ role: 'user', id: entry.runId, sentAt: entry.sentAt ?? null, text: entry.prompt ?? '', attachments: entry.attachments ?? [] }] : []),
-    { role: 'assistant', run: { id: entry.runId, ...(entry.sentAt ? { startedAt: entry.sentAt } : {}), promptStorageNotice: entry.promptStorageNotice ?? null, resumeNotice: entry.resumeNotice ?? null, phase: entry.phase, stage: runStage(null, entry), turnStarted: entry.turnStarted === true, failureReason: entry.failureReason ?? null, failureDetail: failureDetail(entry), text: entry.text, receipt: entry.receipt ?? null, recalls: entry.recalls ?? [], prompt: entry.prompt ?? '', toolActivity: entry.toolActivity ?? [], appliedDiffs: entry.appliedDiffs ?? [], pendingPermission: entry.pendingPermission ?? null, resumable: entry.resumable === true } },
+    { role: 'assistant', run: { id: entry.runId, ...(entry.sentAt ? { startedAt: entry.sentAt } : {}), promptStorageNotice: entry.promptStorageNotice ?? null, resumeNotice: entry.resumeNotice ?? null, phase: entry.phase, stage: runStage(null, entry), turnStarted: entry.turnStarted === true, failureReason: entry.failureReason ?? null, failureDetail: failureDetail(entry), text: entry.text, receipt: entry.receipt ?? null, recalls: entry.recalls ?? [], prompt: entry.prompt ?? '', toolActivity: entry.toolActivity ?? [], appliedDiffs: entry.appliedDiffs ?? [], steers: entry.steers ?? [], pendingPermission: entry.pendingPermission ?? null, resumable: entry.resumable === true } },
   ])
 }
 

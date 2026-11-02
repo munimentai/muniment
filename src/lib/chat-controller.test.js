@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import { createChatController } from './chat-controller.js'
+import { responseParts } from '../activity/action-feedback.js'
 
 function deferred() {
   let resolve
@@ -3692,17 +3693,13 @@ describe('background runs', () => {
     await expect(context.controller.deleteThread('thread-1')).resolves.toBe(true)
   })
 
-  it('shows a steering message inside the reply where the runtime took it, and again after a reload', async () => {
-    const kept = {}
+  it('shows a steering message inside the reply where the runtime took it, and places it from history after a reload', async () => {
     const threads = { 'thread-1': [streaming('run-1', 'echo')] }
     const invoke = vi.fn((command, payload) => {
       if (command === 'chat_thread_open') return Promise.resolve({ entries: threads[payload.threadId] ?? [], nextCursor: null })
       return Promise.resolve()
     })
-    const context = setup(invoke, { threadId: 'thread-1', options: {
-      readSteers: () => kept,
-      onSteer: (runId, steer) => { kept[runId] = [...(kept[runId] ?? []), steer] },
-    } })
+    const context = setup(invoke, { threadId: 'thread-1' })
     context.onThreadSelected.mockImplementation((next) => context.setThreadId(next))
     await context.start()
     await context.controller.openThread('thread-1')
@@ -3718,9 +3715,18 @@ describe('background runs', () => {
     context.event({ runId: 'run-1', type: 'text-delta', text: 'foxtrot' })
     expect(context.messages().at(-1).run).toMatchObject({ text: 'echofoxtrot', steers: [{ text: 'foxtrot', textOffset: 4 }] })
 
-    threads['thread-1'] = [complete('run-1', 'echofoxtrot', 'echo')]
+    // The runtime's journal is the record: a reload, or another device, reads
+    // the message and its place from history, with nothing kept in the window.
+    const recorded = [{ text: 'foxtrot', textOffset: 4, sentAt: '2026-08-05T00:00:01Z' }]
+    threads['thread-1'] = [{ ...complete('run-1', 'echofoxtrot', 'echo'), steers: recorded }]
     await context.controller.openThread('thread-1')
-    expect(context.messages().at(-1).run).toMatchObject({ text: 'echofoxtrot', steers: [{ text: 'foxtrot', textOffset: 4 }] })
+    expect(context.messages().at(-1).run).toMatchObject({ text: 'echofoxtrot', steers: recorded })
+    expect(responseParts(context.messages().at(-1).run)).toEqual([
+      { type: 'text', text: 'echo' },
+      { type: 'steer', text: 'foxtrot' },
+      { type: 'text', text: 'foxtrot' },
+    ])
+    expect(context.messages().filter((message) => message.role === 'user').map((message) => message.text)).toEqual(['echo'])
   })
 
   it('keeps a queued message off a thread the user opened since', async () => {

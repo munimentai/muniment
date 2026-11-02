@@ -115,7 +115,6 @@
   import { createBackgroundServiceNotice } from './lib/background-service-notice.js'
   import { createFolderAccessWatch } from './lib/folder-access.js'
   import PocketFold from './lib/PocketFold.svelte'
-  import { readRunSteers, rememberRunSteer } from './lib/run-steers.js'
   import { codeDiffPermissionAnswer, composerAction, formatByteSize, messageLocalTime, permissionGateAction, permissionGateCommitHint, receiptLabel, receiptProvider, receiptRows, receiptSummary, receiptUsageColumns, promptFolders, routedTurns, runAnnouncement, runFailureDetails, runFailureMessage, settledPhases } from './lib/chat-state.js'
   import ComposerExtensions from './extend/ComposerExtensions.svelte'
   import AppUpdate from './lib/AppUpdate.svelte'
@@ -1948,8 +1947,6 @@
     readThreadId: () => currentThreadId,
     readLaunchThreadId: () => readOpenThread(),
     readThreadSummaries: () => threadSummaries,
-    readSteers: () => readRunSteers(),
-    onSteer: (runId, steer) => rememberRunSteer(runId, steer),
     readArchived: (threadId) => !!threadOrganization[threadId]?.archived,
     readRuntime: () => composerRuntime,
     blocked: () => dictationBusy() || runtimeUpgradePending() || !!unreachableMachine || modelChoicePending || compacting || !!retryReview?.chooseModel,
