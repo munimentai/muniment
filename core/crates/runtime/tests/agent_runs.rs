@@ -1419,3 +1419,110 @@ fn a_run_now_reply_ends_its_record_without_waiting_for_the_next_schedule_pass() 
         .any(|event| event["id"] == run_id.as_str() && event["status"] == "completed");
     assert!(completed, "the card hears the run ended");
 }
+
+/// A thread created long ago that holds only its creation, as an agent's
+/// creation chat holds when its messages live in its creation record.
+fn bare_thread(profile: &Path) -> String {
+    let mut journal =
+        muniment_core::journal::RunJournal::open(profile.join("runs.sqlite3")).unwrap();
+    let mut extra = std::collections::BTreeMap::new();
+    extra.insert("attach_profile".to_owned(), json!("desktop-owner"));
+    journal
+        .create_thread(
+            "local",
+            "2026-08-06T12:34:56Z",
+            muniment_core::journal::Provenance {
+                source: "muniment-runtime".into(),
+                source_version: "test".into(),
+                actor_id: None,
+                device_id: None,
+                rpc_request_id: None,
+                capability_versions: None,
+                extra,
+            },
+        )
+        .unwrap()
+}
+
+fn creation_chat(profile: &Path, thread_id: &str, agent: &str) {
+    muniment_core::creations::save(
+        profile,
+        muniment_core::creations::Creation {
+            thread_id: thread_id.to_owned(),
+            kind: "agent".into(),
+            goal: "Watch the deploys".into(),
+            output: "A saved agent".into(),
+            result_id: Some(agent.to_owned()),
+            turns: Vec::new(),
+        },
+    )
+    .unwrap();
+}
+
+fn thread_deleted(profile: &Path, thread_id: &str) -> bool {
+    muniment_core::journal::RunJournal::open(profile.join("runs.sqlite3"))
+        .unwrap()
+        .thread_events(thread_id)
+        .unwrap()
+        .iter()
+        .any(|event| event.event_type == "thread.deleted")
+}
+
+#[test]
+fn deleting_an_agent_deletes_its_creation_chat() {
+    let _environment = ENVIRONMENT
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let setup = Setup::new("agent-delete-creation", true, RuntimeHost::default());
+    let agent = setup.agent("Deploy watcher");
+    let chat = bare_thread(setup.profile());
+    creation_chat(setup.profile(), &chat, &agent.id);
+    let unrelated = bare_thread(setup.profile());
+
+    permission_operation(
+        &setup,
+        "agent.delete",
+        json!({"id": agent.id, "remove_memory": false}),
+    )
+    .unwrap();
+    assert!(thread_deleted(setup.profile(), &chat));
+    assert!(muniment_core::creations::read(setup.profile(), &chat)
+        .unwrap()
+        .is_none());
+    assert!(!thread_deleted(setup.profile(), &unrelated));
+}
+
+#[test]
+fn the_runtime_start_deletes_the_creation_chats_deleted_agents_left() {
+    let _environment = ENVIRONMENT
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let temporary = TemporaryProfile::new("creation-sweep", false);
+    let profile = &temporary.profile;
+    muniment_core::home::confirm_home(profile, &temporary.root.join("muniment")).unwrap();
+    let left = bare_thread(profile);
+    let recorded = bare_thread(profile);
+    creation_chat(profile, &recorded, &uuid::Uuid::new_v4().to_string());
+    let open = bare_thread(profile);
+    muniment_core::creations::save(
+        profile,
+        muniment_core::creations::Creation {
+            thread_id: open.clone(),
+            kind: "agent".into(),
+            goal: "Watch the deploys".into(),
+            output: "A saved agent".into(),
+            result_id: None,
+            turns: Vec::new(),
+        },
+    )
+    .unwrap();
+
+    let _state = RuntimeAttachState::open(RuntimeHost::default(), profile, profile).unwrap();
+    assert!(thread_deleted(profile, &left));
+    assert!(thread_deleted(profile, &recorded));
+    assert!(muniment_core::creations::read(profile, &recorded)
+        .unwrap()
+        .is_none());
+    // A creation chat that has not saved its agent yet stays.
+    assert!(!thread_deleted(profile, &open));
+}

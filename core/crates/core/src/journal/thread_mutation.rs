@@ -126,6 +126,13 @@ pub fn delete_thread_with_creation_now(
     if creation {
         crate::creations::remove(profile, thread_id).map_err(ThreadMutationError::Creation)?;
     }
+    Ok(tidy_deleted_thread(profile, thread_id))
+}
+
+/// Removes what a deleted thread leaves outside the journal: its session
+/// folder when that holds only Muniment's files, and its place in the agent
+/// state. Answers the folder when it stays because it holds the user's files.
+fn tidy_deleted_thread(profile: &std::path::Path, thread_id: &str) -> Option<std::path::PathBuf> {
     // The thread's own session folder goes when it holds only Muniment's
     // files. A folder with the user's files stays, and the answer names it.
     let folder_kept = match crate::projects::remove_thread_folder(profile, thread_id) {
@@ -153,7 +160,7 @@ pub fn delete_thread_with_creation_now(
                 .any(|primary| primary == thread_id)
     });
     if !agent_thread {
-        return Ok(folder_kept);
+        return folder_kept;
     }
     if let Err(error) = crate::agents::with_state(profile, |state| {
         Ok(crate::agents::forget_thread(state, thread_id))
@@ -162,7 +169,150 @@ pub fn delete_thread_with_creation_now(
             "thread_delete: agent state not updated thread={thread_id} error={error}"
         );
     }
-    Ok(folder_kept)
+    folder_kept
+}
+
+/// Whether the journal holds the thread and no delete of it.
+fn thread_live(journal: &mut RunJournal, thread_id: &str) -> Result<bool, JournalError> {
+    let events = journal.thread_events(thread_id)?;
+    Ok(!events.is_empty()
+        && events
+            .iter()
+            .all(|event| event.event_type != "thread.deleted"))
+}
+
+/// Deletes the creation chats of an agent the user deleted, with their
+/// records and folders. The chat belongs to the agent, so the delete needs
+/// no other owner check. Answers the threads it deleted.
+pub fn delete_agent_creation_threads_now(
+    journal: &mut RunJournal,
+    profile: &std::path::Path,
+    threads: &[String],
+    provenance: &Provenance,
+) -> Result<Vec<String>, ThreadMutationError> {
+    let mut deleted = Vec::new();
+    for thread_id in threads {
+        if thread_live(journal, thread_id).map_err(ThreadMutationError::Journal)? {
+            let last_thread_seq = journal
+                .last_thread_seq(thread_id)
+                .map_err(ThreadMutationError::Journal)?;
+            journal
+                .append_thread_deleted(
+                    last_thread_seq,
+                    thread_id,
+                    &Utc::now().to_rfc3339_opts(SecondsFormat::AutoSi, true),
+                    provenance,
+                )
+                .map_err(ThreadMutationError::Journal)?;
+            deleted.push(thread_id.clone());
+        }
+        crate::creations::remove(profile, thread_id).map_err(ThreadMutationError::Creation)?;
+        tidy_deleted_thread(profile, thread_id);
+    }
+    Ok(deleted)
+}
+
+/// How long a thread that holds only its creation waits before the startup
+/// sweep may delete it, so a fresh thread the user is about to write in stays.
+const ORPHAN_THREAD_MIN_AGE: chrono::TimeDelta = chrono::TimeDelta::days(1);
+
+impl RunJournal {
+    /// The threads this runtime created that hold nothing but their
+    /// creation, no run and no other event, each with its creation time. A
+    /// replica of another member's thread is left out.
+    fn bare_threads(&mut self) -> Result<Vec<(String, String)>, JournalError> {
+        let coordination = self.coordination.clone();
+        let _operation = coordination
+            .as_ref()
+            .map(|state| state.operation.lock().unwrap());
+        self.refresh_after_compaction()?;
+        let connection = self
+            .connection
+            .as_ref()
+            .expect("journal connection is always present outside compaction");
+        let mut statement = connection.prepare(
+            "SELECT te.thread_id, te.envelope_json FROM thread_events te \
+             WHERE te.event_type='thread.created' \
+             AND NOT EXISTS(SELECT 1 FROM thread_events other \
+                 WHERE other.thread_id=te.thread_id AND other.event_type<>'thread.created') \
+             AND NOT EXISTS(SELECT 1 FROM run_threads rt WHERE rt.thread_id=te.thread_id)",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut bare = Vec::new();
+        for row in rows {
+            let (thread_id, raw) = row?;
+            let created: super::ThreadEventEnvelope =
+                serde_json::from_str(&raw).map_err(|error| {
+                    JournalError::Corrupt(format!("invalid stored thread envelope JSON: {error}"))
+                })?;
+            if created
+                .provenance
+                .extra
+                .contains_key(crate::swarm::SWARM_ORIGIN)
+            {
+                continue;
+            }
+            bare.push((thread_id, created.recorded_at));
+        }
+        Ok(bare)
+    }
+}
+
+/// Deletes, at start, the creation chats that deleted agents left: a chat
+/// whose creation record names an agent that no longer exists and that
+/// holds no run, and a thread that holds only its creation, older than a
+/// day, that no creation record, agent or project names, as an agent's
+/// delete left its creation chat before it deleted the chat too. A thread
+/// with a run, which holds the user's messages, always stays. Answers the
+/// threads it deleted.
+pub fn remove_orphan_creation_threads(
+    journal: &mut RunJournal,
+    profile: &std::path::Path,
+    provenance: &Provenance,
+) -> Result<Vec<String>, String> {
+    let error = |error: &dyn std::fmt::Debug| format!("{error:?}");
+    let runless = |journal: &mut RunJournal, thread: &str| {
+        journal
+            .thread_run_ids(thread, 1, None)
+            .map(|page| page.run_ids.is_empty())
+            .map_err(|failure| error(&failure))
+    };
+    let creations = crate::creations::list(profile)?;
+    let mut orphans = Vec::new();
+    for creation in &creations {
+        let Some(agent) = creation.result_id.as_deref() else {
+            continue;
+        };
+        if creation.kind == "agent"
+            && !crate::agents::exists(profile, agent)
+            && runless(journal, &creation.thread_id)?
+        {
+            orphans.push(creation.thread_id.clone());
+        }
+    }
+    let state = crate::agents::state(profile)?;
+    let catalog = crate::projects::list(profile)?;
+    let cutoff = Utc::now() - ORPHAN_THREAD_MIN_AGE;
+    for (thread, created_at) in journal.bare_threads().map_err(|failure| error(&failure))? {
+        let old =
+            chrono::DateTime::parse_from_rfc3339(&created_at).is_ok_and(|created| created < cutoff);
+        let named = creations
+            .iter()
+            .any(|creation| creation.thread_id == thread)
+            || state.threads.contains_key(&thread)
+            || state
+                .primary_threads
+                .values()
+                .any(|primary| *primary == thread)
+            || catalog.threads.contains_key(&thread);
+        if old && !named {
+            orphans.push(thread);
+        }
+    }
+    delete_agent_creation_threads_now(journal, profile, &orphans, provenance)
+        .map_err(|failure| error(&failure))
 }
 
 /// Takes a run and every later run out of the thread's conversation.

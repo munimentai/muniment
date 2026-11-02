@@ -99,6 +99,31 @@ fn tidy_home(profile: &Path) -> Result<(), String> {
     muniment_core::projects::migrate_session_names(profile)
 }
 
+/// Deletes the creation chats that deleted agents left, which hold no run.
+fn remove_orphan_creation_threads(
+    storage: &muniment_core::run_events::SharedStorage,
+    profile: &Path,
+    runtime_version: &str,
+) {
+    let Ok(mut storage) = storage.lock() else {
+        return;
+    };
+    match muniment_core::journal::thread_mutation::remove_orphan_creation_threads(
+        &mut storage.journal,
+        profile,
+        &crate::attach_boundaries::runtime_provenance(runtime_version),
+    ) {
+        Ok(removed) if !removed.is_empty() => muniment_core::runtime_eprintln!(
+            "muniment-runtime: creation_threads removed={}",
+            removed.len()
+        ),
+        Ok(_) => {}
+        Err(error) => muniment_core::runtime_eprintln!(
+            "muniment-runtime: creation_threads outcome=failed error={error}"
+        ),
+    }
+}
+
 impl RuntimeAttachState {
     /// Opens the profile storage and companion registry for the runtime of one host.
     pub fn open(
@@ -122,6 +147,7 @@ impl RuntimeAttachState {
         let config_directory = config_directory.as_ref().to_path_buf();
         let storage = open_profile_storage_as(&profile_directory, host.runtime_version)
             .map_err(|_| ProtocolError::persistence_failed())?;
+        remove_orphan_creation_threads(&storage, &profile_directory, host.runtime_version);
         // Session folders from older versions take their thread titles here,
         // so the runtime stays the only process that opens the journal. Home
         // can sit in a folder macOS guards, such as Documents, where a read

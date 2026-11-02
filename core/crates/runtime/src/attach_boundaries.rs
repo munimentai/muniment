@@ -45,8 +45,8 @@ use muniment_core::engine::{AgentEngine, CompactionSettings, PiRpcEngine, Thread
 use muniment_core::journal::reducer::ChatProjector;
 #[cfg(any(unix, target_os = "windows"))]
 use muniment_core::journal::thread_mutation::{
-    append_thread_rename_now, create_thread_now, delete_thread_with_creation_now,
-    ThreadMutationError,
+    append_thread_rename_now, create_thread_now, delete_agent_creation_threads_now,
+    delete_thread_with_creation_now, ThreadMutationError,
 };
 use muniment_core::journal::Provenance;
 use muniment_core::memory_index::ModelMemoryCapability;
@@ -1944,12 +1944,41 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             .map_err(ProtocolError::invalid_request_with_reason);
         }
         // A deleted agent's threads keep no idle process, since it worked in
-        // the agent's folder.
+        // the agent's folder. Its creation chats go with it, so they are read
+        // before the delete removes their records.
         let agent_threads = (operation == muniment_core::attach::Operation::AgentDelete)
             .then(|| agent_thread_ids(&self.profile_directory, &body));
+        let creation_threads = body
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|_| operation == muniment_core::attach::Operation::AgentDelete)
+            .map(|id| muniment_core::agents::creation_threads(&self.profile_directory, id))
+            .unwrap_or_default();
         let answer =
             muniment_core::agents::operation(&self.profile_directory, operation.as_str(), body)
                 .map_err(ProtocolError::invalid_request_with_reason)?;
+        if !creation_threads.is_empty() {
+            let mut storage = self.storage.lock().map_err(|error| {
+                persistence_error("lock", error.to_string()).desktop_protocol_error()
+            })?;
+            // The agent is gone, so a chat that fails to go only logs, and the
+            // startup sweep tries it again.
+            if let Err(error) = delete_agent_creation_threads_now(
+                &mut storage.journal,
+                &self.profile_directory,
+                &creation_threads,
+                &runtime_provenance(self.host.runtime_version),
+            ) {
+                muniment_core::runtime_eprintln!(
+                    "muniment-runtime: agent creation threads not deleted error={error:?}"
+                );
+            }
+            drop(storage);
+            self.runtime.stop_threads(
+                creation_threads.iter().map(String::as_str),
+                IdleStop::Deleted,
+            );
+        }
         if let Some(threads) = agent_threads {
             self.runtime
                 .stop_threads(threads.iter().map(String::as_str), IdleStop::Deleted);
@@ -2284,6 +2313,20 @@ fn thread_mutation_protocol_error(error: ThreadMutationError) -> ProtocolError {
 
 /// The threads of the agent an `agent.delete` body names: its primary
 /// thread and every thread it ran in.
+/// The provenance of a change the runtime makes on its own, such as the
+/// delete of a deleted agent's creation chat.
+pub(crate) fn runtime_provenance(runtime_version: &str) -> Provenance {
+    Provenance {
+        source: "muniment-runtime".into(),
+        source_version: runtime_version.into(),
+        actor_id: None,
+        device_id: None,
+        rpc_request_id: None,
+        capability_versions: None,
+        extra: Default::default(),
+    }
+}
+
 fn agent_thread_ids(profile: &std::path::Path, body: &serde_json::Value) -> Vec<String> {
     let Some(id) = body.get("id").and_then(serde_json::Value::as_str) else {
         return Vec::new();

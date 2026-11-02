@@ -1,7 +1,8 @@
 use chrono::{DateTime, Utc};
 use muniment_core::journal::thread_mutation::{
     append_thread_delete, append_thread_delete_now, append_thread_rename, append_thread_rename_now,
-    create_thread_now, delete_thread_with_creation_now, ThreadMutationError,
+    create_thread_now, delete_agent_creation_threads_now, delete_thread_with_creation_now,
+    remove_orphan_creation_threads, ThreadMutationError,
 };
 use muniment_core::journal::{EventEnvelope, EventPayload, Provenance, RunJournal};
 use rusqlite::Connection;
@@ -432,7 +433,8 @@ fn a_rewind_takes_a_run_and_later_runs_out_of_the_conversation() {
 
 #[test]
 fn deletes_an_agent_creation_chat_that_holds_no_run() {
-    let profile = std::env::temp_dir().join(format!("muniment-creation-delete-{}", Uuid::new_v4()));
+    let profile = muniment_core::state_root::test_root()
+        .join(format!("muniment-creation-delete-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&profile).unwrap();
     let (path, mut journal, owned) = journal_with_thread(Some("owner"));
     let chat = Uuid::new_v4().to_string();
@@ -559,5 +561,135 @@ fn a_deleted_threads_session_folder_goes_unless_it_holds_the_users_files() {
         muniment_core::projects::workspace(&profile, &live).unwrap(),
         live_folder
     );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+fn save_creation(profile: &std::path::Path, thread_id: &str, agent: &str) {
+    muniment_core::creations::save(
+        profile,
+        muniment_core::creations::Creation {
+            thread_id: thread_id.to_owned(),
+            kind: "agent".into(),
+            goal: "Find sources".into(),
+            output: "A saved agent".into(),
+            result_id: Some(agent.to_owned()),
+            turns: Vec::new(),
+        },
+    )
+    .unwrap();
+}
+
+fn thread_deleted(journal: &mut RunJournal, thread_id: &str) -> bool {
+    journal
+        .thread_events(thread_id)
+        .unwrap()
+        .iter()
+        .any(|event| event.event_type == "thread.deleted")
+}
+
+#[test]
+fn a_deleted_agents_creation_chats_go_and_the_start_sweep_removes_the_ones_left() {
+    let root = muniment_core::state_root::test_root()
+        .join(format!("muniment-creation-sweep-{}", Uuid::new_v4()));
+    let profile = root.join("profile");
+    std::fs::create_dir_all(&profile).unwrap();
+    muniment_core::home::confirm_home(&profile, &root.join("muniment")).unwrap();
+    let mut journal = RunJournal::open(profile.join("runs.sqlite3")).unwrap();
+    // A thread created a long time ago that holds only its creation.
+    let created_long_ago = |journal: &mut RunJournal, origin: Option<&str>| {
+        let mut provenance = attach_provenance();
+        if let Some(origin) = origin {
+            provenance
+                .extra
+                .insert("swarm_origin".into(), json!(origin));
+        }
+        journal
+            .create_thread("workspace-a", RECORDED_AT, provenance)
+            .unwrap()
+    };
+
+    // An agent's delete takes each of its creation chats, one with a run
+    // and one without, and leaves the user's other threads.
+    let deleted_agent = Uuid::new_v4().to_string();
+    let chat_with_run = journal
+        .append_new_run("workspace-a", &run_started(Some("owner")))
+        .unwrap();
+    let chat = created_long_ago(&mut journal, None);
+    let other = journal
+        .append_new_run("workspace-a", &run_started(Some("owner")))
+        .unwrap();
+    save_creation(&profile, &chat_with_run, &deleted_agent);
+    save_creation(&profile, &chat, &deleted_agent);
+    let mut threads = muniment_core::agents::creation_threads(&profile, &deleted_agent);
+    threads.sort();
+    let mut expected = vec![chat_with_run.clone(), chat.clone()];
+    expected.sort();
+    assert_eq!(threads, expected);
+    let mut deleted =
+        delete_agent_creation_threads_now(&mut journal, &profile, &threads, &provenance(None))
+            .unwrap();
+    deleted.sort();
+    assert_eq!(deleted, expected);
+    for thread in &expected {
+        assert!(thread_deleted(&mut journal, thread));
+        assert!(muniment_core::creations::read(&profile, thread)
+            .unwrap()
+            .is_none());
+    }
+    assert!(!thread_deleted(&mut journal, &other));
+
+    // At start, a creation chat whose agent is gone and that holds no run
+    // goes, and so does an old thread that holds only its creation and that
+    // nothing names. A chat with a run, a fresh thread, a replica, a renamed
+    // thread and an agent's primary thread stay.
+    let gone_agent = Uuid::new_v4().to_string();
+    let left_chat = created_long_ago(&mut journal, None);
+    save_creation(&profile, &left_chat, &gone_agent);
+    let left_with_run = journal
+        .append_new_run("workspace-a", &run_started(Some("owner")))
+        .unwrap();
+    save_creation(&profile, &left_with_run, &gone_agent);
+    let bare = created_long_ago(&mut journal, None);
+    let fresh = create_thread_now(&mut journal, "workspace-a", attach_provenance()).unwrap();
+    let replica = created_long_ago(&mut journal, Some("member-b"));
+    let renamed = created_long_ago(&mut journal, None);
+    append_thread_rename_now(
+        &mut journal,
+        Some("owner"),
+        &renamed,
+        "Plans",
+        &provenance(Some("owner")),
+    )
+    .unwrap();
+    let primary = created_long_ago(&mut journal, None);
+    muniment_core::agents::with_state(&profile, |state| {
+        state
+            .primary_threads
+            .insert(Uuid::new_v4().to_string(), primary.clone());
+        Ok(())
+    })
+    .unwrap();
+
+    let mut removed =
+        remove_orphan_creation_threads(&mut journal, &profile, &provenance(None)).unwrap();
+    removed.sort();
+    let mut expected = vec![left_chat.clone(), bare.clone()];
+    expected.sort();
+    assert_eq!(removed, expected);
+    assert!(muniment_core::creations::read(&profile, &left_chat)
+        .unwrap()
+        .is_none());
+    for kept in [&left_with_run, &fresh, &replica, &renamed, &primary, &other] {
+        assert!(!thread_deleted(&mut journal, kept), "{kept}");
+    }
+    assert!(muniment_core::creations::read(&profile, &left_with_run)
+        .unwrap()
+        .is_some());
+    assert!(
+        remove_orphan_creation_threads(&mut journal, &profile, &provenance(None))
+            .unwrap()
+            .is_empty()
+    );
+    drop(journal);
     std::fs::remove_dir_all(root).unwrap();
 }
