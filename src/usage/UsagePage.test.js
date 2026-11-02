@@ -62,6 +62,10 @@ describe('usage words', () => {
     expect(providerLabel('anthropic', inventory)).toBe('Anthropic')
     expect(providerLabel('custom-gone', inventory)).toBe('custom-gone')
     expect(providerLabel('custom-live29')).toBe('custom-live29')
+    // A disconnected endpoint keeps the last name it had, and a live name wins.
+    const former = { ...inventory, former_names: { 'custom-live30': 'Live30', 'custom-live29': 'Old name' } }
+    expect(providerLabel('custom-live30', former)).toBe('Live30')
+    expect(providerLabel('custom-live29', former)).toBe('Live29')
     expect(totalTiles(summary().totals, 'cost')[0]).toEqual({ label: 'API estimate', value: '$12.50' })
     expect(totalTiles(summary().totals, 'tokens').map((tile) => tile.label)).toEqual(['Processed', 'Cached input', 'Uncached input', 'Output', 'Cache hit rate'])
   })
@@ -187,6 +191,19 @@ describe('Usage page', () => {
     expect(within(chart).getAllByRole('img').some((bar) => bar.getAttribute('aria-label')?.includes('Live29'))).toBe(true)
     await fireEvent.click(screen.getByRole('button', { name: /Provider/ }))
     expect(screen.getByRole('menuitemradio', { name: 'Live29' })).toBeInTheDocument()
+  })
+
+  it('names a disconnected endpoint by its last name in the provider chart and filter', async () => {
+    const custom = summary({ series: [{ start_ms: NOW, providers: { 'custom-live30': amount(600, 0) } }], providers: ['custom-live30'] })
+    const inventory = { providers: [], former_names: { 'custom-live30': 'Live30' } }
+    render(UsagePage, { tauri: { invoke: vi.fn(async () => custom) }, runtimeList, inventory })
+    await screen.findByRole('article', { name: 'Anthropic, sam@example.com · max' })
+    await fireEvent.click(screen.getByRole('radio', { name: 'Tokens' }))
+    const chart = screen.getByRole('figure', { name: 'Tokens by provider' })
+    expect(within(chart).getByText('Live30')).toBeInTheDocument()
+    expect(chart).not.toHaveTextContent('custom-live30')
+    await fireEvent.click(screen.getByRole('button', { name: /Provider/ }))
+    expect(screen.getByRole('menuitemradio', { name: 'Live30' })).toBeInTheDocument()
   })
 
   it('keeps its view, range, breakdown and machine when the runtime switch draws the page again', async () => {

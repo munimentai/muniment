@@ -84,15 +84,16 @@ export function providerColor(provider) {
 
 // A family's name, else the catalog's name for a provider such as a local server.
 // A provider the catalog names keeps that name. A custom endpoint takes the
-// name the inventory gives it, and one the inventory no longer lists, such as
-// a deleted endpoint, reads as its id.
+// name the inventory gives it, and a disconnected one the last name it had,
+// so its usage history still reads by a name. An endpoint with neither reads
+// as its id.
 export function providerLabel(provider, inventory = null) {
   if (!provider) return 'Unknown'
   const family = familyName(provider)
   if (family !== provider) return family
   const named = providerName(provider)
   if (named && named !== provider) return named
-  return inventory?.providers?.find((entry) => entry.id === provider)?.name || provider
+  return inventory?.providers?.find((entry) => entry.id === provider)?.name || inventory?.former_names?.[provider] || provider
 }
 
 const WINDOW_NAMES = { five_hour: '5-hour', daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly', other: 'Window' }

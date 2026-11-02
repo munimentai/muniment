@@ -196,6 +196,24 @@ it('says on the endpoint card that the key stays in memory when the keychain ref
   expect(within(screen.getByRole('region', { name: 'Other' })).queryByText(notice)).not.toBeInTheDocument()
 })
 
+it('asks for the key again in the edit form when the saved key is stale', async () => {
+  const keyed = { providers: [
+    { id: 'custom-live30', name: 'Live30', source: 'custom', base_url: 'https://live30.example/v1', models: [{ id: 'm' }], key_notice: 'The keychain holds an older key for this endpoint. Enter the key again.', key_state: 'stale' },
+    { id: 'custom-other', name: 'Other', source: 'custom', base_url: 'https://other.example/v1', models: [{ id: 'm' }] }
+  ], hidden: [], shown: [], default_provider: null, default_model: null }
+  const tauri = { invoke: vi.fn(async (command) => {
+    if (command === 'local_mode_provider_inventory') return keyed
+    if (command === 'model_router_settings') return { families: [], subscriptions: [], accounts: [] }
+    return null
+  }) }
+  render(ModelsSection, { props: { tauri, listen: async () => () => {}, inventory: keyed } })
+  await fireEvent.click(within(await screen.findByRole('region', { name: 'Live30' })).getByRole('button', { name: 'Edit Live30' }))
+  expect(screen.getByLabelText('API key (optional)')).toHaveAttribute('placeholder', 'The saved key is out of date. Enter the key again.')
+  await fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+  await fireEvent.click(within(await screen.findByRole('region', { name: 'Other' })).getByRole('button', { name: 'Edit Other' }))
+  expect(screen.getByLabelText('API key (optional)')).toHaveAttribute('placeholder', 'Leave blank to keep the saved key')
+})
+
 it('draws the stored rows core answers at once while the full read waits, then takes the full read', async () => {
   let finish
   const full = new Promise((resolve) => { finish = resolve })

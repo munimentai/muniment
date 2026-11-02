@@ -241,6 +241,12 @@
 
   // The connected endpoint whose form is open for an edit, empty for a new connection.
   let editingEndpoint = $state('')
+  // Whether the endpoint open for an edit holds a stale key, which a blank
+  // key field cannot keep.
+  let editingStale = $state(false)
+  const keptKeyHint = (fallback) => editingEndpoint
+    ? editingStale ? 'The saved key is out of date. Enter the key again.' : 'Leave blank to keep the saved key'
+    : fallback
 
   // An endpoint provider edits through its own connect form, filled with what
   // it holds. The key field stays blank, and a blank key keeps the saved one.
@@ -251,6 +257,7 @@
     baseUrl = entry.base_url ?? baseUrl
     if (entry.id.startsWith('custom-')) endpointName = entry.name
     const saved = inventory?.providers?.find((other) => other.id === entry.id) ?? entry
+    editingStale = (saved.key_state ?? entry.key_state) === 'stale'
     endpointModels = (saved.models ?? []).map((model) => model.id).join('\n')
   }
 
@@ -258,6 +265,7 @@
     origin = view
     providerId = id
     editingEndpoint = ''
+    editingStale = false
     formError = ''
     key = ''
     endpointName = ''
@@ -576,7 +584,7 @@
       <p class="support">Point Muniment at a running Ollama server. It asks the server for every model it serves.</p>
       <Group label="Ollama server">
       <div class="connection-field"><label for="provider-base-url">Ollama server URL</label><input id="provider-base-url" type="url" placeholder="http://localhost:11434/v1" autocomplete="url" spellcheck="false" autocorrect="off" autocapitalize="off" bind:value={baseUrl} disabled={pending}></div>
-      <div class="connection-field"><label for="ollama-key">API key (optional)</label><input id="ollama-key" type="password" autocomplete="off" placeholder={editingEndpoint ? 'Leave blank to keep the saved key' : 'For a server behind a key'} bind:value={key} disabled={pending}></div>
+      <div class="connection-field"><label for="ollama-key">API key (optional)</label><input id="ollama-key" type="password" autocomplete="off" placeholder={keptKeyHint('For a server behind a key')} bind:value={key} disabled={pending}></div>
       </Group>
       {#if formError}<p class="support" role="alert">{formError}</p>{/if}
       <button type="button" data-variant="primary" disabled={pending || !baseUrl.trim()} onclick={saveOllama}>Save Ollama server</button>
@@ -587,7 +595,7 @@
         <div class="connection-field"><label for="endpoint-name">Name</label><input id="endpoint-name" type="text" spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" bind:value={endpointName} disabled={pending || !!editingEndpoint}></div>
       {/if}
       <div class="connection-field"><label for="provider-base-url">Server URL</label><input id="provider-base-url" type="url" placeholder={provider.baseUrl ?? 'http://localhost:4000/v1'} autocomplete="url" spellcheck="false" autocorrect="off" autocapitalize="off" bind:value={baseUrl} disabled={pending}></div>
-      <div class="connection-field"><label for="endpoint-key">API key (optional)</label><input id="endpoint-key" type="password" autocomplete="off" placeholder={editingEndpoint ? 'Leave blank to keep the saved key' : ''} bind:value={key} disabled={pending}></div>
+      <div class="connection-field"><label for="endpoint-key">API key (optional)</label><input id="endpoint-key" type="password" autocomplete="off" placeholder={keptKeyHint('')} bind:value={key} disabled={pending}></div>
       <div class="connection-field"><label for="endpoint-models">Models, one per line</label><textarea id="endpoint-models" rows="3" spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" bind:value={endpointModels} disabled={pending}></textarea><p class="support">Leave the list empty and Muniment asks the server for its models.</p></div>
       </Group>
       {#if formError}<p class="support" role="alert">{formError}</p>{/if}
