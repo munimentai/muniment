@@ -1,9 +1,11 @@
 import { afterEach, expect, it } from 'vitest'
 import { createRawSnippet, flushSync, mount, unmount } from 'svelte'
+import { userEvent } from 'vitest/browser'
 import '../styles/tokens.css'
 import '../styles/base.css'
 import MachinePicker from './MachinePicker.svelte'
 import ComposerMenuButton from '../composer/ComposerMenuButton.svelte'
+import { fitComposerMeta } from '../composer/composer-priority.js'
 
 let components = []
 afterEach(() => {
@@ -17,15 +19,16 @@ const pod = { id: 'pod', name: 'Pod', kind: 'container', status: 'offline' }
 const list = { selected: 'local', runtimes: [here, pod] }
 const glyph = (name) => createRawSnippet(() => ({ render: () => `<svg class="lucide" data-icon="${name}" width="14" height="14"></svg>` }))
 
-// The composer band at `width`, a size container like the composer, with the
-// machine chip of an open thread or a new one beside a model chip.
+// The composer band's meta side at `width`, as composer-priority.js fits it,
+// with the machine chip of an open thread or a new one beside a model chip.
 function band(width, props = {}) {
   const composer = document.createElement('div')
-  composer.style.cssText = `container: composer / inline-size; width: ${width}px; display: flex; gap: 4px;`
+  composer.style.cssText = `width: ${width}px; min-width: 0; display: flex; gap: 4px;`
   document.body.append(composer)
   components.push(mount(MachinePicker, { target: composer, props: { list, ...props } }))
   components.push(mount(ComposerMenuButton, { target: composer, props: { menu: 'model', label: 'Model: GPT-6 Astra', text: 'GPT-6 Astra', icon: glyph('openai'), compact: glyph('openai') } }))
   flushSync()
+  fitComposerMeta(composer)
   return composer
 }
 
@@ -34,15 +37,18 @@ const machineChip = (composer) => composer.querySelector('[data-menu="machine"]'
 const modelChip = (composer) => composer.querySelector('[data-menu="model"]')
 
 for (const [state, props] of [['a new thread', {}], ['an open thread', { locked: 'local' }]]) {
-  it(`keeps the machine chip of ${state} to the picked machine's icon where the model chip keeps its icon`, () => {
-    const narrow = band(400, props)
-    expect(shows(modelChip(narrow).querySelector('.label'))).toBe(false)
+  it(`keeps the machine chip of ${state} to the picked machine's icon before the model chip drops its name`, async () => {
+    const narrow = band(180, props)
+    await document.fonts.ready
+    fitComposerMeta(narrow)
+    expect(shows(modelChip(narrow).querySelector('.label'))).toBe(true)
     const chip = machineChip(narrow)
     expect(shows(chip.querySelector('.label'))).toBe(false)
     const icons = [...chip.querySelectorAll('[data-icon]')].filter(shows).map((icon) => icon.dataset.icon)
     expect(icons).toEqual(['monitor'])
     expect(chip.getAttribute('aria-label')).toMatch(/^Machine: This computer\./)
     expect(chip.dataset.tooltip).toBe(chip.getAttribute('aria-label'))
+    await userEvent.hover(chip)
     expect(getComputedStyle(chip, '::after').display).toBe('block')
   })
 

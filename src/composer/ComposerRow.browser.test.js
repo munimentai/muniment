@@ -7,7 +7,7 @@ import appSource from '../App.svelte?raw'
 import ChatComposer from './ChatComposer.svelte'
 import ComposerMenuButton from './ComposerMenuButton.svelte'
 import ContextMeter from '../lib/ContextMeter.svelte'
-import { fitComposerMeta } from './composer-priority.js'
+import { COLLAPSE_ORDER, MIN_MODEL_NAME, fitComposerMeta } from './composer-priority.js'
 import { compile } from 'svelte/compiler'
 
 let components = []
@@ -56,7 +56,7 @@ function composer(column, { model = longModel, context = false } = {}) {
 // an open agent profile at its 320px default leaves it 765px, one widened to
 // 445px leaves it 640px, where the permission label gives way first, and one
 // widened to 525px leaves it 560px, where the model name must give way.
-for (const [state, column, clips] of [['alone', 1085, false], ['beside the agent profile', 765, false], ['beside a wider agent profile', 640, false], ['beside the widest agent profile', 560, true]]) {
+for (const [state, column, clips] of [['alone', 1085, false], ['beside the agent profile', 765, false], ['beside a wider agent profile', 640, false], ['beside the widest agent profile', 560, false]]) {
   it(`keeps Voice on the chips' line with a long model name, ${state} at the default window width`, async () => {
     await page.viewport(1280, 800)
     const thread = composer(column)
@@ -128,3 +128,66 @@ for (const [column, collapse] of [[1085, undefined], [720, '1'], [660, '2']]) {
   })
 }
 
+
+const shown = (element) => !!element && element.getClientRects().length > 0
+// The labels that give way before the model name, in the order they go.
+const otherLabels = (thread) => [thread.querySelector('.context-trigger > span'), ...['mode', 'thinking', 'machine'].map((menu) => thread.querySelector(`[data-menu="${menu}"] .label`))]
+
+// Holds the band to the priority order: a label goes only after the ones
+// before it, the model name is the last label to go, and the band collapses
+// no control it has room for.
+function expectPriority(thread) {
+  const meta = thread.querySelector('.composer-meta')
+  const name = thread.querySelector('[data-menu="model"] .label')
+  const visible = otherLabels(thread).map(shown)
+  for (let index = 1; index < visible.length; index++) if (!visible[index]) expect(visible[index - 1]).toBe(false)
+  // The model name clips, or keeps its icon alone, only after every other label went.
+  if (!shown(name) || name.scrollWidth > name.clientWidth) expect(visible.some(Boolean)).toBe(false)
+  if (shown(name)) expect(name.clientWidth).toBeGreaterThanOrEqual(Math.min(name.scrollWidth, MIN_MODEL_NAME) - 0.5)
+  // Until every control keeps its icon alone, none runs past the meta side.
+  const level = Number(meta.dataset.collapse ?? 0)
+  if (level < COLLAPSE_ORDER.length) for (const control of meta.children) expect(control.getBoundingClientRect().right).toBeLessThanOrEqual(meta.getBoundingClientRect().right + 0.5)
+  // The last control the band collapsed has no room to show its label: shown
+  // again, it runs past the band or clips the model name.
+  if (!level) return
+  const last = [...meta.querySelectorAll(COLLAPSE_ORDER[level - 1])]
+  for (const control of last) delete control.dataset.collapsed
+  const overflows = [...meta.children].some((control) => control.getBoundingClientRect().right > meta.getBoundingClientRect().right + 0.5)
+  expect(overflows || name.clientWidth + 0.5 < name.scrollWidth).toBe(true)
+  for (const control of last) control.dataset.collapsed = 'true'
+}
+
+// The thread beside the 195px sidebar and an open agent profile: the profile
+// at its default share of the window, or widened as in the live window where
+// the composer runs under 480px below a 1205px window.
+const profiles = [['at its default width', (width) => width - 195 - Math.round(Math.min(560, Math.max(240, width * 0.28)))], ['widened', (width) => width - 677]]
+for (const [profile, column] of profiles) {
+  for (const width of [1280, 1100, 960]) {
+    it(`keeps the model name the last label to go with the profile ${profile} in a ${width}px window`, async () => {
+      await page.viewport(width, 800)
+      const thread = composer(column(width), { model: 'Claude Sonnet 5.5', context: true })
+      await document.fonts.ready
+      fitComposerMeta(thread.querySelector('.composer-meta'))
+      expectPriority(thread)
+      // The default profile leaves room for the whole model name at each width.
+      const name = thread.querySelector('[data-menu="model"] .label')
+      if (profile === 'at its default width') expect(name.scrollWidth).toBeLessThanOrEqual(name.clientWidth)
+    })
+  }
+}
+
+// A model name wider than a short one clips only after the thinking level
+// and the permission mode give way, at every thread width.
+it('collapses Medium and Bypass permissions before "Claude Sonnet 5.5" clips', async () => {
+  await page.viewport(1280, 800)
+  for (let column = 1085; column >= 300; column -= 15) {
+    const thread = composer(column, { model: 'Claude Sonnet 5.5', context: true })
+    await document.fonts.ready
+    fitComposerMeta(thread.querySelector('.composer-meta'))
+    expectPriority(thread)
+    const name = thread.querySelector('[data-menu="model"] .label')
+    if (shown(thread.querySelector('[data-menu="thinking"] .label'))) expect(name.scrollWidth, `${column}px`).toBeLessThanOrEqual(name.clientWidth)
+    for (const component of components.splice(0)) unmount(component)
+    document.body.replaceChildren()
+  }
+})

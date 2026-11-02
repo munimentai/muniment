@@ -2,10 +2,11 @@
   // The one button behind each composer menu: machine, model, thinking level
   // and usage, named by `menu`. At rest it is muted with no fill. Hovered or
   // open, it takes the hover fill in ink. `chevrons` adds the closed and open
-  // arrows. A narrow composer shows the icon alone, `compact` when given, and
-  // the accessible name and a hover label keep the full label. The model chip
-  // gives way first when the composer row runs short: its name ends in an
-  // ellipsis, and a name it clips shows whole in the hover label.
+  // arrows. A collapsed control shows the icon alone, `compact` when given, and
+  // the accessible name and a hover label keep the full label. When the
+  // composer row runs short, composer-priority.js collapses the other controls
+  // first, then the model name ends in an ellipsis, and a name it clips shows
+  // whole in the hover label.
   import LucideIcon from '../lib/LucideIcon.svelte'
   let { menu, open = false, label, text, icon, compact = null, chevrons = false, haspopup = 'menu', element = $bindable(), ...rest } = $props()
   let labelElement = $state()
@@ -37,12 +38,10 @@
   .model-chip { flex: 0 1 auto; min-width: 46px; max-width: 200px; }
   .composer-menu-button[data-clipped="true"]::after { display: block; }
   .composer-menu-button[data-clipped="true"][data-open="true"]::after { display: none; }
-  /* A narrow composer keeps each control to its icon. */
-  @container composer (max-width: 480px) {
-    .label, .chevrons, .wide { display: none; }
-    .model-chip { min-width: 24px; }
-    .narrow { display: inline-flex; }
-    .composer-menu-button::after { display: block; }
-    .composer-menu-button[data-open="true"]::after { display: none; }
-  }
+  /* A control composer-priority.js collapses keeps its icon, and its hover label shows its name. */
+  .composer-menu-button:global([data-collapsed]) :is(.label, .chevrons, .wide) { display: none; }
+  .composer-menu-button:global([data-collapsed]) .narrow { display: inline-flex; }
+  .model-chip:global([data-collapsed]) { min-width: 24px; }
+  .composer-menu-button:global([data-collapsed]):hover::after, .composer-menu-button:global([data-collapsed]):focus-visible::after { display: block; }
+  .composer-menu-button:global([data-collapsed][data-open="true"])::after { display: none; }
 </style>
