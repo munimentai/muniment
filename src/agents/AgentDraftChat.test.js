@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import '@testing-library/jest-dom/vitest'
 import AgentDraftChat from './AgentDraftChat.svelte'
-import { draftAgent, draftForm, requestDraft } from './agent-draft.js'
+import { draftAgent, draftForm, requestDraft, sameAgent } from './agent-draft.js'
 import { saveTimeSetting } from '../lib/time-format.svelte.js'
 afterEach(cleanup)
 // Times read in one zone on a 24-hour clock, whatever the computer uses.
@@ -108,7 +108,29 @@ it('updates the agent a reopened chat saved before and keeps its model', async (
   expect(await screen.findByRole('status')).toHaveTextContent('Saved.')
 })
 
-it('rests Save on the draft it saved until a new message drafts again', async () => {
+it('rests Save changes on a reopened chat until its draft differs from the saved agent', async () => {
+  const { tauri, requests } = runtime()
+  // Core keeps the agent as the chat's newest draft saved it, with its own fields beside.
+  const stored = { ...draftAgent(draftForm(draft)), id: 'agent-7', avatar: { style: 'muniment', seed: 'seed' }, model: { provider: 'openai', id: 'gpt-6' }, routines: draft.routines.map((routine) => ({ ...routine, trigger: { ...routine.trigger }, enabled: true, proposed: false, next_fire_at: '2026-10-20T13:00:00Z' })) }
+  const read = tauri.invoke.getMockImplementation()
+  tauri.invoke.mockImplementation(async (command, payload) => payload.operation === 'agent.read' ? { agent: stored } : read(command, payload))
+  const first = [turn('Summarize my inbox')]
+  const { rerender } = render(AgentDraftChat, { tauri, agentId: 'agent-7', turns: first })
+  const save = screen.getByRole('button', { name: 'Save changes' })
+  await waitFor(() => expect(save).toBeDisabled())
+  expect(save).toHaveAttribute('data-variant', 'outline')
+  expect(screen.getByRole('button', { name: 'Test run' })).toBeEnabled()
+  expect(requests.some((request) => request.operation === 'agent.save')).toBe(false)
+  // A message that drafts the same agent leaves Save at rest, and a change wakes it.
+  await rerender({ turns: [...first, { ...turn('Keep it as is'), at: '2026-10-19T10:05:00Z' }] })
+  expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled()
+  await rerender({ turns: [...first, turn('Make it 8am', { draft: { ...draft, routines: [{ ...draft.routines[0], trigger: { ...draft.routines[0].trigger, expr: '0 8 * * 1-5' } }] }, question: null, via: 'router' })] })
+  expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled()
+  await rerender({ turns: [...first, turn('Rename it', { draft: { ...draft, name: 'Inbox digest' }, question: null, via: 'router' })] })
+  expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled()
+})
+
+it('rests Save on the draft it saved until a new message drafts a change', async () => {
   const { tauri } = runtime()
   const first = [turn('Summarize my inbox')]
   const { rerender } = render(AgentDraftChat, { tauri, turns: first })
@@ -118,7 +140,7 @@ it('rests Save on the draft it saved until a new message drafts again', async ()
   expect(rest).toBeDisabled()
   expect(rest).toHaveAttribute('data-variant', 'outline')
   expect(screen.getByRole('button', { name: 'Test run' })).toBeEnabled()
-  await rerender({ turns: [...first, { ...turn('Make it 8am'), at: '2026-10-19T10:05:00Z' }] })
+  await rerender({ turns: [...first, { ...turn('Call it Inbox digest', { draft: { ...draft, name: 'Inbox digest' }, question: null, via: 'router' }), at: '2026-10-19T10:05:00Z' }] })
   expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled()
 })
 
@@ -141,4 +163,17 @@ it('builds the save body from the draft', () => {
   form.routines[0].enabled = false
   form.mode = ''
   expect(draftAgent(form)).toEqual({ id: '', projectId: null, name: 'Inbox brief', label: 'Morning briefer', instructions: draft.instructions, schedule: null, skills: draft.skills, routines: [{ ...draft.routines[0], enabled: false, proposed: false }] })
+})
+
+it('reads an agent save body as unchanged only when every field a person sets matches', () => {
+  const saved = { ...draftAgent(draftForm(draft)), id: 'agent-7', permissions: { mode: 'manual' }, routines: draft.routines.map((routine) => ({ ...routine, proposed: false, next_fire_at: '2026-10-20T13:00:00Z' })) }
+  const body = (change = {}) => draftAgent(draftForm({ ...draft, ...change }), { saved })
+  expect(sameAgent(body(), saved)).toBe(true)
+  expect(sameAgent(body({ label: 'Evening briefer' }), saved)).toBe(false)
+  expect(sameAgent(body({ instructions: 'List the mail.' }), saved)).toBe(false)
+  expect(sameAgent(body({ skills: [] }), saved)).toBe(false)
+  expect(sameAgent(body({ permission_mode: 'auto' }), saved)).toBe(false)
+  expect(sameAgent(body({ routines: [] }), saved)).toBe(false)
+  expect(sameAgent(draftAgent(draftForm(draft), { saved, test: true }), saved)).toBe(false)
+  expect(sameAgent(body(), null)).toBe(false)
 })

@@ -11,7 +11,7 @@
   import Button from '../lib/ui/Button.svelte'
   import FailureNote from '../lib/FailureNote.svelte'
   import { agentRequest } from './agent-runtime.js'
-  import { draftAgent, draftForm, formProblem, testRunLine } from './agent-draft.js'
+  import { draftAgent, draftForm, formProblem, sameAgent, testRunLine } from './agent-draft.js'
   import { emptyCatalog, loadToolCatalog } from './agent-tools.js'
   import { triggerSummary } from './routine-labels.js'
   import { LOCAL_RUNTIME_ID } from '../runtimes/runtimes.js'
@@ -32,15 +32,21 @@
   // The draft a Save turned on, which a later message replaces. Save rests
   // while the newest draft is that one.
   let savedDraft = $state(null)
+  // The agent as core last saved it: read once when a reopened chat names
+  // its agent, then each Save's answer. Save rests while the newest draft
+  // would save that agent unchanged.
+  let stored = $state(null)
   let alive = true
 
   onMount(() => {
     void loadToolCatalog(tauri, runtime).then((value) => { if (alive) catalog = value })
+    if (agentId) void agentRequest(tauri, runtime, 'agent.read', { id: agentId }).then((answer) => { if (alive && !stored) stored = answer?.agent ?? null }).catch(() => {})
     return () => { alive = false }
   })
 
   const latest = $derived(turns.length - 1)
   const draftKey = $derived(`${latest}:${turns[latest]?.at ?? ''}`)
+  const unchanged = $derived(savedDraft === draftKey || (!!stored && !!turns[latest]?.reply?.draft && sameAgent(draftAgent(draftForm($state.snapshot(turns[latest].reply.draft)), { saved: $state.snapshot(stored), projectId }), stored)))
   const skillNames = (draft) => (draft?.skills ?? []).map((id) => catalog.skills.find((skill) => skill.id === id)?.name ?? id)
   const schedule = (draft) => (draft?.routines ?? []).map((routine) => triggerSummary(routine.trigger)).join(', ') || 'Runs when you ask.'
   // The test run as the window last heard of it.
@@ -60,6 +66,7 @@
       const previous = id ? await agentRequest(tauri, runtime, 'agent.read', { id }).then((answer) => answer?.agent ?? null).catch(() => null) : null
       const answer = await agentRequest(tauri, runtime, 'agent.save', { agent: draftAgent(form, { saved: $state.snapshot(previous), test, projectId }) })
       saved = answer.agent
+      stored = answer.agent
       savedDraft = test ? null : key
       if (test) {
         const started = await agentRequest(tauri, runtime, 'agent.run_now', { id: saved.id, test: true })
@@ -98,7 +105,7 @@
         {/if}
         {#if index === latest}
           <div class="actions">
-            <Button variant={savedDraft === draftKey ? 'outline' : 'primary'} disabled={busy || !!pending || savedDraft === draftKey} onclick={() => save(false)}>{saved || agentId ? 'Save changes' : 'Save'}</Button>
+            <Button variant={unchanged ? 'outline' : 'primary'} disabled={busy || !!pending || unchanged} onclick={() => save(false)}>{saved || agentId ? 'Save changes' : 'Save'}</Button>
             <Button variant="outline" icon="play" disabled={busy || !!pending} onclick={() => save(true)}>Test run</Button>
           </div>
           {#if saveError}<p class="error" role="alert">{saveError}</p>{/if}

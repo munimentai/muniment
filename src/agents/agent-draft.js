@@ -73,6 +73,23 @@ export function draftAgent(form, { saved = null, test = false, projectId = null 
   return agent
 }
 
+// Whether `next`, an `agent.save` body, saves `saved` unchanged: the same
+// name, label, instructions, skills, permission mode and routines, each
+// routine with its name, prompt, trigger and on or off.
+const routineShape = (routine) => [routine.name ?? '', routine.prompt ?? '', canonical(routine.trigger ?? null), routine.enabled !== false]
+function canonical(value) {
+  if (Array.isArray(value)) return value.map(canonical)
+  if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().filter((key) => value[key] !== undefined && value[key] !== null).map((key) => [key, canonical(value[key])]))
+  return value
+}
+const agentShape = (agent) => JSON.stringify([
+  (agent?.name ?? '').trim(), (agent?.label ?? '').trim(), (agent?.instructions ?? '').trim(),
+  [...(agent?.skills ?? [])].sort(), agent?.permissions?.mode ?? '', (agent?.routines ?? []).map(routineShape),
+])
+export function sameAgent(next, saved) {
+  return !!next && !!saved && agentShape(next) === agentShape(saved)
+}
+
 // The line a test run shows while it runs and after: `{ text, done, failed }`.
 // Its triggers stay off until Save, so the line says so until the run ends.
 export function testRunLine(run) {
