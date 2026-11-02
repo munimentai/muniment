@@ -11,7 +11,10 @@
   // the list, one switch has core share this computer's model connections
   // through `fleet.credentials`. This computer's row opens its network,
   // offline and log settings. Sync lists what this computer still takes from
-  // the others while a bootstrap runs or a sign-in waits. With MuniCloud on, the account's devices and
+  // the others while a bootstrap runs or a sign-in waits. When the keychain
+  // refused this computer's fleet key, a notice says so, and Try again asks
+  // core to read it once more. Core asks the keychain only on that action or
+  // at its next start. With MuniCloud on, the account's devices and
   // the phone paired through the relay are rows as well, and Add machine
   // pairs a phone.
   import { onMount } from 'svelte'
@@ -29,7 +32,7 @@
   import FailureNote from '../lib/FailureNote.svelte'
   import { linkHolders, machineRows, removable } from './machines.js'
   import { agentRequest } from '../agents/agent-runtime.js'
-  import { listSwarm } from '../agents/swarm.js'
+  import { fleetKeyRefusal, listSwarm } from '../agents/swarm.js'
   import { interruptionCount, interruptionMessage } from '../lib/app-update.js'
   import PhonePairing from '../lib/PhonePairing.svelte'
   import { featureFlags } from '../feature-flags.js'
@@ -62,6 +65,7 @@
   let adding = $state(focus === 'add')
   // svelte-ignore state_referenced_locally
   let computerOpen = $state(focus === 'this-computer')
+  const keyRefusal = $derived(fleetKeyRefusal(swarm))
   const rows = $derived(list ? machineRows({ list, swarm, devices, cloudDevices, phone }) : [])
   const updateWaits = $derived(!!localVersion || updatableRuntimes(list).length > 0)
   // Update all acts only on this computer's waiting update or a machine that answers and is behind.
@@ -309,6 +313,19 @@
     }
   }
 
+  // Asks core to read the fleet key once more, which can show the keychain's prompt.
+  async function retryFleetKey() {
+    busy = 'fleet-key'
+    try {
+      await agentRequest(tauri, 'local', 'swarm.members', { retry_fleet_key: true })
+    } catch (failure) {
+      error = errorText(failure)
+    } finally {
+      busy = ''
+      void readSwarm()
+    }
+  }
+
   function onadded(next) {
     if (next?.runtimes) list = next
     linkFailure = next?.notice ?? ''
@@ -329,6 +346,12 @@
   {#if error}<FailureNote failure={error} />{/if}
   {#if notice}<p class="line" role="status">{notice}</p>{:else if list && updateWaits && !updateReady && !busy}<p class="line" role="status">Every machine that answers is current.</p>{/if}
   {#if linkFailure}<FailureNote failure={linkFailure} />{/if}
+  {#if keyRefusal}
+    <div class="key-refusal" role="alert">
+      <p>{keyRefusal.declined ? 'The keychain refused this computer\'s fleet key, so it does not share or sync with your other machines. Try again, then choose Always Allow when your Mac asks.' : 'This computer could not read its fleet key, so it does not share or sync with your other machines.'}</p>
+      <Button icon="key-round" disabled={busy === 'fleet-key'} onclick={retryFleetKey}>Try again</Button>
+    </div>
+  {/if}
   {#each failures as failure (failure)}<FailureNote {failure} />{/each}
   {#if skipped.length}<p class="line" role="status">Skipped: {skipped.map(skipLabel).join(', ')}.</p>{/if}
 
@@ -383,5 +406,7 @@
 
 <style>
   .settings-runtimes { display: grid; gap: var(--page-gap); }
+  .key-refusal { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+  .key-refusal p { flex: 1 1 240px; margin: 0; color: var(--ink); font-size: var(--text-13); }
   .line { margin: 0; color: var(--muted); font-size: var(--text-13); }
 </style>

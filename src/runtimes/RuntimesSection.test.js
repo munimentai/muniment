@@ -573,3 +573,30 @@ describe('Model sharing', () => {
     expect(state.shareModels).toBe(false)
   })
 })
+
+describe('Fleet key refusal', () => {
+  it('shows the keychain refusal and asks core once more only on Try again', async () => {
+    let declined = true
+    const retries = []
+    const handlers = {
+      app_update_prepare: () => null,
+      agent_request: ({ runtime, operation, body }) => {
+        if (operation !== 'swarm.members') return {}
+        if (runtime !== 'local') return null
+        if (body?.retry_fleet_key) { retries.push(body); declined = false }
+        return {
+          self: 'core-local',
+          members: [{ runtime_id: 'core-local', runtime_name: 'Laptop', self: true, online: true }],
+          fleet_key: declined ? { state: 'declined', message: 'User canceled the operation.' } : null,
+        }
+      },
+    }
+    render(RuntimesSection, { tauri: tauri(handlers), listen })
+    const alert = await screen.findByText(/The keychain refused this computer's fleet key/)
+    expect(alert).toHaveTextContent('Always Allow')
+    expect(retries).toEqual([])
+    await fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(retries).toEqual([{ retry_fleet_key: true }]))
+    await waitFor(() => expect(screen.queryByText(/fleet key/)).not.toBeInTheDocument())
+  })
+})

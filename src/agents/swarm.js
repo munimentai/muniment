@@ -91,6 +91,14 @@ export async function listSwarm(tauri, runtimeList) {
   return withLocalSelf(mergeSwarm(answers), runtimeList)
 }
 
+// The keychain's refusal of this computer's fleet key, from its own
+// `swarm.members` answer, or null while core holds the key.
+export function fleetKeyRefusal(swarm) {
+  const status = swarm?.views?.[LOCAL_RUNTIME_ID]?.fleet_key
+  if (!status?.state) return null
+  return { declined: status.state === 'declined', message: String(status.message ?? '') }
+}
+
 // This computer's fleet id when its own `swarm.members` did not answer this
 // time, such as while it was busy: the one member that no reached machine
 // is and that carries this computer's name. So this computer never lists as
