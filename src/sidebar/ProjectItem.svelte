@@ -11,6 +11,7 @@
   import OwnerChip from '../runtimes/OwnerChip.svelte'
   import StatusChip from '../lib/ui/StatusChip.svelte'
   import { statusTone } from './sidebar-model.js'
+  import { pressedElsewhere } from './press-target.js'
   // `owner` names the fleet member that holds a shared project's files.
   // `ondropthread` makes the row a drop target for a thread row dragged as `dragType`.
   // `current` marks the row with the selection, as a project just created.
@@ -54,7 +55,7 @@
     open = !open
     if (open) { await tick(); menu?.querySelector('button:not(:disabled)')?.focus() }
   }
-  function contextMenu(event) { if (!actions.length) return; event.preventDefault(); void toggleMenu() }
+  function contextMenu(event) { if (!actions.length) return; event.preventDefault(); if (pressedElsewhere(event, row)) return; void toggleMenu() }
   function contextKey(event) { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) contextMenu(event) }
   function choose(action) { open = false; trigger?.focus(); action() }
   function menuKey(event) {

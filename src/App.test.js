@@ -3268,6 +3268,31 @@ describe('thread name', () => {
     expect(within(list).getByRole('button', { name: 'Unassigned notes' })).toBeInTheDocument()
   })
 
+  it('opens a row\'s menu only for the row a right press began on, when a re-render moves another row under the pointer', async () => {
+    threadSummaryResult = [{ threadId: 'thread-9', title: 'Run Saved Agent Instructions', updatedAt: new Date().toISOString() }]
+    const catalog = { projects: { research: 'Research' }, threads: {} }
+    const baseInvoke = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, payload) => command === 'project_list' ? structuredClone(catalog) : baseInvoke(command, payload))
+    render(App)
+    const project = await screen.findByRole('button', { name: 'Project Research' })
+    const thread = (await screen.findByRole('button', { name: 'Actions for Run Saved Agent Instructions' })).closest('.thread-record')
+    // The press lands on the project row, and the context menu then lands on the thread row.
+    await fireEvent.pointerDown(project, { button: 2 })
+    await fireEvent.contextMenu(thread, { clientX: 40, clientY: 120 })
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+    await fireEvent.pointerDown(thread, { button: 0, ctrlKey: true })
+    await fireEvent.contextMenu(project, { clientX: 40, clientY: 60 })
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+    // A press and its context menu on one row open that row's menu.
+    await fireEvent.pointerDown(project, { button: 2 })
+    await fireEvent.contextMenu(project, { clientX: 40, clientY: 60 })
+    expect(screen.getByRole('menu', { name: 'Research actions' })).toBeInTheDocument()
+    await fireEvent.keyDown(screen.getByRole('menu', { name: 'Research actions' }), { key: 'Escape' })
+    await fireEvent.pointerDown(thread, { button: 2 })
+    await fireEvent.contextMenu(thread, { clientX: 40, clientY: 120 })
+    expect(screen.getByRole('menu', { name: 'Run Saved Agent Instructions actions' })).toBeInTheDocument()
+  })
+
   it('deletes a project from its menu after a confirm that says its threads stay', async () => {
     const catalog = { projects: { research: 'Research' }, threads: { 'thread-1': 'research' } }
     const baseInvoke = invoke.getMockImplementation()

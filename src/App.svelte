@@ -142,6 +142,7 @@
   import ProjectSettings from './sidebar/ProjectSettings.svelte'
   import CommandPalette from './sidebar/CommandPalette.svelte'
   import ProjectPicker from './sidebar/ProjectPicker.svelte'
+  import { pressedElsewhere } from './sidebar/press-target.js'
   import { SETTINGS_PAGE, isPaletteShortcut, paletteInput, paletteShortcut, settingsPages } from './sidebar/palette.js'
   import { layerLabel, sourceLine } from './sidebar/sources.js'
   import { arrangeSidebar, emptySidebar, markRead, readMarks, rowTime, runStates, shownRows, sidebarInput, threadChangedAt } from './sidebar/sidebar-model.js'
@@ -2618,6 +2619,7 @@
   function openThreadMenu(event, threadId, fromTitle = false, title = null) {
     if (deletingThreadId === threadId) return
     event.preventDefault()
+    if (pressedElsewhere(event)) return
     if (selectedThreadIds.size && !selectedThreadIds.has(threadId)) clearThreadSelection()
     const row = event.currentTarget.getBoundingClientRect()
     const fromKeyboard = !event.clientX && !event.clientY
