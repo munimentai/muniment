@@ -480,7 +480,13 @@ fn pi_resume(args: Vec<String>) {
                         .is_some_and(|message| message.contains(HOLD_MARKER))
                 {
                     // Keep the run active until the test sends a queued
-                    // message or stops it.
+                    // message or stops it, after the text the reply wrote.
+                    if let Ok(text) = std::env::var("PI_RESUME_STUB_HELD_TEXT") {
+                        println!(
+                            "{}",
+                            serde_json::json!({"type":"message_update", "assistantMessageEvent":{"type":"text_delta", "delta":text}})
+                        );
+                    }
                 } else if let Ok(plan) = std::env::var("PI_RESUME_STUB_PLAN") {
                     // The plan tool's first step: the plan check.
                     println!(
@@ -585,9 +591,22 @@ fn pi_resume(args: Vec<String>) {
                     "{}",
                     serde_json::json!({"type":"response", "command":command, "success":true, "id":request["id"]})
                 );
+                // After written text, Pi ends the model call the message
+                // interrupted and answers it in a new call.
+                let delta = if std::env::var_os("PI_RESUME_STUB_HELD_TEXT").is_some() {
+                    println!(
+                        "{}",
+                        serde_json::json!({"type":"message_end", "message":{
+                            "role":"assistant", "provider":"stub", "model":"stub-model"
+                        }})
+                    );
+                    command.to_owned()
+                } else {
+                    format!(" {command}")
+                };
                 println!(
                     "{}",
-                    serde_json::json!({"type":"message_update", "assistantMessageEvent":{"type":"text_delta", "delta":format!(" {command}")}})
+                    serde_json::json!({"type":"message_update", "assistantMessageEvent":{"type":"text_delta", "delta":delta}})
                 );
                 if std::env::var_os("PI_RESUME_STUB_PERMISSION_CAPTURE").is_some() {
                     println!(

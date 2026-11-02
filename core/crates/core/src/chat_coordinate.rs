@@ -1420,6 +1420,10 @@ fn coordinate_work(
     // Text deltas wait here for one batched commit. Every other append below
     // flushes them first, so the journal keeps stream order.
     let mut held_deltas = HeldDeltas::default();
+    // The reply text's last character, and whether a model call ended
+    // since, so the next call's text starts on a paragraph of its own.
+    let mut text_end: Option<char> = None;
+    let mut call_ended = false;
     'coordinate: loop {
         diagnostics.log_lifecycle();
         if let Some(error) = gateway_failure
@@ -1625,6 +1629,13 @@ fn coordinate_work(
         }
         match event {
             Ok(PiChatEvent::TextDelta(text)) => {
+                if call_ended && !text.is_empty() {
+                    call_ended = false;
+                    if let Some(separator) = call_separator(text_end, &text) {
+                        held_deltas.push(model_stream_delta_payload(separator));
+                    }
+                }
+                text_end = text.chars().next_back().or(text_end);
                 for slice in split_model_stream_delta(&text) {
                     held_deltas.push(model_stream_delta_payload(slice));
                 }
@@ -1869,7 +1880,7 @@ fn coordinate_work(
                     break;
                 }
             }
-            Ok(PiChatEvent::ModelReported { .. }) => {}
+            Ok(PiChatEvent::ModelReported { .. }) => call_ended = true,
             Ok(PiChatEvent::RoutingStage(stage)) => {
                 if append_emit(
                     &app,
@@ -2692,6 +2703,15 @@ fn startup_waiting_on(
     )
 }
 
+/// The break that starts a model call's text when an earlier call of the
+/// same reply wrote text: one paragraph, unless either side already holds
+/// the space.
+fn call_separator(text_end: Option<char>, next: &str) -> Option<&'static str> {
+    let end = text_end?;
+    let next_start = next.chars().next()?;
+    (!end.is_whitespace() && !next_start.is_whitespace()).then_some("\n\n")
+}
+
 /// Names what Pi waited on. A missing folder comes first. A consent prompt
 /// holds a Pi that is still starting, so a Pi that exited waited on no prompt.
 fn startup_wait(
@@ -2859,6 +2879,16 @@ mod tests {
     use std::cell::RefCell;
     use std::io;
     use uuid::Uuid;
+
+    #[test]
+    fn a_model_calls_text_starts_a_paragraph_unless_space_already_parts_it() {
+        assert_eq!(call_separator(Some('d'), "finished"), Some("\n\n"));
+        assert_eq!(call_separator(Some('.'), "Next"), Some("\n\n"));
+        assert_eq!(call_separator(Some('\n'), "finished"), None);
+        assert_eq!(call_separator(Some('d'), " finished"), None);
+        assert_eq!(call_separator(None, "finished"), None);
+        assert_eq!(call_separator(Some('d'), ""), None);
+    }
 
     #[test]
     fn a_pi_that_exits_before_ready_is_named_as_an_exit_not_a_timeout() {
