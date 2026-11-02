@@ -10,9 +10,9 @@ use uuid::Uuid;
 
 pub struct ApplicationMemoryRuntime {
     config: PathBuf,
-    contexts: Arc<Mutex<BTreeMap<String, (String, PathBuf)>>>,
-    /// How many processes a read started hold each thread's extension.
-    extension_reads: Arc<Mutex<BTreeMap<String, usize>>>,
+    contexts: Mutex<BTreeMap<String, (String, PathBuf)>>,
+    /// Each open run session's use of its thread's tool extension.
+    extension_uses: Mutex<BTreeMap<String, ExtensionUse>>,
     memory_roots: Mutex<BTreeMap<String, (PathBuf, PathBuf)>>,
     recall: Mutex<BTreeMap<String, RecallSettings>>,
     database_root: PathBuf,
@@ -28,7 +28,7 @@ impl ApplicationMemoryRuntime {
         Self {
             config,
             contexts: Default::default(),
-            extension_reads: Default::default(),
+            extension_uses: Default::default(),
             memory_roots: Mutex::new(BTreeMap::new()),
             recall: Mutex::new(BTreeMap::new()),
             database_root,
@@ -127,36 +127,31 @@ impl ApplicationMemoryRuntime {
         thread: &str,
         capability: ModelMemoryCapability,
     ) -> Result<(), MemoryIndexError> {
-        self.open_session_with(session, thread, capability, true)
+        let extension = self.open_session_with(session, thread, capability, true)?;
+        self.extension_uses
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(session.to_owned(), extension);
+        Ok(())
     }
 
     /// Writes the tool extension the thread's next run loads, as that run
     /// writes it, with no session kept and no index built. A process that
     /// starts with it is the launch that run starts. The answer holds the
-    /// file for the process a read starts with it: once every hold drops and
-    /// no run of the thread is open, the file goes. A run replaces the file
-    /// and removes it when it ends, unless a read's process still holds it.
+    /// file for the process a read starts with it. The file goes once no
+    /// hold and no open run session of the thread uses it, whichever memory
+    /// runtime of this process took the use.
     pub fn write_thread_extension(
         &self,
         thread: &str,
         capability: ModelMemoryCapability,
     ) -> Result<ThreadExtensionHold, MemoryIndexError> {
-        *self
-            .extension_reads
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .entry(thread.to_owned())
-            .or_default() += 1;
-        let hold = ThreadExtensionHold {
-            thread: thread.to_owned(),
-            path: self.agent_extension_path(thread),
-            contexts: Arc::clone(&self.contexts),
-            reads: Arc::clone(&self.extension_reads),
-        };
         let session = format!("thread-extension-{}", Uuid::now_v7());
         let written = self.open_session_with(&session, thread, capability, false);
         self.forget_session(&session);
-        written.map(|()| hold)
+        written.map(|extension| ThreadExtensionHold {
+            _extension: extension,
+        })
     }
 
     fn open_session_with(
@@ -165,7 +160,7 @@ impl ApplicationMemoryRuntime {
         thread: &str,
         capability: ModelMemoryCapability,
         build: bool,
-    ) -> Result<(), MemoryIndexError> {
+    ) -> Result<ExtensionUse, MemoryIndexError> {
         let home_error = |error: muniment_core::home::HomeError| {
             use std::error::Error;
             let message = match error.source() {
@@ -201,6 +196,9 @@ impl ApplicationMemoryRuntime {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(session.into(), recall);
+        // The use counts before the file is written, so a use that ends
+        // meanwhile never removes the file this session starts Pi with.
+        let extension = ExtensionUse::take(self.agent_extension_path(thread));
         if let Err(error) = self.write_agent_extension(session) {
             if build {
                 self.close_session(session);
@@ -209,7 +207,7 @@ impl ApplicationMemoryRuntime {
             }
             return Err(error);
         }
-        Ok(())
+        Ok(extension)
     }
 
     fn build_session(&self, session: &str) {
@@ -734,22 +732,18 @@ impl ApplicationMemoryRuntime {
     }
 
     pub fn close_session(&self, session: &str) {
+        self.forget_session(session);
         // Pi read the thread's extension when its run started, so the file
-        // goes once no open session of that thread needs it. The `.js` twin
-        // is the name older versions wrote.
-        if let Some(thread) = self.forget_session(session) {
-            remove_unheld_extension(
-                &self.contexts,
-                &self.extension_reads,
-                &thread,
-                &self.agent_extension_path(&thread),
-            );
-        }
+        // goes once no other use of it remains.
+        let extension = self
+            .extension_uses
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(session);
+        drop(extension);
     }
 
-    /// Forgets a session and answers its thread when no other open session
-    /// of that thread remains.
-    fn forget_session(&self, session: &str) -> Option<String> {
+    fn forget_session(&self, session: &str) {
         self.saved
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -762,21 +756,14 @@ impl ApplicationMemoryRuntime {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(session);
-        let ended = {
-            let mut contexts = self
-                .contexts
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            contexts
-                .remove(session)
-                .map(|(thread, _)| thread)
-                .filter(|thread| contexts.values().all(|(open, _)| open != thread))
-        };
+        self.contexts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(session);
         self.sessions
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(session);
-        ended
     }
 
     /// The recall settings read when the session opened.
@@ -893,54 +880,51 @@ const MEMORY_SAVE_APPROVAL: &str = r#"      const clip = (text, limit) => { cons
       }
 "#;
 
-/// A read's hold on its thread's tool extension. The file goes when the last
-/// hold drops and no run of the thread is open.
+/// A read's hold on its thread's tool extension, kept while the process
+/// the read started runs.
 pub struct ThreadExtensionHold {
-    thread: String,
+    _extension: ExtensionUse,
+}
+
+/// How many uses each tool extension file has in this process: open run
+/// sessions and the processes reads started. A run and a read may each use
+/// their own memory runtime, so the count is one for the process.
+static EXTENSION_USES: Mutex<BTreeMap<PathBuf, usize>> = Mutex::new(BTreeMap::new());
+
+/// One use of a thread's tool extension. The file, and the `.js` twin older
+/// versions wrote, go when the last use ends. The count's lock stays held
+/// while the file goes, so a use taken then writes its file after the removal.
+pub(crate) struct ExtensionUse {
     path: PathBuf,
-    contexts: Arc<Mutex<BTreeMap<String, (String, PathBuf)>>>,
-    reads: Arc<Mutex<BTreeMap<String, usize>>>,
 }
 
-impl Drop for ThreadExtensionHold {
+impl ExtensionUse {
+    fn take(path: PathBuf) -> Self {
+        *EXTENSION_USES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry(path.clone())
+            .or_default() += 1;
+        Self { path }
+    }
+}
+
+impl Drop for ExtensionUse {
     fn drop(&mut self) {
-        {
-            let mut reads = self
-                .reads
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let Some(count) = reads.get_mut(&self.thread) {
-                *count = count.saturating_sub(1);
-                if *count == 0 {
-                    reads.remove(&self.thread);
-                }
-            }
+        let mut uses = EXTENSION_USES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(count) = uses.get_mut(&self.path) else {
+            return;
+        };
+        *count = count.saturating_sub(1);
+        if *count > 0 {
+            return;
         }
-        remove_unheld_extension(&self.contexts, &self.reads, &self.thread, &self.path);
+        uses.remove(&self.path);
+        let _ = std::fs::remove_file(self.path.with_extension("js"));
+        let _ = std::fs::remove_file(&self.path);
     }
-}
-
-/// Removes a thread's extension, and the `.js` twin older versions wrote,
-/// when no open session of the thread and no read's process holds it. Both
-/// locks stay held while the file goes, so a run or read that starts then
-/// writes its file after this removal.
-fn remove_unheld_extension(
-    contexts: &Mutex<BTreeMap<String, (String, PathBuf)>>,
-    reads: &Mutex<BTreeMap<String, usize>>,
-    thread: &str,
-    path: &Path,
-) {
-    let contexts = contexts
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let reads = reads
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if contexts.values().any(|(open, _)| open == thread) || reads.contains_key(thread) {
-        return;
-    }
-    let _ = std::fs::remove_file(path.with_extension("js"));
-    let _ = std::fs::remove_file(path);
 }
 
 /// How old a thread extension is before the startup sweep may remove it, so
@@ -1674,7 +1658,7 @@ mod tests {
         assert!(path.is_file(), "the second read's process still holds it");
         drop(second);
         assert!(!path.exists());
-        assert!(runtime.extension_reads.lock().unwrap().is_empty());
+        assert!(!EXTENSION_USES.lock().unwrap().contains_key(&path));
 
         // A run of the thread keeps the file past the read's end, and the
         // run's end removes it.
@@ -1687,6 +1671,35 @@ mod tests {
         drop(read);
         assert!(path.is_file(), "the open run still needs it");
         runtime.close_session("run");
+        assert!(!path.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_reads_process_that_stops_keeps_the_file_a_run_in_another_runtime_named() {
+        // The read and each run use their own memory runtime over one
+        // folder, as the runtime's context read and its runs do.
+        let (root, reads) = recall_runtime(None);
+        let runs = ApplicationMemoryRuntime::new(reads.config.clone(), reads.database_root.clone());
+        let thread = "thread-stopped";
+        let path = reads.agent_extension_path(thread);
+        let read = reads.write_thread_extension(thread, capability()).unwrap();
+
+        // The first run takes the read's process and the user stops it. Its
+        // end keeps the file the process still runs with.
+        runs.open_session("run-one", thread, capability()).unwrap();
+        runs.close_session("run-one");
+        assert!(path.is_file(), "the read's process still runs with it");
+
+        // The next run names the file, then stops the read's process, which
+        // it cannot take. The file stays for the process the run starts.
+        runs.open_session("run-two", thread, capability()).unwrap();
+        drop(read);
+        assert!(
+            path.is_file(),
+            "the run about to start Pi lost its extension"
+        );
+        runs.close_session("run-two");
         assert!(!path.exists());
         fs::remove_dir_all(root).unwrap();
     }

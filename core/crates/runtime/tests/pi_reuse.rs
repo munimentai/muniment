@@ -39,6 +39,8 @@ struct Reply {
     thread: String,
     accepted_after: Duration,
     phase: String,
+    failure: Option<String>,
+    run_id: String,
 }
 
 impl Harness {
@@ -54,6 +56,7 @@ impl Harness {
         std::env::set_var("PI_RESUME_STUB_PROMPT_PIDS", temporary.root.join("prompts"));
         std::env::set_var("PI_RESUME_STUB_START_DELAY_MS", START_DELAY_MS.to_string());
         std::env::set_var("PI_RESUME_STUB_SESSION_HEADER", "1");
+        std::env::set_var("PI_RESUME_STUB_LOAD_EXTENSIONS", "1");
         std::env::set_var(
             "PI_RESUME_STUB_PROMPT_FOLDERS",
             temporary.root.join("folders"),
@@ -75,14 +78,14 @@ impl Harness {
         self.sequence += 1;
         let run_id = format!("018f0000-0000-7000-8000-{:012}", 700 + self.sequence);
         let (sender, events) = mpsc::channel();
-        let (accepted, launch) = accept_prompt(
+        let (acceptance, launch) = accept_prompt(
             &RuntimeHost::default(),
             &self.temporary.profile,
             Arc::clone(&self.storage),
             self.processes.clone(),
             &self.activity,
             &self.temporary.config,
-            run_id,
+            run_id.clone(),
             prompt.into(),
             thread.map(str::to_owned),
             &self.session_thread,
@@ -100,17 +103,21 @@ impl Harness {
         let driver = std::thread::spawn(move || drive_prompt(launch));
         let mut accepted_after = None;
         let mut phase = String::new();
+        let mut failure = None;
         while let Ok(event) = events.recv_timeout(CI_WAIT) {
             if event.prompt_accepted && accepted_after.is_none() {
                 accepted_after = Some(started.elapsed());
             }
             phase = event.phase;
+            failure = event.failure_reason.or(failure);
         }
         driver.join().unwrap();
         Reply {
-            thread: accepted.thread_id,
+            thread: acceptance.thread_id,
             accepted_after: accepted_after.unwrap_or(Duration::MAX),
             phase,
+            failure,
+            run_id,
         }
     }
 
@@ -201,6 +208,8 @@ impl Drop for Harness {
             "PI_RESUME_STUB_PROMPT_PIDS",
             "PI_RESUME_STUB_START_DELAY_MS",
             "PI_RESUME_STUB_SESSION_HEADER",
+            "PI_RESUME_STUB_LOAD_EXTENSIONS",
+            "PI_RESUME_STUB_START_ERROR",
             "PI_RESUME_STUB_PROMPT_FOLDERS",
             "PI_RESUME_STUB_PROMPT_DELAY_MS",
         ] {
@@ -546,6 +555,100 @@ fn opening_a_thread_starts_the_process_its_next_reply_takes() {
     assert_eq!(harness.spawns().len(), 2);
     assert!(reply.accepted_after < Duration::from_millis(START_DELAY_MS));
     assert_eq!(harness.processes.parked(), 1);
+}
+
+#[test]
+fn a_reply_after_a_stopped_reply_in_an_opened_thread_starts() {
+    let _environment = ENVIRONMENT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut harness = Harness::new("pi-reuse-context-stop");
+    let thread = thread_without_process(&mut harness);
+
+    // Opening the thread starts the process the first reply takes, and the
+    // user stops that reply, so the process waits unmarked.
+    harness.read_context(&thread);
+    let read = harness.spawns().last().unwrap().clone();
+    let active = harness.active.clone();
+    let held_thread = thread.clone();
+    let prompts = harness.temporary.root.join("prompts");
+    let stopper = std::thread::spawn(move || {
+        let deadline = Instant::now() + CI_WAIT;
+        while Instant::now() < deadline {
+            let asked = lines(&prompts)
+                .iter()
+                .any(|line| line.ends_with("[hold the run] held"));
+            if let Some(run) = active.thread_run(&held_thread).filter(|_| asked) {
+                return cancel_run(active.clone(), local_grant().workspace, run);
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        Err("the held reply never reached the process".into())
+    });
+    let held = harness.reply(Some(&thread), "[hold the run] held");
+    stopper.join().unwrap().unwrap();
+    assert_ne!(held.phase, "complete");
+    assert_eq!(harness.prompt_process("[hold the run] held"), read);
+
+    // The next reply stops that process and starts its own, which loads
+    // the thread's tool extension the read wrote.
+    let extension = harness
+        .temporary
+        .profile
+        .join("memory")
+        .join(format!("memory-search-extension-{thread}.mjs"));
+    let after = harness.reply(Some(&thread), "after");
+    assert_eq!(after.phase, "complete");
+    assert_ne!(harness.prompt_process("after"), read);
+    assert!(ends(&read), "the stopped reply's process still runs");
+    assert_eq!(harness.spawns().len(), 3);
+    assert!(!extension.exists(), "the ended run left its extension");
+}
+
+#[test]
+fn a_reply_whose_pi_exits_at_start_names_the_exit() {
+    let _environment = ENVIRONMENT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut harness = Harness::new("pi-reuse-start-exit");
+    let thread = thread_without_process(&mut harness);
+    // Pi exits as it starts, as it does when an extension it names is gone.
+    std::env::set_var(
+        "PI_RESUME_STUB_START_ERROR",
+        "Error: Failed to load extension \"/gone.mjs\": Extension path does not exist: /gone.mjs",
+    );
+    let started = Instant::now();
+    let reply = harness.reply(Some(&thread), "second");
+    std::env::remove_var("PI_RESUME_STUB_START_ERROR");
+    assert_eq!(reply.phase, "failed");
+    assert!(started.elapsed() < Duration::from_secs(60));
+    let failure = reply.failure.unwrap();
+    assert!(
+        failure.starts_with("Reply setup failed. Error: Failed to load extension"),
+        "{failure}"
+    );
+    let detail = harness
+        .storage
+        .lock()
+        .unwrap()
+        .journal
+        .events(&reply.run_id)
+        .unwrap()
+        .into_iter()
+        .rev()
+        .find_map(|event| match event.payload {
+            muniment_core::journal::EventPayload::Inline { payload_json } => payload_json
+                .get("detail")
+                .and_then(|detail| detail.as_str())
+                .map(str::to_owned),
+            _ => None,
+        })
+        .unwrap();
+    assert!(
+        detail.starts_with("The agent runtime exited before it reported ready."),
+        "{detail}"
+    );
+    assert!(detail.contains("Extension path does not exist"), "{detail}");
 }
 
 #[test]

@@ -987,6 +987,8 @@ fn coordinate_work(
             return;
         }
         Err(OpenError::NotReady((), readiness_status)) => {
+            // The exit that ended a start carries what Pi wrote before it.
+            diagnostics.log_lifecycle();
             let waiting_on = startup_waiting_on(
                 &app,
                 &runtime.wiring,
@@ -1006,13 +1008,12 @@ fn coordinate_work(
                 crate::folder_access::failure_reason(access, folder)
             } else if waiting_on == StartupWait::MissingFolder {
                 MISSING_FOLDER_REASON.to_owned()
-            } else if grant.is_local() {
-                match diagnostics.stderr_error() {
-                    Some(error) => format!("Reply setup failed. {error}"),
-                    None => "Reply setup timed out. Try again.".to_owned(),
-                }
+            } else if let Some(error) = diagnostics.stderr_error().filter(|_| grant.is_local()) {
+                format!("Reply setup failed. {error}")
             } else if readiness_status != SidecarStatus::Starting {
                 "Reply setup stopped before it became ready. Try again.".to_owned()
+            } else if grant.is_local() {
+                "Reply setup timed out. Try again.".to_owned()
             } else {
                 format!(
                     "Reply setup did not become ready within {} seconds. Try again.",
@@ -2720,18 +2721,25 @@ fn startup_wait(
     pending().map_or(StartupWait::Unknown, StartupWait::Dialog)
 }
 
-/// What a reply that never became ready keeps as its detail: the bound, the
-/// state Pi reached, what it waited on and the first error it wrote.
+/// What a reply that never became ready keeps as its detail: the bound, or
+/// the exit when Pi stopped before it, the state Pi reached, what it waited
+/// on and the first error it wrote.
 fn readiness_detail(
     bound: Duration,
     status: SidecarStatus,
     waiting_on: &StartupWait,
     stderr_error: Option<String>,
 ) -> String {
-    let mut detail = format!(
-        "The agent runtime did not report ready within {} seconds. Status: {status:?}. Waiting on: {waiting_on}.",
-        bound.as_secs()
-    );
+    let mut detail = if status == SidecarStatus::Starting {
+        format!(
+            "The agent runtime did not report ready within {} seconds. Status: {status:?}. Waiting on: {waiting_on}.",
+            bound.as_secs()
+        )
+    } else {
+        format!(
+            "The agent runtime exited before it reported ready. Status: {status:?}. Waiting on: {waiting_on}."
+        )
+    };
     if let Some(error) = stderr_error {
         detail.push(' ');
         detail.push_str(&error);
@@ -2851,6 +2859,32 @@ mod tests {
     use std::cell::RefCell;
     use std::io;
     use uuid::Uuid;
+
+    #[test]
+    fn a_pi_that_exits_before_ready_is_named_as_an_exit_not_a_timeout() {
+        let error =
+            "Error: Failed to load extension \"/m/x.mjs\": Extension path does not exist: /m/x.mjs";
+        let exited = readiness_detail(
+            Duration::from_secs(120),
+            SidecarStatus::Restarting,
+            &StartupWait::Unknown,
+            Some(error.to_owned()),
+        );
+        assert_eq!(
+            exited,
+            format!("The agent runtime exited before it reported ready. Status: Restarting. Waiting on: unknown. {error}")
+        );
+        let waited = readiness_detail(
+            Duration::from_secs(120),
+            SidecarStatus::Starting,
+            &StartupWait::Unknown,
+            None,
+        );
+        assert_eq!(
+            waited,
+            "The agent runtime did not report ready within 120 seconds. Status: Starting. Waiting on: unknown."
+        );
+    }
 
     #[test]
     fn a_missing_working_folder_is_named_and_never_blamed_on_a_consent_prompt() {

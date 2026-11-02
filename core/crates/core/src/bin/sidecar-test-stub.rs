@@ -234,6 +234,25 @@ fn pi_resume(args: Vec<String>) {
     if let Ok(delay) = std::env::var("PI_RESUME_STUB_START_DELAY_MS") {
         thread::sleep(Duration::from_millis(delay.parse().unwrap()));
     }
+    // Pi exits when it cannot load what it starts with.
+    if let Ok(error) = std::env::var("PI_RESUME_STUB_START_ERROR") {
+        eprintln!("{error}");
+        io::stderr().flush().unwrap();
+        std::process::exit(1);
+    }
+    // Pi exits when an extension it names is gone by then.
+    if std::env::var_os("PI_RESUME_STUB_LOAD_EXTENSIONS").is_some() {
+        for pair in args.windows(2).filter(|pair| pair[0] == "--extension") {
+            if !std::path::Path::new(&pair[1]).exists() {
+                eprintln!(
+                    "Error: Failed to load extension {:?}: Extension path does not exist: {}",
+                    pair[1], pair[1]
+                );
+                io::stderr().flush().unwrap();
+                std::process::exit(1);
+            }
+        }
+    }
     // Pi reads its working folder before it answers its first command. A
     // `PI_RESUME_STUB_FOLDER_GATE` FIFO there holds that read, as macOS holds
     // a protected folder until the user answers its consent prompt.

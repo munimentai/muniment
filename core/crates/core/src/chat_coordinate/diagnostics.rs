@@ -1,5 +1,5 @@
 use crate::runtime_eprintln as eprintln;
-use crate::sidecar::{LineReader, SidecarEvent, SidecarSupervisor};
+use crate::sidecar::{LineReader, SidecarEvent, SidecarEventCause, SidecarSupervisor};
 use std::sync::mpsc::Receiver;
 
 pub(super) struct RunDiagnostics {
@@ -11,6 +11,9 @@ pub(super) struct RunDiagnostics {
     pub prompt_submitted: bool,
     stderr: Option<LineReader>,
     lifecycle: Option<Receiver<SidecarEvent>>,
+    /// What Pi wrote to stderr before its last exit, kept after a restart
+    /// clears the live tail.
+    exit_stderr: Vec<String>,
     startup_stage: Option<&'static str>,
 }
 
@@ -25,6 +28,7 @@ impl RunDiagnostics {
             prompt_submitted: false,
             stderr: None,
             lifecycle: None,
+            exit_stderr: Vec::new(),
             startup_stage: Some("projector"),
         }
     }
@@ -78,16 +82,16 @@ impl RunDiagnostics {
             .unwrap_or_default()
     }
 
-    /// The first `Error:` line Pi wrote, for a failure reason the shell shows.
+    /// The first `Error:` line Pi wrote, for a failure reason the shell
+    /// shows: from the running process, else from the one that last exited.
     pub fn stderr_error(&self) -> Option<String> {
-        self.stderr
-            .as_ref()
-            .map(LineReader::stderr_tail)
-            .unwrap_or_default()
-            .iter()
-            .map(|line| line.trim())
-            .find(|line| line.starts_with("Error:"))
-            .map(|line| line.chars().take(320).collect())
+        let first_error = |tail: &[String]| {
+            tail.iter()
+                .map(|line| line.trim())
+                .find(|line| line.starts_with("Error:"))
+                .map(|line| line.chars().take(320).collect())
+        };
+        first_error(&self.stderr_tail()).or_else(|| first_error(&self.exit_stderr))
     }
 
     fn log_stderr(&self) {
@@ -116,9 +120,12 @@ impl RunDiagnostics {
         self.lifecycle = Some(lifecycle);
     }
 
-    pub fn log_lifecycle(&self) {
+    pub fn log_lifecycle(&mut self) {
         if let Some(events) = &self.lifecycle {
             for event in events.try_iter() {
+                if let Some(SidecarEventCause::ProcessExit { stderr_tail, .. }) = &event.cause {
+                    self.exit_stderr.clone_from(stderr_tail);
+                }
                 // JSON escapes child output so each transition occupies one log line.
                 let detail: String = format!("{event:?}").chars().take(8192).collect();
                 let detail = serde_json::to_string(&detail).unwrap();
@@ -191,6 +198,31 @@ fn stderr_line(run_id: &str, tail: Vec<String>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_start_error_outlives_the_restart_that_clears_the_live_tail() {
+        let mut diagnostics = RunDiagnostics::new("run-exit");
+        let (events, lifecycle) = std::sync::mpsc::channel();
+        diagnostics.lifecycle = Some(lifecycle);
+        let error =
+            "Error: Failed to load extension \"/m/x.mjs\": Extension path does not exist: /m/x.mjs";
+        events
+            .send(SidecarEvent {
+                status: crate::sidecar::SidecarStatus::Restarting,
+                cause: Some(SidecarEventCause::ProcessExit {
+                    code: Some(1),
+                    signal: None,
+                    stderr_tail: vec![error.to_owned()],
+                }),
+                restart_attempt: None,
+                backoff_delay: None,
+                generation: Some(1),
+            })
+            .unwrap();
+        assert_eq!(diagnostics.stderr_error(), None);
+        diagnostics.log_lifecycle();
+        assert_eq!(diagnostics.stderr_error().as_deref(), Some(error));
+    }
 
     #[test]
     fn startup_exits_report_the_last_stage_without_error_text() {
