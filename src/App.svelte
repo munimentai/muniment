@@ -733,11 +733,10 @@
   }
   // An agent's profile beside the agent's own thread, or alone while the
   // agent has none, never beside another thread. A card's Delete opens it
-  // alone at the profile's delete confirmation.
+  // the same way, at the profile's delete confirmation.
   let profileDelete = $state({ agentId: null, count: 0 })
   async function openAgentProfile(agent, { deleting = false } = {}) {
-    // A delete confirms over the open thread, since the agent's thread goes with it.
-    const threadId = deleting ? null : agentHomeThread(agent)
+    const threadId = agentHomeThread(agent)
     if (threadId && (threadId !== currentThreadId || freshThread) && !switchLocked && !agentOpening) {
       agentOpening = true
       try { if (!await chatController.openThread(threadId, true)) return } finally { agentOpening = false }

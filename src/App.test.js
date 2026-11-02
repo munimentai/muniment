@@ -4771,6 +4771,26 @@ describe('sidebar collapse', () => {
     await waitFor(() => expect(readAt()).toBeGreaterThanOrEqual(runAt))
   })
 
+  it('opens a card\'s Delete confirmation in the profile beside the agent\'s own thread, not the open one', async () => {
+    threadSummaryResult = [{ threadId: 'ordinary-thread', title: 'Single Word Acknowledgment', updatedAt: '2026-01-02T00:00:00Z' }, { threadId: 'agent-thread', title: 'Scout chat', updatedAt: '2026-01-01T00:00:00Z' }]
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args)
+      ? agentListAnswer([{ id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null, routines: [] }], { 'agent-1': 'agent-thread' })
+      : command === 'chat_current_thread' ? Promise.resolve('ordinary-thread')
+      : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
+    render(App)
+    await waitFor(() => expect(document.querySelector('.thread-row.active-thread .thread-row-title')).toHaveTextContent('Single Word Acknowledgment'))
+    await openSidebarPage('Agents')
+    const page = await screen.findByRole('region', { name: 'Agents', exact: true })
+    await fireEvent.click(await within(page).findByRole('button', { name: 'Actions for Scout' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
+    const profile = await screen.findByRole('complementary', { name: 'Agent profile' })
+    expect(await within(profile).findByRole('group', { name: 'Delete agent' })).toBeInTheDocument()
+    expect(within(profile).getByText('Scout', { selector: '.name' })).toBeInTheDocument()
+    expect(invoke).toHaveBeenCalledWith('chat_select_thread', { threadId: 'agent-thread' })
+    await waitFor(() => expect(document.querySelector('.thread-row.active-thread .thread-row-title')).toHaveTextContent('Scout chat'))
+  })
+
   it('opens the profile of an agent with no thread alone, with no new thread', async () => {
     const original = invoke.getMockImplementation()
     invoke.mockImplementation(async (command, args) => isAgentList(command, args)
