@@ -2069,7 +2069,69 @@ describe('chat controller', () => {
     await opening
   })
 
-  it.each(['chat_select_thread', 'chat_thread_open'])('keeps the transcript when %s fails', async (failedCommand) => {
+  it('shows the requested thread with a notice and holds sending when its select is refused', async () => {
+    vi.useFakeTimers()
+    try {
+      const busy = 'Muniment is busy with another request. Try again.'
+      let refusing = true
+      const invoke = vi.fn(async (command, payload) => {
+        if (command === 'chat_select_thread' && refusing) throw busy
+        if (command === 'chat_thread_open') return { entries: payload.threadId === 'thread-2' ? [{ runId: 'run-2', phase: 'complete', text: 'Second answer', prompt: 'Second question', receipt: {}, toolActivity: [] }] : [], nextCursor: null }
+        if (command === 'chat_submit') return { runId: 'run-9' }
+        return undefined
+      })
+      const onThreadSwitch = vi.fn()
+      const context = setup(invoke, { threadId: 'thread-1', options: { onThreadSwitch } })
+      const controller = context.controller
+      context.onThreadSelected.mockImplementation((next) => context.setThreadId(next))
+      context.setMessages([{ role: 'user', text: 'First question' }])
+      const opening = controller.openThread('thread-2')
+      await vi.advanceTimersByTimeAsync(3_000)
+      await expect(opening).resolves.toBe(true)
+
+      // The select tried again before it gave up.
+      expect(invoke.mock.calls.filter(([command]) => command === 'chat_select_thread')).toHaveLength(4)
+      expect(context.onThreadSelected).toHaveBeenLastCalledWith('thread-2')
+      expect(context.messages().map((message) => message.text ?? message.run.text)).toEqual(['Second question', 'Second answer'])
+      expect(context.onHistoryError).toHaveBeenLastCalledWith(`This thread did not open, so sending waits. ${busy}`, expect.objectContaining({ label: 'Open again' }))
+      expect(onThreadSwitch).toHaveBeenLastCalledWith(true)
+      // Nothing goes to the thread left behind, nor to one the runtime did not select.
+      context.setDraft('Next message')
+      await controller.send()
+      expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
+      expect(context.draft()).toBe('Next message')
+
+      refusing = false
+      await context.onHistoryError.mock.lastCall[1].run()
+      expect(invoke).toHaveBeenLastCalledWith('chat_thread_open', expect.objectContaining({ threadId: 'thread-2' }))
+      expect(context.onHistoryError).toHaveBeenLastCalledWith('')
+      expect(onThreadSwitch).toHaveBeenLastCalledWith(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('opens the thread once a busy select answers on a retry', async () => {
+    vi.useFakeTimers()
+    try {
+      let refusals = 2
+      const invoke = vi.fn(async (command) => {
+        if (command === 'chat_select_thread' && refusals > 0) { refusals -= 1; throw 'Muniment is busy with another request. Try again.' }
+        if (command === 'chat_thread_open') return { entries: [], nextCursor: null }
+        return undefined
+      })
+      const context = setup(invoke, { threadId: 'thread-1' })
+      const opening = context.controller.openThread('thread-2')
+      await vi.advanceTimersByTimeAsync(2_000)
+      await expect(opening).resolves.toBe(true)
+      expect(context.onHistoryError).toHaveBeenLastCalledWith('')
+      expect(context.onThreadSelected).toHaveBeenLastCalledWith('thread-2')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it.each(['chat_thread_open'])('keeps the transcript when %s fails', async (failedCommand) => {
     const previous = [{ role: 'user', text: 'Current transcript' }]
     const onHistoryError = vi.fn()
     const context = setup()

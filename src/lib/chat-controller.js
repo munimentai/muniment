@@ -7,6 +7,16 @@ const signaledThreadCap = 256
 const signaledRunCap = 256
 const liveTextCap = 256
 const desktopBusy = 'Muniment is busy with another request. Try again.'
+const desktopBusyStart = 'Muniment is busy with another request.'
+// The waits before each select retry, in milliseconds.
+const selectRetryDelays = [250, 750, 1500]
+
+// The notice a refused select shows over the thread it was for.
+function selectFailureText(error) {
+  const cause = typeof error === 'string' ? error : error?.message
+  const failure = 'This thread did not open, so sending waits.'
+  return typeof cause === 'string' && cause.trim() ? `${failure} ${cause}` : failure
+}
 // The runtime admits one active run per profile and answers a second submit
 // with this reason before it records anything (attach_boundaries.rs).
 const replyInProgress = 'A reply is already in progress.'
@@ -649,12 +659,21 @@ export function createChatController({
     const previous = previousThreadId == null ? null : selection(previousThreadId)
     const wasBlocked = switchBlocked
     let selected = false
+    // A select the runtime refused: the thread still shows, and sending waits
+    // until a select of it succeeds, so no message goes to the thread before.
+    let selectFailure = null
     historyLoads += 1
     holdBuffer()
     try {
       if (select) {
-        await invoke('chat_select_thread', target)
-        selected = true
+        try {
+          await selectThread(target)
+          selected = true
+        } catch (error) {
+          // A select of the thread already shown leaves nothing to mix up.
+          if (quiet || destroyed || threadId === previousThreadId) throw error
+          selectFailure = error
+        }
       }
       const history = []
       let posted = []
@@ -671,7 +690,7 @@ export function createChatController({
       }
       if (destroyed) return
       // Read first so a failed initial history read still permits a fresh thread.
-      if (restoreSelection && !selected) {
+      if (restoreSelection && !selected && !selectFailure) {
         await invoke('chat_select_thread', target)
         selected = true
         if (destroyed) return
@@ -702,8 +721,13 @@ export function createChatController({
       if (rejoined) onAnnounce(rejoined)
       onHistoryLoaded()
       onFollow()
-      onHistoryError('')
-      switchBlocked = false
+      if (selectFailure) {
+        switchBlocked = true
+        onHistoryError(selectFailureText(selectFailure), { label: 'Open again', run: () => openThread(threadId, true) })
+      } else {
+        onHistoryError('')
+        switchBlocked = false
+      }
       // The buffer can hold the whole run, so a rejoin can settle at once. The
       // refresh stays unawaited because this call already bumped the refresh
       // sequence. An awaited refresh would reorder onThreadSelected.
@@ -743,6 +767,20 @@ export function createChatController({
       switchingThread = false
       if (!destroyed) onThreadSwitch(switchBlocked)
       if (recoveryPending) void recoverChatEvents()
+    }
+  }
+
+  // A busy runtime answers a select in a moment, so a select tries again a
+  // few times before it reports the refusal.
+  async function selectThread(target) {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await invoke('chat_select_thread', target)
+      } catch (error) {
+        const cause = typeof error === 'string' ? error : error?.message
+        if (destroyed || attempt >= selectRetryDelays.length || !String(cause ?? '').startsWith(desktopBusyStart)) throw error
+        await new Promise((resolve) => setTimeout(resolve, selectRetryDelays[attempt]))
+      }
     }
   }
 

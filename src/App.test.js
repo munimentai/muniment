@@ -3356,6 +3356,34 @@ describe('thread name', () => {
     expect(screen.queryByText('No matching threads.')).not.toBeInTheDocument()
   })
 
+  it('shows a refused thread select in place, marks the requested row and holds sending', async () => {
+    threadSummaryResult = [
+      { threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' },
+      { threadId: 'thread-2', title: 'Vendor audit', updatedAt: '' },
+    ]
+    const baseInvoke = invoke.getMockImplementation()
+    let refusing = false
+    invoke.mockImplementation((command, payload) => command === 'chat_select_thread' && refusing
+      ? Promise.reject('Muniment is busy with another request. Try again.')
+      : baseInvoke(command, payload))
+    render(App)
+    await screen.findByRole('heading', { level: 1, name: 'Lease renewal' })
+    const composer = await findReadyWorkspaceComposer()
+    refusing = true
+    await fireEvent.click(screen.getByRole('button', { name: 'Vendor audit' }))
+    const alert = await screen.findByText(/This thread did not open, so sending waits\./, {}, { timeout: 5000 })
+    expect(alert).toHaveTextContent('Muniment is busy with another request.')
+    expect(screen.getByRole('heading', { level: 1, name: 'Vendor audit' })).toBeInTheDocument()
+    expect(document.querySelector('#sidebar .thread-row[aria-current="true"] .thread-row-title')).toHaveTextContent('Vendor audit')
+    expect(screen.getByText('Send waits for the thread. Your draft stays here.')).toBeInTheDocument()
+    expect(composer).toBeDisabled()
+    expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
+    refusing = false
+    await fireEvent.click(within(alert.closest('.history-error')).getByRole('button', { name: 'Open again' }))
+    await waitFor(() => expect(screen.queryByText(/This thread did not open/)).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.getByPlaceholderText('Ask anything')).toBeEnabled())
+  }, 15_000)
+
   it('searches older titles and renames a thread without opening it', async () => {
     threadSummaryResult = [{ threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' }]
     olderThreadSummaryResult = [{ threadId: 'thread-2', title: 'Vendor audit', updatedAt: '' }]
