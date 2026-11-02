@@ -4052,7 +4052,7 @@
                 <li class="thread-record" class:selected draggable={threadMovable(summary.threadId) && rowRename?.threadId !== summary.threadId ? 'true' : undefined} ondragstart={(event) => threadDragStart(event, summary.threadId)} oncontextmenu={(event) => openThreadMenu(event, summary.threadId)}>
                   {#if rowRename?.threadId === summary.threadId}
                     <form class="row-rename" onsubmit={(event) => { event.preventDefault(); void saveSidebarName() }}>
-                      <input aria-label="Thread name" maxlength="80" bind:this={rowRenameInput} bind:value={rowRename.title} onkeydown={sidebarNameKeydown} disabled={rowRenamePending} />
+                      <input aria-label="Thread name" maxlength="80" spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" bind:this={rowRenameInput} bind:value={rowRename.title} onkeydown={sidebarNameKeydown} disabled={rowRenamePending} />
                       <button type="submit" disabled={rowRenamePending || !rowRename.title.trim()}>Save</button>
                       <button type="button" disabled={rowRenamePending} onclick={() => { rowRename = null; focusThreadRow(summary.threadId) }}>Cancel</button>
                     </form>
@@ -4125,7 +4125,7 @@
             {#if threadAgent}<button class="quiet agent-chat-title" data-accent-edge style:--agent-color={agentColor(threadAgent)} style:--edge-color={agentColor(threadAgent)} aria-label={`Open profile for ${threadAgent.name}`} onclick={revealAgentProfile}><AgentAvatar agent={threadAgent} activity={threadAgent.activity} size={20} /><span>{threadAgent.name}</span></button>{/if}
             {#if !threadAgent}
             {#if editingThreadTitle}
-              <input class="thread-title" aria-label="Thread name" maxlength="160" bind:this={threadTitleInput} value={threadTitleDraft} oninput={limitThreadTitle} onkeydown={threadTitleKeydown} onblur={commitThreadTitle}>
+              <input class="thread-title" aria-label="Thread name" maxlength="160" spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" bind:this={threadTitleInput} value={threadTitleDraft} oninput={limitThreadTitle} onkeydown={threadTitleKeydown} onblur={commitThreadTitle}>
             {:else}
               <h1 class="thread-title-heading" aria-label={threadsLoading ? 'Loading threads…' : currentThreadTitle} aria-busy={threadsLoading} data-tauri-drag-region><RowControl kind="thread-title" data-accent-edge aria-label="Rename thread" disabled={threadsLoading || !currentThreadId || freshThread || !!active || !!agentChat} bind:element={threadTitleButton} onclick={() => editThreadTitle(currentThreadTitle)} onkeydown={threadTitleButtonKeydown}>{threadsLoading ? '' : currentThreadTitle}</RowControl></h1>
               {#if threadMachine && threadMachine !== LOCAL_RUNTIME_ID}{@render machineBadge({ runtimeId: threadMachine })}{/if}

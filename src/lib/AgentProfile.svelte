@@ -299,7 +299,7 @@
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
           <form aria-label={`Edit ${label}`} onsubmit={event => { event.preventDefault(); void save() }} onkeydown={event => { if (event.key === 'Escape' && !busy) { event.stopPropagation(); void endEdit() } }}>
             {#if field === 'instructions'}<textarea aria-label="Instructions" rows="12" bind:value required disabled={busy}></textarea><small>Saving can propose routines from schedules in the instructions.</small>
-            {:else}<input aria-label={label} bind:value maxlength={field === 'name' ? 100 : 120} required={field === 'name'} disabled={busy} />{/if}
+            {:else}<input aria-label={label} bind:value maxlength={field === 'name' ? 100 : 120} required={field === 'name'} spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" disabled={busy} />{/if}
             <div class="actions"><button type="submit" data-variant="primary" disabled={busy || (['name','instructions'].includes(field) && !value.trim())}>Save</button><button type="button" disabled={busy} onclick={endEdit}>Cancel</button></div>
           </form>
         {:else}

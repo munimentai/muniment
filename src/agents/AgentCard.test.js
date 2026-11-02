@@ -52,6 +52,8 @@ it('renames the agent in place: Enter saves through agent.save, Escape cancels',
   show({ tauri: machineCore.tauri, onchange })
   await fireEvent.click(screen.getByRole('button', { name: 'Edit agent name: Scout' }))
   const field = screen.getByRole('textbox', { name: 'Agent name' })
+  // macOS autocorrect and spelling never change a name as it is typed.
+  for (const [name, value] of [['spellcheck', 'false'], ['autocorrect', 'off'], ['autocapitalize', 'off'], ['autocomplete', 'off']]) expect(field).toHaveAttribute(name, value)
   await fireEvent.input(field, { target: { value: 'Not this' } })
   await fireEvent.keyDown(field, { key: 'Escape' })
   expect(screen.queryByRole('textbox', { name: 'Agent name' })).not.toBeInTheDocument()

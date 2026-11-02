@@ -49,7 +49,7 @@
       </div>
       {#if projectForm}{#key projectForm}
         <form class="row-rename" onsubmit={(event) => { event.preventDefault(); onsaveproject() }}>
-          <input aria-label="Project name" placeholder="Project name" maxlength="80" use:focusField bind:value={projectName} disabled={projectBusy} />
+          <input aria-label="Project name" placeholder="Project name" maxlength="80" spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" use:focusField bind:value={projectName} disabled={projectBusy} />
           <button type="submit" disabled={projectBusy || !projectName.trim()}>{projectForm === 'new' ? 'Create' : 'Save'}</button>
           <button type="button" disabled={projectBusy} onclick={oncancelproject}>Cancel</button>
         </form>

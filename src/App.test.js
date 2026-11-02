@@ -3313,6 +3313,8 @@ describe('thread name', () => {
     await screen.findByRole('button', { name: 'Project Research' })
     await fireEvent.click(screen.getByRole('button', { name: 'New project' }))
     await waitFor(() => expect(screen.getByRole('textbox', { name: 'Project name' })).toHaveFocus())
+    // macOS autocorrect and spelling never change a name as it is typed.
+    for (const [name, value] of [['spellcheck', 'false'], ['autocorrect', 'off'], ['autocapitalize', 'off'], ['autocomplete', 'off']]) expect(screen.getByRole('textbox', { name: 'Project name' })).toHaveAttribute(name, value)
     await fireEvent.input(screen.getByRole('textbox', { name: 'Project name' }), { target: { value: 'Contracts' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Create' }))
     await waitFor(() => expect(screen.getByRole('button', { name: 'Project Contracts' })).toHaveAttribute('aria-expanded', 'true'))
@@ -3431,6 +3433,8 @@ describe('thread name', () => {
     expect(screen.getByRole('searchbox')).toHaveValue('vendor')
     await fireEvent.click(screen.getByRole('button', { name: 'Actions for Vendor audit' }))
     await fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }))
+    // macOS autocorrect and spelling never change a name as it is typed.
+    for (const [name, value] of [['spellcheck', 'false'], ['autocorrect', 'off'], ['autocapitalize', 'off'], ['autocomplete', 'off']]) expect(screen.getByRole('textbox', { name: 'Thread name' })).toHaveAttribute(name, value)
     await fireEvent.input(screen.getByRole('textbox', { name: 'Thread name' }), { target: { value: 'Vendor terms' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_rename_thread', { threadId: 'thread-2', title: 'Vendor terms' }))
@@ -3814,6 +3818,8 @@ describe('thread name', () => {
     const field = await screen.findByRole('textbox', { name: 'Thread name' })
     expect(field).toHaveValue('Stored name')
     expect(field).toHaveAttribute('maxlength', '160')
+    // macOS autocorrect and spelling never change a name as it is typed.
+    for (const [name, value] of [['spellcheck', 'false'], ['autocorrect', 'off'], ['autocapitalize', 'off'], ['autocomplete', 'off']]) expect(field).toHaveAttribute(name, value)
     expect(field.selectionStart).toBe(0)
     expect(field.selectionEnd).toBe('Stored name'.length)
 

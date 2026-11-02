@@ -94,7 +94,7 @@
     <form onsubmit={save}>
       <div class="body">
         <div class="line">
-          <label class="grow">Name<input bind:value={name} maxlength="80" required disabled={busy} /></label>
+          <label class="grow">Name<input bind:value={name} maxlength="80" required spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" disabled={busy} /></label>
           <label class="switch"><Toggle bind:checked={enabled} label="Routine on" disabled={busy} />On</label>
         </div>
         <label>Starts on<select bind:value={kind} disabled={busy || (original && original.trigger.kind === 'webhook')}>

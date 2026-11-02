@@ -257,7 +257,7 @@
 {#if naming}
   <div class="name-backdrop" use:dialogDismiss={{onclose: () => naming = null, disabled: busy}}><form role="dialog" aria-modal="true" aria-label={naming.action === 'rename' ? 'Rename item' : naming.action === 'new-file' ? 'New file' : 'New folder'} onsubmit={e => { e.preventDefault(); void run(naming.action,naming.paths,proposedName,naming.target) }} onkeydown={e => { if (e.key === 'Escape' && !busy) naming = null; if (e.key === 'Tab') { const controls = [...e.currentTarget.querySelectorAll('input,button:not(:disabled)')]; const index = controls.indexOf(document.activeElement); e.preventDefault(); controls[(index+(e.shiftKey?-1:1)+controls.length)%controls.length]?.focus() } }}>
     <header class="name-head"><label for="workspace-item-name">{naming.action === 'rename' ? 'Rename item' : naming.action === 'new-file' ? 'New file' : 'New folder'}</label><PopupClose label="Close file name" disabled={busy} onclick={() => naming = null} /></header>
-    <input id="workspace-item-name" bind:this={nameInput} bind:value={proposedName} disabled={busy} autocomplete="off" />
+    <input id="workspace-item-name" bind:this={nameInput} bind:value={proposedName} disabled={busy} autocomplete="off" spellcheck="false" autocorrect="off" autocapitalize="off" />
     {#if error}<p role="alert">{error}</p>{/if}
     <div class="name-actions"><button type="submit" disabled={busy || !proposedName.trim()}>{naming.action === 'rename' ? 'Rename' : 'Create'}</button></div>
   </form></div>

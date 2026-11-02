@@ -245,7 +245,7 @@
           <LucideIcon name="key-round" size={16} />
           {#if editingId === account.id}
             <form class="name-edit" onsubmit={(event) => { event.preventDefault(); void saveName(account) }}>
-              <input bind:this={nameInput} bind:value={nameDraft} aria-label="Account name" maxlength="120" autocapitalize="off" autocomplete="off" spellcheck="false" disabled={pending} onkeydown={(event) => { if (event.key === 'Escape') { event.preventDefault(); editingId = null } }} />
+              <input bind:this={nameInput} bind:value={nameDraft} aria-label="Account name" maxlength="120" autocapitalize="off" autocomplete="off" spellcheck="false" autocorrect="off" disabled={pending} onkeydown={(event) => { if (event.key === 'Escape') { event.preventDefault(); editingId = null } }} />
               <button type="submit" data-variant="primary" disabled={pending || !nameDraft.trim()}>Save</button>
               <button type="button" disabled={pending} onclick={() => editingId = null}>Cancel</button>
             </form>

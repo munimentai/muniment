@@ -55,7 +55,7 @@
     {:else if mode === 'rename'}
       <header><strong>Rename</strong><PopupClose label="Close rename" disabled={busy} onclick={close} /></header>
       <form onsubmit={event => { event.preventDefault(); void choose('rename') }}>
-        <label>Name<input aria-label="Name" maxlength={maxNameLength} bind:value disabled={busy}/></label>
+        <label>Name<input aria-label="Name" maxlength={maxNameLength} bind:value spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" disabled={busy}/></label>
         <div class="buttons"><button type="submit" disabled={busy || !value.trim()}>Save</button></div>
       </form>
     {:else}

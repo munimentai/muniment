@@ -58,7 +58,7 @@
 
 {#if mode === 'rename'}
   <form class="runtime-form" aria-label="Rename {row.name}" onsubmit={rename}>
-    <input type="text" aria-label="Machine name" maxlength="80" bind:value={draft}>
+    <input type="text" aria-label="Machine name" maxlength="80" spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" bind:value={draft}>
     <Button type="submit" disabled={busy || !draft.trim()}>Save</Button>
     <button type="button" class="quiet" onclick={() => { mode = 'view' }}>Cancel</button>
   </form>
