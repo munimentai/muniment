@@ -81,6 +81,8 @@
     return { destroy() { node.remove() } }
   }
 
+  // Escape from inside the panel stops at it, before the shell's document
+  // keys close the page under it. The window answers it from anywhere else.
   function keydown(event) {
     if (event.key === 'Escape' && !busy) { event.preventDefault(); event.stopPropagation(); onclose() }
   }
@@ -89,7 +91,8 @@
 <svelte:window onkeydown={keydown} />
 
 <div class="dialog-backdrop" use:portal use:dialogDismiss={{ onclose, disabled: busy }}>
-  <div data-panel="routine" data-panel-variant="overlay" class="dialog-panel" role="dialog" aria-modal="true" aria-labelledby={`${id}-title`} bind:this={panel}>
+  <!-- svelte-ignore a11y_interactive_supports_focus -->
+  <div data-panel="routine" data-panel-variant="overlay" class="dialog-panel" role="dialog" aria-modal="true" aria-labelledby={`${id}-title`} bind:this={panel} onkeydown={keydown}>
     <header><h2 id={`${id}-title`}>{original ? 'Edit routine' : 'New routine'}</h2><PopupClose label="Close routine" disabled={busy} onclick={onclose} /></header>
     <form onsubmit={save}>
       <div class="body">

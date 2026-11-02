@@ -41,3 +41,17 @@ it('moves between levels with the arrows and closes on Escape', async () => {
   await fireEvent.keyDown(window, { key: 'Escape' })
   expect(onclose).toHaveBeenCalledTimes(1)
 })
+
+it('stops Escape at the menu, so the document keys of the page under it never see it', async () => {
+  const page = vi.fn()
+  document.addEventListener('keydown', page)
+  try {
+    const onclose = vi.fn()
+    render(ThinkingPicker, { levels: ['low', 'high'], current: 'high', onchoose: vi.fn(), onclose })
+    await fireEvent.keyDown(screen.getByRole('menuitemradio', { name: 'High' }), { key: 'Escape' })
+    expect(onclose).toHaveBeenCalledTimes(1)
+    expect(page).not.toHaveBeenCalled()
+  } finally {
+    document.removeEventListener('keydown', page)
+  }
+})

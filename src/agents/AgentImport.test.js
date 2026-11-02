@@ -52,3 +52,21 @@ it('reads pasted text and keeps the memories by default', async () => {
   await fireEvent.click(screen.getByRole('button', { name: 'Import agent' }))
   await waitFor(() => expect(requests[1]).toEqual({ runtime: 'local', operation: 'agent.import_commit', body: { agent: preview.agent, memories: preview.memories } }))
 })
+
+it('stops Escape at its dialog, so the Agents page under it stays', async () => {
+  // The shell's page keys listen on the document from its mount, after the
+  // window's own delegated handlers, and skip a key a handler took.
+  const page = vi.fn()
+  const shell = (event) => { if (!event.defaultPrevented) page() }
+  try {
+    const onclose = vi.fn()
+    render(AgentImport, { tauri: { invoke: vi.fn() }, runtimes: [{ id: 'local', name: 'This computer' }], onimported: vi.fn(), onclose })
+    document.addEventListener('keydown', shell)
+    const field = within(screen.getByRole('dialog', { name: 'Import agent' })).getByRole('textbox', { name: 'Share link' })
+    await fireEvent.keyDown(field, { key: 'Escape' })
+    expect(onclose).toHaveBeenCalledTimes(1)
+    expect(page).not.toHaveBeenCalled()
+  } finally {
+    document.removeEventListener('keydown', shell)
+  }
+})

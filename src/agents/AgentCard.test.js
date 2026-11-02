@@ -218,6 +218,29 @@ it('picks a permission mode from the composer mode menu through agent.save, with
   expect(machineCore.requests).toHaveLength(saves)
 })
 
+it('stops Escape at the open permission mode list, so the page under the card stays', async () => {
+  // The shell's page keys listen on the document, as App's do.
+  const page = vi.fn()
+  document.addEventListener('keydown', page)
+  try {
+    const machineCore = core()
+    show({ tauri: machineCore.tauri, modes })
+    await fireEvent.click(screen.getByRole('tab', { name: 'Permissions' }))
+    const button = screen.getByRole('button', { name: 'Permissions: Ask before changes' })
+    await fireEvent.click(button)
+    const menu = screen.getByRole('menu', { name: 'Modes' })
+    await waitFor(() => expect(menu.contains(document.activeElement)).toBe(true))
+    await fireEvent.keyDown(document.activeElement, { key: 'Escape' })
+    expect(screen.queryByRole('menu', { name: 'Modes' })).not.toBeInTheDocument()
+    expect(page).not.toHaveBeenCalled()
+    // With the list closed, Escape reaches the page again.
+    await fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(page).toHaveBeenCalledTimes(1)
+  } finally {
+    document.removeEventListener('keydown', page)
+  }
+})
+
 it('marks the default mode of an agent that chose none, and names a refused change', async () => {
   const machineCore = core({ refuse: 'The agent settings are invalid.' })
   show({ tauri: machineCore.tauri, modes, agent: { ...agent, permissions: {} } })

@@ -20,6 +20,8 @@
     return { destroy() { node.remove() } }
   }
 
+  // Escape from inside the panel stops at it, before the shell's document
+  // keys close the page under it. The window answers it from anywhere else.
   function keydown(event) {
     if (event.key === 'Escape' && !busy) { event.preventDefault(); event.stopPropagation(); (onback ?? onclose)() }
   }
@@ -28,7 +30,8 @@
 <svelte:window onkeydown={keydown} />
 
 <div class="dialog-backdrop" use:portal use:dialogDismiss={{ onclose, disabled: busy }}>
-  <div data-panel={panel} data-panel-variant="overlay" class="dialog-panel" role="dialog" aria-modal="true" aria-labelledby={`${id}-title`} style:--dialog-width={`${width}px`} bind:this={element}>
+  <!-- svelte-ignore a11y_interactive_supports_focus -->
+  <div data-panel={panel} data-panel-variant="overlay" class="dialog-panel" role="dialog" aria-modal="true" aria-labelledby={`${id}-title`} style:--dialog-width={`${width}px`} bind:this={element} onkeydown={keydown}>
     <header><span class="title">{#if onback}<button type="button" class="back" aria-label={backLabel} disabled={busy} onclick={onback}><LucideIcon name="arrow-left" variant="action" size={16} /></button>{/if}<h2 id={`${id}-title`}>{title}</h2></span><PopupClose label={`Close ${title.toLowerCase()}`} disabled={busy} onclick={onclose} /></header>
     <div class="body">{@render children()}</div>
     {#if actions}<div class="dialog-actions">{@render actions()}</div>{/if}

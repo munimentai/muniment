@@ -51,6 +51,8 @@
     legacyOpen = next
   }
 
+  // Escape listens on the window's capture phase, so it reaches this menu
+  // before the shell's document keys, and the page under it stays.
   function keydown(event) {
     if (embedded || event.key !== 'Escape') return
     event.preventDefault()
@@ -117,7 +119,7 @@
   }
 </script>
 
-<svelte:window onkeydown={keydown} />
+<svelte:window onkeydowncapture={keydown} />
 
 <div bind:this={picker} data-panel="model-picker" data-panel-variant={embedded ? 'embedded' : 'overlay'} data-composer-panel={embedded ? undefined : ''} class="model-picker" class:embedded role={embedded ? 'group' : 'dialog'} aria-label="Model">
   <div class="picker-search">

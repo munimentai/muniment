@@ -203,3 +203,17 @@ it('draws open inside another panel with no popup frame, close control or visibi
   await fireEvent.click(screen.getByRole('button', { name: 'llama4' }))
   expect(onchoose).toHaveBeenCalledWith('ollama', 'llama4')
 })
+
+it('stops Escape at the picker, so the document keys of the page under it never see it', async () => {
+  const page = vi.fn()
+  document.addEventListener('keydown', page)
+  try {
+    const extra = props({ providers: [{ id: 'openai', name: 'OpenAI', source: 'key', models: [{ id: 'gpt-6.1-sol' }] }], hidden: [], shown: [] })
+    render(ModelPicker, extra)
+    await fireEvent.keyDown(screen.getByRole('searchbox', { name: 'Search models' }), { key: 'Escape' })
+    expect(extra.onclose).toHaveBeenCalledTimes(1)
+    expect(page).not.toHaveBeenCalled()
+  } finally {
+    document.removeEventListener('keydown', page)
+  }
+})

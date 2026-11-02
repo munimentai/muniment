@@ -19,6 +19,8 @@
     void tick().then(() => (items().find((item) => item.getAttribute('aria-checked') === 'true') ?? items()[0])?.focus())
   })
 
+  // Escape listens on the window's capture phase, so it reaches this menu
+  // before the shell's document keys, and the page under it stays.
   function windowKeydown(event) {
     if (event.key !== 'Escape') return
     event.preventDefault()
@@ -39,7 +41,7 @@
   }
 </script>
 
-<svelte:window onkeydown={windowKeydown} />
+<svelte:window onkeydowncapture={windowKeydown} />
 
 <div data-panel="mode-picker" data-panel-variant="overlay" data-composer-panel class="mode-picker" role="menu" tabindex="-1" aria-labelledby="mode-picker-heading" bind:this={menu} use:followPointer onkeydown={menuKeydown}>
   <h3 id="mode-picker-heading" class="heading">Modes</h3>

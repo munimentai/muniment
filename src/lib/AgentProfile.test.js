@@ -312,6 +312,25 @@ it('accepts or dismisses routines core proposed and edits a schedule', async () 
   expect(onchange).toHaveBeenCalled()
 })
 
+it('stops Escape at the routine editor, so the profile page under it stays', async () => {
+  // The shell's page keys listen on the document from its mount, after the
+  // window's own delegated handlers, and skip a key a handler took.
+  const page = vi.fn()
+  const shell = (event) => { if (!event.defaultPrevented) page() }
+  try {
+    const { invoke } = machine()
+    render(AgentProfile, { agent, tauri: { invoke }, catalog, onchange: vi.fn() })
+    document.addEventListener('keydown', shell)
+    await fireEvent.click(screen.getByRole('button', { name: 'Add routine' }))
+    const editor = await screen.findByRole('dialog', { name: 'New routine' })
+    await fireEvent.keyDown(within(editor).getByRole('textbox', { name: 'Name' }), { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'New routine' })).not.toBeInTheDocument())
+    expect(page).not.toHaveBeenCalled()
+  } finally {
+    document.removeEventListener('keydown', shell)
+  }
+})
+
 it('adds a tool check with its condition', async () => {
   const { invoke, requests } = machine()
   render(AgentProfile, { agent, tauri: { invoke }, catalog, onchange: vi.fn() })
