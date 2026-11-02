@@ -4,13 +4,14 @@
 // first, then the runtime, then the app, with the nightly's codesign arguments
 // from .github/build-macos-app.mjs, and the keychain is deleted on exit.
 // Nothing here stores the certificate, and no hand codesign follows.
-import { cpSync, openSync, readSync, closeSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, renameSync, writeFileSync } from "node:fs";
+import { cpSync, openSync, readSync, closeSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { nativeFiles } from "../.github/lib/macos-variants.mjs";
+import { swapInstalledApp } from "../.github/lib/macos-install-swap.mjs";
 import {
   codesignArguments,
   intermediateCertificateImportArguments,
@@ -198,14 +199,7 @@ if (!process.argv.includes("--build-only")) {
   const stagedApp = join(stage, "muniment.app");
   mustRun("stage app", "ditto", [app, stagedApp]);
   mustRun("verify staged signature", "codesign", ["--verify", "--deep", "--strict", stagedApp]);
-  const backup = mkdtempSync(join(tmpdir(), "muniment-app-backup-"));
-  const hadApp = existsSync(installed);
-  if (hadApp) renameSync(installed, join(backup, "muniment.app"));
-  try { renameSync(stagedApp, installed); }
-  catch (error) {
-    if (hadApp) renameSync(join(backup, "muniment.app"), installed);
-    throw error;
-  }
+  swapInstalledApp(stagedApp, installed);
   rmSync(stage, { recursive: true, force: true });
   mustRun("restart runtime", "pkill", ["-f", "LaunchServices/muniment-runtime"], { allowFailure: true });
   mustRun("verify installed signature", "codesign", ["--verify", "--deep", "--strict", installed]);
