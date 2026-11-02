@@ -7,6 +7,7 @@
   import PageHead from './ui/PageHead.svelte'
   import Group from './ui/Group.svelte'
   import Row from './ui/Row.svelte'
+  import Toggle from './Toggle.svelte'
   // Settings → Models, one screen: the Roles that route and assist at the top,
   // then every connection as a named account under its provider, key or
   // subscription, the provider's models once, and the connector that adds a
@@ -65,6 +66,9 @@
   let baseUrl = $state('')
   let endpointName = $state('')
   let endpointModels = $state('')
+  // Whether chats on the endpoint send tools. A server without tool calling
+  // refuses every request that carries them.
+  let endpointTools = $state(true)
   let pending = $state(false)
   let formError = $state('')
   let login = $state(null)
@@ -259,6 +263,18 @@
     const saved = inventory?.providers?.find((other) => other.id === entry.id) ?? entry
     editingStale = (saved.key_state ?? entry.key_state) === 'stale'
     endpointModels = (saved.models ?? []).map((model) => model.id).join('\n')
+    endpointTools = !(saved.tools_off ?? entry.tools_off)
+  }
+
+  // A URL pasted with its API route, such as .../v1/chat/completions, saves
+  // as the server's base URL, and the field shows the URL that saves.
+  const API_ROUTES = ['/chat/completions', '/completions', '/models', '/responses']
+  function endpointBase(url) {
+    const trimmed = url.trim().replace(/\/+$/, '')
+    const route = API_ROUTES.find((candidate) => trimmed.toLowerCase().endsWith(candidate))
+    if (!route) return url.trim()
+    const base = trimmed.slice(0, -route.length).replace(/\/+$/, '')
+    return /^[a-z][a-z0-9+.-]*:\/\/[^/]/i.test(base) ? base : url.trim()
   }
 
   function chooseProvider(id) {
@@ -270,6 +286,7 @@
     key = ''
     endpointName = ''
     endpointModels = ''
+    endpointTools = true
     baseUrl = catalogProvider(id)?.baseUrl ?? ''
     chooseMethod(catalogProvider(id)?.methods?.[0] ?? 'key')
   }
@@ -323,6 +340,7 @@
 
   async function saveOllama() {
     if (pending || !baseUrl.trim()) return
+    baseUrl = endpointBase(baseUrl)
     pending = true
     formError = ''
     try {
@@ -339,6 +357,7 @@
   async function saveEndpoint() {
     const models = endpointModels.split(/[\n,]/).map((model) => model.trim()).filter(Boolean)
     if (pending || !baseUrl.trim() || (providerId === 'custom' && !endpointName.trim())) return
+    baseUrl = endpointBase(baseUrl)
     pending = true
     formError = ''
     try {
@@ -348,6 +367,7 @@
         baseUrl,
         key,
         models,
+        toolsOff: !endpointTools,
       })
       key = ''
       await finishConnect(`Muniment saved the ${providerId === 'lmstudio' ? 'LM Studio' : endpointName.trim()} endpoint.`)
@@ -583,7 +603,7 @@
     {:else if method === 'ollama'}
       <p class="support">Point Muniment at a running Ollama server. It asks the server for every model it serves.</p>
       <Group label="Ollama server">
-      <div class="connection-field"><label for="provider-base-url">Ollama server URL</label><input id="provider-base-url" type="url" placeholder="http://localhost:11434/v1" autocomplete="url" spellcheck="false" autocorrect="off" autocapitalize="off" bind:value={baseUrl} disabled={pending}></div>
+      <div class="connection-field"><label for="provider-base-url">Ollama server URL</label><input id="provider-base-url" type="url" placeholder="http://localhost:11434/v1" autocomplete="url" spellcheck="false" autocorrect="off" autocapitalize="off" bind:value={baseUrl} onblur={() => { if (baseUrl.trim()) baseUrl = endpointBase(baseUrl) }} disabled={pending}></div>
       <div class="connection-field"><label for="ollama-key">API key (optional)</label><input id="ollama-key" type="password" autocomplete="off" placeholder={keptKeyHint('For a server behind a key')} bind:value={key} disabled={pending}></div>
       </Group>
       {#if formError}<p class="support" role="alert">{formError}</p>{/if}
@@ -594,9 +614,10 @@
       {#if provider.id === 'custom'}
         <div class="connection-field"><label for="endpoint-name">Name</label><input id="endpoint-name" type="text" spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" bind:value={endpointName} disabled={pending || !!editingEndpoint}></div>
       {/if}
-      <div class="connection-field"><label for="provider-base-url">Server URL</label><input id="provider-base-url" type="url" placeholder={provider.baseUrl ?? 'http://localhost:4000/v1'} autocomplete="url" spellcheck="false" autocorrect="off" autocapitalize="off" bind:value={baseUrl} disabled={pending}></div>
+      <div class="connection-field"><label for="provider-base-url">Server URL</label><input id="provider-base-url" type="url" placeholder={provider.baseUrl ?? 'http://localhost:4000/v1'} autocomplete="url" spellcheck="false" autocorrect="off" autocapitalize="off" bind:value={baseUrl} onblur={() => { if (baseUrl.trim()) baseUrl = endpointBase(baseUrl) }} disabled={pending}></div>
       <div class="connection-field"><label for="endpoint-key">API key (optional)</label><input id="endpoint-key" type="password" autocomplete="off" placeholder={keptKeyHint('')} bind:value={key} disabled={pending}></div>
       <div class="connection-field"><label for="endpoint-models">Models, one per line</label><textarea id="endpoint-models" rows="3" spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" bind:value={endpointModels} disabled={pending}></textarea><p class="support">Leave the list empty and Muniment asks the server for its models.</p></div>
+      <Row title="Send tools" description="Turn off for a server without tool calling. Chats then answer from text alone."><Toggle bind:checked={endpointTools} label="Send tools" disabled={pending} /></Row>
       </Group>
       {#if formError}<p class="support" role="alert">{formError}</p>{/if}
       <button type="button" data-variant="primary" disabled={pending || !baseUrl.trim() || (provider.id === 'custom' && !endpointName.trim())} onclick={saveEndpoint}>Save endpoint</button>

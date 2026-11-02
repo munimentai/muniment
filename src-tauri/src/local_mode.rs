@@ -279,6 +279,7 @@ pub(crate) async fn local_mode_store_endpoint(
     base_url: String,
     key: String,
     models: Vec<String>,
+    tools_off: Option<bool>,
 ) -> Result<String, String> {
     let provider = model_service::request(
         &app,
@@ -289,6 +290,7 @@ pub(crate) async fn local_mode_store_endpoint(
             ("base_url", json!(base_url)),
             ("key", json!(key)),
             ("models", json!(models)),
+            ("tools_off", json!(tools_off)),
         ]),
     )
     .await?;

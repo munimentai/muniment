@@ -334,3 +334,31 @@ it('saves an edited endpoint with its kept models and a model added to the list'
     models: ['Qwen3.8-27B-4bit', 'gemma-4-26b-a4b-it-4bit', 'qwen3-coder'],
   })))
 })
+
+it('saves a pasted chat completions URL as the server base URL and sends the endpoint tools setting', async () => {
+  const tauri = bridge()
+  const base = tauri.invoke.getMockImplementation()
+  tauri.invoke.mockImplementation(async (command, payload) => command === 'local_mode_store_endpoint' ? 'custom-omlx' : base(command, payload))
+  render(ModelsSection, { props: { tauri, listen: async () => () => {}, inventory } })
+  await fireEvent.click(within(screen.getByRole('region', { name: 'oMLX' })).getByRole('button', { name: 'Edit oMLX' }))
+  const url = screen.getByLabelText('Server URL')
+  await fireEvent.input(url, { target: { value: 'http://host:8000/v1/chat/completions' } })
+  await fireEvent.blur(url)
+  // The field shows the URL that saves.
+  expect(url).toHaveValue('http://host:8000/v1')
+  const tools = screen.getByRole('switch', { name: 'Send tools' })
+  expect(tools).toHaveAttribute('aria-checked', 'true')
+  await fireEvent.click(tools)
+  await fireEvent.click(screen.getByRole('button', { name: 'Save endpoint' }))
+  await waitFor(() => expect(tauri.invoke).toHaveBeenCalledWith('local_mode_store_endpoint', expect.objectContaining({
+    baseUrl: 'http://host:8000/v1', toolsOff: true,
+  })))
+})
+
+it('opens the Edit form of an endpoint whose tools are off with Send tools off', async () => {
+  const tauri = bridge()
+  const off = { ...inventory, providers: inventory.providers.map((provider) => provider.id === 'custom-omlx' ? { ...provider, tools_off: true } : provider) }
+  render(ModelsSection, { props: { tauri, listen: async () => () => {}, inventory: off } })
+  await fireEvent.click(within(screen.getByRole('region', { name: 'oMLX' })).getByRole('button', { name: 'Edit oMLX' }))
+  expect(screen.getByRole('switch', { name: 'Send tools' })).toHaveAttribute('aria-checked', 'false')
+})

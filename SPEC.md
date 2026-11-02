@@ -194,7 +194,7 @@ with its number, and a sign-in the browser never finishes fails after fifteen mi
 connect adopts the provider's largest-context model that answers a probe as
 the default, and an account sign-in brings the app to the front. A local server is a
 first-class provider beside the hosted ones, never a fallback. The custom
-endpoint form takes a name, a base URL, an optional key and a model list. The
+endpoint form takes a name, a base URL, which drops a pasted API route such as `/chat/completions`, an optional key, a model list and Send tools. A model list that answers 401 or 403 says the server refused the key. Pi's `models.json` has no setting that keeps tools out of a request, so with Send tools off Pi starts with no tools, and a model whose window is under 64k tokens starts with a compact prompt and the file, shell, question and memory tools. A server that refuses tool calls fails the send with a sentence that names both fixes. The
 chip's picker sets the open thread's model, and its foot names the layer and offers the project model, Make project default and Make default, which alone sets Pi's `defaultProvider` and `defaultModel`.
 
 **Routing leads Settings → Models → Roles.** Pi's `auth.json` holds one credential per
