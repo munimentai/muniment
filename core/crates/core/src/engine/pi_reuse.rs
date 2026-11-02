@@ -163,12 +163,18 @@ pub struct PiReuse {
     place: Option<Place>,
     transport: Arc<PiRpcTransport>,
     parked: Instant,
+    read: bool,
 }
 
 impl PiReuse {
     /// When the process went idle.
     pub fn parked_at(&self) -> Instant {
         self.parked
+    }
+
+    /// Whether a read started the process and no reply has run in it yet.
+    pub fn read_only(&self) -> bool {
+        self.read
     }
 }
 
@@ -213,7 +219,13 @@ impl super::PiRpcEngine {
     /// ended cleanly. A process that stopped, or whose start files changed
     /// while it ran, stays unmarked, so the next reply starts a new one.
     pub fn park(&self, process: &mut PiRuntime, launch: PiLaunch) {
-        park(process, launch);
+        park(process, launch, false);
+    }
+
+    /// Marks a process a read started idle for its thread's next reply,
+    /// when it started from the launch that reply starts.
+    pub fn park_read(&self, process: &mut PiRuntime, launch: PiLaunch) {
+        park(process, launch, true);
     }
 
     /// Hands an idle process the next reply in its thread when it can take
@@ -233,7 +245,7 @@ impl super::PiRpcEngine {
     }
 }
 
-fn park(process: &mut PiRuntime, launch: PiLaunch) {
+fn park(process: &mut PiRuntime, launch: PiLaunch, read: bool) {
     process.reuse = None;
     if process.supervisor.status() != SidecarStatus::Healthy {
         return;
@@ -249,6 +261,7 @@ fn park(process: &mut PiRuntime, launch: PiLaunch) {
         place: launch.place,
         transport,
         parked: Instant::now(),
+        read,
     });
 }
 

@@ -520,45 +520,31 @@ fn thread_without_process(harness: &mut Harness) -> String {
 }
 
 #[test]
-fn a_context_read_leaves_its_process_marked_for_the_next_reply() {
+fn opening_a_thread_starts_the_process_its_next_reply_takes() {
     let _environment = ENVIRONMENT
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut harness = Harness::new("pi-reuse-context");
     let thread = thread_without_process(&mut harness);
 
-    // The thread's memory extension exists while the read starts, so the
-    // read's launch is the one the thread's next reply starts with.
-    let memory = muniment_core::memory_runtime::ApplicationMemoryRuntime::new(
-        harness.temporary.config.clone(),
-        harness.temporary.profile.join("memory"),
-    );
-    memory
-        .open_session(
-            "context-read",
-            &thread,
-            muniment_core::memory_index::ModelMemoryCapability {
-                minimum_cacheable_prefix_characters: local_grant()
-                    .minimum_cacheable_prefix_characters,
-            },
-        )
-        .unwrap();
+    // Opening the thread reads its context in a new process, which waits
+    // marked in the thread's slot, never unmarked.
     harness.read_context(&thread);
-    memory.close_session("context-read");
-
-    // The read's process waits marked in the thread's slot, never unmarked.
     assert_eq!(harness.spawns().len(), 2, "{:?}", harness.spawns());
     let read = harness.spawns().last().unwrap().clone();
     assert!(alive(&read));
     assert_eq!(harness.processes.len(), 1);
     assert_eq!(harness.processes.parked(), 1);
 
-    // The next read and the next reply take that process.
+    // The read started the launch the reply starts, so the next read and
+    // the first reply take that process.
     harness.read_context(&thread);
     assert_eq!(harness.spawns().len(), 2);
-    assert_eq!(harness.reply(Some(&thread), "second").phase, "complete");
+    let reply = harness.reply(Some(&thread), "second");
+    assert_eq!(reply.phase, "complete");
     assert_eq!(harness.prompt_process("second"), read);
     assert_eq!(harness.spawns().len(), 2);
+    assert!(reply.accepted_after < Duration::from_millis(START_DELAY_MS));
     assert_eq!(harness.processes.parked(), 1);
 }
 
@@ -570,16 +556,57 @@ fn a_reply_replaces_a_context_reads_process_whose_launch_differs() {
     let mut harness = Harness::new("pi-reuse-context-replace");
     let thread = thread_without_process(&mut harness);
 
-    // With no memory extension at the read, the read's launch differs from
-    // the reply's. The reply stops the read's process and starts its own.
+    // A file Pi reads at start changes after the read, so the reply stops
+    // the read's process and starts its own.
     harness.read_context(&thread);
     let read = harness.spawns().last().unwrap().clone();
     assert_eq!(harness.processes.parked(), 1);
-    assert_eq!(harness.reply(Some(&thread), "second").phase, "complete");
+    // The agent directory outlives this harness, so the file goes again.
+    let rules = harness.agent_directory().join("AGENTS.md");
+    std::fs::create_dir_all(harness.agent_directory()).unwrap();
+    std::fs::write(&rules, "Answer in one line.").unwrap();
+    let reply = harness.reply(Some(&thread), "second");
+    std::fs::remove_file(&rules).unwrap();
+    assert_eq!(reply.phase, "complete");
     assert_ne!(harness.prompt_process("second"), read);
     assert!(ends(&read), "the replaced process still runs");
     assert_eq!(harness.spawns().len(), 3);
     assert_eq!(harness.processes.parked(), 1);
+}
+
+#[test]
+fn past_the_parked_limit_a_read_only_process_stops_before_a_replys() {
+    let _environment = ENVIRONMENT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let processes = PiProcesses::with_reaper(8, Duration::from_secs(600), 2);
+    let mut harness = Harness::with_processes("pi-reuse-context-limit", processes);
+    let opened = thread_without_process(&mut harness);
+
+    // A reply leaves the oldest process, a read the next one, and another
+    // reply the newest. The read's process stops, though it is not the oldest.
+    assert_eq!(harness.reply(None, "oldest").phase, "complete");
+    harness.read_context(&opened);
+    let read = harness.spawns().last().unwrap().clone();
+    assert_eq!(harness.processes.parked(), 2);
+    assert_eq!(harness.reply(None, "newest").phase, "complete");
+    assert!(ends(&read), "the read-only process still runs");
+    assert!(alive(&harness.prompt_process("oldest")));
+    assert!(alive(&harness.prompt_process("newest")));
+    assert_eq!(harness.processes.parked(), 2);
+
+    // A read's process a reply took counts once, as that reply's process.
+    harness.read_context(&opened);
+    let taken = harness.spawns().last().unwrap().clone();
+    assert_eq!(
+        harness.reply(Some(&opened), "opened again").phase,
+        "complete"
+    );
+    assert_eq!(harness.prompt_process("opened again"), taken);
+    assert!(ends(&harness.prompt_process("oldest")));
+    assert!(alive(&harness.prompt_process("newest")));
+    assert!(alive(&taken));
+    assert_eq!(harness.processes.parked(), 2);
 }
 
 #[test]

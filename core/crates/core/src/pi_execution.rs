@@ -378,8 +378,8 @@ pub fn log_replaced(run_id: &str) {
     );
 }
 
-/// Stops each marked idle process whose window ended, then the oldest ones
-/// past the parked limit, and sleeps until the next window ends or a run
+/// Stops each marked idle process whose window ended, then the ones past
+/// the parked limit, read-only ones first, and sleeps until the next window ends or a run
 /// frees its slot.
 fn reap(slots: std::sync::Weak<Slots>) {
     loop {
@@ -414,18 +414,27 @@ fn sweep(slots: &Slots, now: Instant) -> Option<Instant> {
             stop_idle(&thread, process, IdleStop::Idle);
             continue;
         }
-        if let Some(at) = slot.try_lock().ok().and_then(|process| parked_at(&process)) {
-            parked.push((at, thread, slot));
+        if let Some((at, read)) = slot.try_lock().ok().and_then(|process| {
+            let reuse = process.as_ref()?.reuse.as_ref()?;
+            Some((reuse.parked_at(), reuse.read_only()))
+        }) {
+            parked.push((at, read, thread, slot));
         }
     }
-    parked.sort_by_key(|(at, _, _)| *at);
-    let excess = parked.len().saturating_sub(slots.parked);
-    for (at, thread, slot) in parked.drain(..excess) {
+    let next = parked.iter().map(|(at, ..)| *at + slots.window).min();
+    // The newest process stays: its thread is the one in use. Of the
+    // others, a process only a read used stops before one a reply left,
+    // and the oldest of each first.
+    parked.sort_by_key(|(at, ..)| *at);
+    let newest = parked.pop();
+    parked.sort_by_key(|(at, read, ..)| (!*read, *at));
+    let excess = (parked.len() + usize::from(newest.is_some())).saturating_sub(slots.parked);
+    for (at, _, thread, slot) in parked.drain(..excess) {
         if let Some(process) = take_if(&slot, &|current| current != at) {
             stop_idle(&thread, process, IdleStop::Limit);
         }
     }
-    parked.iter().map(|(at, _, _)| *at + slots.window).min()
+    next
 }
 
 /// Opens a thread's saved conversation for a read, such as its context
@@ -520,10 +529,13 @@ pub fn thread_context_usage(
             if let Some(process) = slot.take() {
                 stop_idle(thread_id, process, IdleStop::Replaced);
             }
-            let (mut process, transport, launch) =
-                open_thread_conversation(app, &grant()?, &locator)?;
+            // The read starts the launch the thread's next reply starts, so
+            // that reply takes this process.
+            let grant = grant()?;
+            app.prepare_thread_launch(&grant);
+            let (mut process, transport, launch) = open_thread_conversation(app, &grant, &locator)?;
             let usage = engine.context_usage(&transport).map(Some);
-            engine.park(&mut process, launch);
+            engine.park_read(&mut process, launch);
             if process.reuse.is_some() {
                 *slot = Some(process);
             } else {

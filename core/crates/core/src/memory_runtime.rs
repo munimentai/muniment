@@ -124,6 +124,31 @@ impl ApplicationMemoryRuntime {
         thread: &str,
         capability: ModelMemoryCapability,
     ) -> Result<(), MemoryIndexError> {
+        self.open_session_with(session, thread, capability, true)
+    }
+
+    /// Writes the tool extension the thread's next run loads, as that run
+    /// writes it, with no session kept and no index built. A process that
+    /// starts with it is the launch that run starts. The run replaces the
+    /// file and removes it when it ends.
+    pub fn write_thread_extension(
+        &self,
+        thread: &str,
+        capability: ModelMemoryCapability,
+    ) -> Result<(), MemoryIndexError> {
+        let session = format!("thread-extension-{}", Uuid::now_v7());
+        let written = self.open_session_with(&session, thread, capability, false);
+        self.forget_session(&session);
+        written
+    }
+
+    fn open_session_with(
+        &self,
+        session: &str,
+        thread: &str,
+        capability: ModelMemoryCapability,
+        build: bool,
+    ) -> Result<(), MemoryIndexError> {
         let home_error = |error: muniment_core::home::HomeError| {
             use std::error::Error;
             let message = match error.source() {
@@ -147,7 +172,10 @@ impl ApplicationMemoryRuntime {
         } else {
             private.join("memory-index.sqlite3")
         };
-        self.open_session_for_home(session, thread, capability, &recall_home, database);
+        self.insert_session(session, thread, capability, &recall_home, database);
+        if build {
+            self.build_session_in_background(session);
+        }
         self.contexts
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -157,7 +185,11 @@ impl ApplicationMemoryRuntime {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(session.into(), recall);
         if let Err(error) = self.write_agent_extension(session) {
-            self.close_session(session);
+            if build {
+                self.close_session(session);
+            } else {
+                self.forget_session(session);
+            }
             return Err(error);
         }
         Ok(())
@@ -685,6 +717,19 @@ impl ApplicationMemoryRuntime {
     }
 
     pub fn close_session(&self, session: &str) {
+        // Pi read the thread's extension when its run started, so the file
+        // goes once no open session of that thread needs it. The `.js` twin
+        // is the name older versions wrote.
+        if let Some(thread) = self.forget_session(session) {
+            let path = self.agent_extension_path(&thread);
+            let _ = std::fs::remove_file(path.with_extension("js"));
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    /// Forgets a session and answers its thread when no other open session
+    /// of that thread remains.
+    fn forget_session(&self, session: &str) -> Option<String> {
         self.saved
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -711,14 +756,7 @@ impl ApplicationMemoryRuntime {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(session);
-        // Pi read the thread's extension when its run started, so the file
-        // goes once no open session of that thread needs it. The `.js` twin
-        // is the name older versions wrote.
-        if let Some(thread) = ended {
-            let path = self.agent_extension_path(&thread);
-            let _ = std::fs::remove_file(path.with_extension("js"));
-            let _ = std::fs::remove_file(path);
-        }
+        ended
     }
 
     /// The recall settings read when the session opened.
@@ -1521,6 +1559,26 @@ mod tests {
             "The memory search extension must parse as an ES module: {}",
             String::from_utf8_lossy(&output.stderr)
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_thread_extension_is_the_runs_and_keeps_no_session() {
+        let (root, runtime) = recall_runtime(None);
+        runtime
+            .write_thread_extension("thread-a", capability())
+            .unwrap();
+        let path = runtime.agent_extension_path("thread-a");
+        let written = fs::read(&path).unwrap();
+        assert!(runtime.sessions.lock().unwrap().is_empty());
+        assert!(runtime.contexts.lock().unwrap().is_empty());
+        // The run writes the same file, and its end removes it.
+        runtime
+            .open_session("run", "thread-a", capability())
+            .unwrap();
+        assert_eq!(fs::read(&path).unwrap(), written);
+        runtime.close_session("run");
+        assert!(!path.exists());
         fs::remove_dir_all(root).unwrap();
     }
 
