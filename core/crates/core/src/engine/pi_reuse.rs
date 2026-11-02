@@ -7,8 +7,9 @@
 //! launch, the files Pi read are unchanged, the process still answers, holds
 //! the thread's saved conversation and runs no turn. A thread folder renamed
 //! after its title keeps its process: the process reopens the conversation in
-//! the renamed folder, so its tools work there. Anything else starts a new
-//! process.
+//! the renamed folder, so its tools work there. A process that reads a key
+//! through a command starts anew instead, because Pi runs the command in the
+//! folder's old path. Anything else starts a new process.
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -152,9 +153,40 @@ impl Place {
         (folder != self.folder
             && gone
             && folder_id(folder) == Some(self.id)
-            && config_hash(config, Some(folder)) == self.unplaced)
-            .then_some(folder)
+            && config_hash(config, Some(folder)) == self.unplaced
+            && !runs_commands(config))
+        .then_some(folder)
     }
+}
+
+/// The files in Pi's agent folder that may hold a value Pi reads by running
+/// a command, such as an endpoint key `!"<runtime>" secret get <provider>`.
+const COMMAND_FILES: [&str; 2] = ["models.json", "auth.json"];
+
+/// Whether Pi reads a value of its start files by running a command. Pi
+/// starts such a command in the folder path it started in, and a process
+/// whose folder took a new name finds no folder there, so the command fails
+/// before it runs. Such a process never follows a renamed folder.
+fn runs_commands(config: &SidecarConfig) -> bool {
+    fn command(value: &Value) -> bool {
+        match value {
+            Value::String(text) => text.starts_with('!'),
+            Value::Array(values) => values.iter().any(command),
+            Value::Object(entries) => entries.values().any(command),
+            _ => false,
+        }
+    }
+    let Some(agent) = config.env.get("PI_CODING_AGENT_DIR").map(Path::new) else {
+        return false;
+    };
+    COMMAND_FILES
+        .iter()
+        .any(|name| match std::fs::read(agent.join(name)) {
+            Ok(bytes) => {
+                serde_json::from_slice::<Value>(&bytes).map_or(true, |root| command(&root))
+            }
+            Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+        })
 }
 
 /// The mark an idle process carries while its thread's next reply may take it.
@@ -725,6 +757,23 @@ mod tests {
         let mut model = renamed.clone();
         model.args.extend(["--model".into(), "b".into()]);
         assert!(place.renamed(&model).is_none());
+        // Pi starts a key command in the folder's old path, which is gone,
+        // so a process whose keys come from a command starts anew.
+        std::fs::write(
+            root.join("agent/models.json"),
+            r#"{"providers":{"custom-live29":{"apiKey":"!\"/opt/muniment-runtime\" secret get custom-live29"}}}"#,
+        )
+        .unwrap();
+        assert!(place.renamed(&renamed).is_none());
+        std::fs::write(
+            root.join("agent/models.json"),
+            r#"{"providers":{"custom-live29":{"apiKey":"local"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(place.renamed(&renamed), Some(named.as_path()));
+        std::fs::write(root.join("agent/auth.json"), r#"{"x":{"key":"!op read"}}"#).unwrap();
+        assert!(place.renamed(&renamed).is_none());
+        std::fs::remove_file(root.join("agent/auth.json")).unwrap();
         // A new folder under the new name is not the folder the process works in.
         std::fs::rename(&named, root.join("elsewhere")).unwrap();
         std::fs::create_dir_all(&named).unwrap();

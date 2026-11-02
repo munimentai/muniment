@@ -338,6 +338,45 @@ fn a_threads_next_reply_takes_its_idle_process_until_its_launch_changes() {
 }
 
 #[test]
+fn a_process_that_reads_a_key_through_a_command_never_follows_a_renamed_folder() {
+    let _environment = ENVIRONMENT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut harness = Harness::new("pi-reuse-key-command");
+    // Pi runs an endpoint's key command in the folder path it started in,
+    // which the rename takes away, so the command fails before it runs.
+    std::fs::create_dir_all(harness.agent_directory()).unwrap();
+    std::fs::write(
+        harness.agent_directory().join("models.json"),
+        r#"{"providers":{"custom-live29":{"baseUrl":"http://127.0.0.1:9/v1","apiKey":"!\"/opt/muniment-runtime\" secret get custom-live29","models":[{"id":"m"}]}}}"#,
+    )
+    .unwrap();
+    let first = harness.reply(None, "first");
+    assert_eq!(first.phase, "complete");
+    let renamed = harness.reply(Some(&first.thread), "second");
+    assert_eq!(renamed.phase, "complete", "{:?}", renamed.failure);
+    assert_ne!(
+        harness.prompt_process("second"),
+        harness.prompt_process("first")
+    );
+    assert_eq!(harness.spawns().len(), 2, "{:?}", harness.spawns());
+    assert_ne!(
+        harness.prompt_folder("first"),
+        harness.prompt_folder("second")
+    );
+    // The new process in the renamed folder takes the next reply.
+    assert_eq!(
+        harness.reply(Some(&first.thread), "third").phase,
+        "complete"
+    );
+    assert_eq!(
+        harness.prompt_process("third"),
+        harness.prompt_process("second")
+    );
+    std::fs::remove_file(harness.agent_directory().join("models.json")).unwrap();
+}
+
+#[test]
 fn a_stopped_reply_leaves_no_process_and_threads_never_share_one() {
     let _environment = ENVIRONMENT
         .lock()
