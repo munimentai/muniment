@@ -8438,6 +8438,26 @@ it('does not offer another-model retry in a completed reply', async () => {
     expect(invoke).toHaveBeenCalledWith('chat_submit', { prompt: 'Live27 key test five', files: [] })
   })
 
+  it('ends the retry review for good once the composer text no longer matches the failed prompt', async () => {
+    signedIn([{ runId: 'run-failed', phase: 'failed', text: '', prompt: 'Live27 key test four', failureReason: 'No reply arrived within 30 seconds.', toolActivity: [{ effectId: 'tool-1', displayName: 'read', status: 'done' }] }], { runId: 'retry-run', attachments: [] })
+    const error = await screen.findByText('No reply arrived within 30 seconds.')
+    await fireEvent.click(within(error).getByRole('button', { name: 'Try again' }))
+    const composer = screen.getByPlaceholderText('Ask anything')
+    expect(screen.getByRole('region', { name: 'Review retry' })).toHaveTextContent('Sending may run tools again.')
+    // Trailing space is still the same message.
+    await fireEvent.input(composer, { target: { value: 'Live27 key test four ' } })
+    expect(screen.getByRole('region', { name: 'Review retry' })).toBeInTheDocument()
+    await fireEvent.input(composer, { target: { value: 'Live27 key test five' } })
+    expect(screen.queryByRole('region', { name: 'Review retry' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Sending may run tools again.')).not.toBeInTheDocument()
+    // Typing the failed prompt again does not bring the review back.
+    await fireEvent.input(composer, { target: { value: 'Live27 key test four' } })
+    expect(screen.queryByRole('region', { name: 'Review retry' })).not.toBeInTheDocument()
+    await fireEvent.input(composer, { target: { value: 'Live27 key test five' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    expect(invoke).toHaveBeenCalledWith('chat_submit', { prompt: 'Live27 key test five', files: [] })
+  })
+
   it('keeps retry disabled when the failed run has no saved prompt', async () => {
     signedIn([{ runId: 'missing-prompt', phase: 'failed', text: '', failureReason: 'The provider refused access.' }])
     const error = await screen.findByText('The provider refused access.')

@@ -1093,7 +1093,7 @@
     draft = run.prompt
     // The tools warning shows only when the failed turn ran a tool.
     const ranTools = !!run.toolActivity?.length || (run.receipt?.tools ?? []).some((tool) => Number(tool?.calls) > 0)
-    retryReview = { threadId: currentThreadId, chooseModel, ranTools, previousProvider: chipModel?.provider, previousModel: chipModel?.model }
+    retryReview = { threadId: currentThreadId, prompt: run.prompt, chooseModel, ranTools, previousProvider: chipModel?.provider, previousModel: chipModel?.model }
     if (chooseModel) openComposerPanel('model')
     // The restored text is selected, so typing replaces it and never joins it.
     void tick().then(() => { composer?.focus(); composer?.select() })
@@ -1101,6 +1101,10 @@
 
   $effect(() => {
     if (retryReview && retryReview.threadId !== currentThreadId) retryReview = null
+  })
+  // Text that no longer matches the failed prompt is a new message, so the retry ends for good.
+  $effect(() => {
+    if (retryReview && draft.trim() !== retryReview.prompt.trim()) retryReview = null
   })
 
   function openModelSettings() {
