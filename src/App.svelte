@@ -1351,7 +1351,9 @@
     try {
       const answer = await agentRequest(tauri, runtime, 'thread.permission_mode', { thread_id: threadId })
       if (request === modeRequest) threadMode = answer
-    } catch (_) { if (request === modeRequest) threadMode = null }
+    // A read that fails, such as one a busy runtime refuses as a reply
+    // starts or ends, keeps the mode the thread last answered.
+    } catch (_) { if (request === modeRequest && threadMode?.thread_id !== threadId) threadMode = null }
   }
   // A plan approval switches the thread's mode during a reply, so the mode is read again when a reply starts or ends.
   $effect(() => { void composerThreadId; void modeListing; void replyRunning; void refreshThreadMode() })

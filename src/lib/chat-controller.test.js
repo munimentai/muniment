@@ -36,6 +36,8 @@ function setup(invoke = vi.fn(), { threadId = null, summaries = [], projectId = 
   const onFollow = vi.fn()
   const onSignInLink = vi.fn()
   const onSubmission = vi.fn()
+  const onCancelError = vi.fn()
+  const onQueueError = vi.fn()
   const controller = createChatController({
     invoke,
     listen: vi.fn(async (_, callback) => {
@@ -61,8 +63,8 @@ function setup(invoke = vi.fn(), { threadId = null, summaries = [], projectId = 
     onDraft: (next) => { draft = next },
     onFiles: (next) => { files = next },
     onSubmitError: (error) => { if (error) errors.push(error) },
-    onCancelError: vi.fn(),
-    onQueueError: vi.fn(),
+    onCancelError,
+    onQueueError,
     onHistoryError,
     onThreadSummaries,
     onMoreThreads,
@@ -95,6 +97,8 @@ function setup(invoke = vi.fn(), { threadId = null, summaries = [], projectId = 
     onFollow,
     onSignInLink,
     onSubmission,
+    onCancelError,
+    onQueueError,
     summaries: () => threadSummaries,
     setActive: (next) => { active = next },
     setDraft: (next) => { draft = next },
@@ -3741,6 +3745,71 @@ describe('background runs', () => {
     await queueing
 
     expect(context.messages().map((message) => message.text ?? message.run.text)).toEqual(['Earlier question', 'Earlier answer'])
+  })
+
+  it('tries Stop and a steer again while the runtime is busy with another request', async () => {
+    const context = await startRunning()
+    vi.useFakeTimers()
+    try {
+      const busy = { cancel: 1, queue: 1 }
+      context.invoke.mockImplementation((command) => {
+        const kind = command === 'chat_cancel' ? 'cancel' : command === 'chat_queue' ? 'queue' : null
+        if (kind && busy[kind]-- > 0) return Promise.reject('Muniment is busy with another request. Try again.')
+        return Promise.resolve({ entries: [], nextCursor: null })
+      })
+      const stopping = context.controller.cancel()
+      await vi.advanceTimersByTimeAsync(300)
+      await stopping
+      expect(context.invoke.mock.calls.filter(([command]) => command === 'chat_cancel')).toEqual([['chat_cancel', { runId: 'run-1' }], ['chat_cancel', { runId: 'run-1' }]])
+      expect(context.onCancelError.mock.calls.filter(([error]) => error)).toEqual([])
+
+      context.setDraft('Then summarize it')
+      const steering = context.controller.queue('steer')
+      await vi.advanceTimersByTimeAsync(300)
+      await steering
+      expect(context.invoke.mock.calls.filter(([command]) => command === 'chat_queue')).toHaveLength(2)
+      expect(context.draft()).toBe('')
+      expect(context.onQueueError.mock.calls.filter(([error]) => error)).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('sends a message as the next turn when the reply ends before the runtime takes it', async () => {
+    const context = await startRunning()
+    const queued = deferred()
+    context.invoke.mockImplementation((command, payload) => {
+      if (command === 'chat_queue') return queued.promise
+      if (command === 'chat_submit') return Promise.resolve({ runId: 'run-2' })
+      if (command === 'chat_current_thread') return Promise.resolve(null)
+      return Promise.resolve({ entries: context.threads[payload?.threadId] ?? [], nextCursor: null, summaries: [] })
+    })
+    context.setDraft('Then summarize it')
+
+    const queueing = context.controller.queue('steer')
+    context.event({ runId: 'run-1', threadId: 'thread-1', type: 'completed', receipt: {} })
+    await vi.waitFor(() => expect(context.active()).toBeNull())
+    queued.reject('The reply has ended.')
+    await queueing
+
+    expect(context.invoke).toHaveBeenCalledWith('chat_submit', expect.objectContaining({ prompt: 'Then summarize it' }))
+    expect(context.draft()).toBe('')
+    expect(context.onQueueError.mock.calls.filter(([error]) => error)).toEqual([])
+    expect(context.messages().filter((message) => message.role === 'user').map((message) => message.text)).toContain('Then summarize it')
+  })
+
+  it('shows no Stop failure for a reply that ended before the runtime answered', async () => {
+    const context = await startRunning()
+    const stopped = deferred()
+    context.invoke.mockImplementation((command, payload) => command === 'chat_cancel' ? stopped.promise : Promise.resolve(command === 'chat_current_thread' ? null : { entries: context.threads[payload?.threadId] ?? [], nextCursor: null, summaries: [] }))
+
+    const stopping = context.controller.cancel()
+    context.event({ runId: 'run-1', threadId: 'thread-1', type: 'completed', receipt: {} })
+    await vi.waitFor(() => expect(context.active()).toBeNull())
+    stopped.reject('The reply has ended.')
+    await stopping
+
+    expect(context.onCancelError.mock.calls.filter(([error]) => error)).toEqual([])
   })
 
   it('takes back a turn the runtime refuses while another reply runs, and keeps the draft', async () => {

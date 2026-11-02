@@ -770,12 +770,13 @@ export function createChatController({
     }
   }
 
-  // A busy runtime answers a select in a moment, so a select tries again a
-  // few times before it reports the refusal.
-  async function selectThread(target) {
+  // A busy runtime answers in a moment, so a select, a Stop and a message to
+  // a running reply try again a few times before they report the refusal.
+  const selectThread = (target) => whenNotBusy('chat_select_thread', target)
+  async function whenNotBusy(command, payload) {
     for (let attempt = 0; ; attempt += 1) {
       try {
-        return await invoke('chat_select_thread', target)
+        return await invoke(command, payload)
       } catch (error) {
         const cause = typeof error === 'string' ? error : error?.message
         if (destroyed || attempt >= selectRetryDelays.length || !String(cause ?? '').startsWith(desktopBusyStart)) throw error
@@ -1197,9 +1198,10 @@ export function createChatController({
     if (!run) return
     onCancelError('')
     try {
-      await invoke('chat_cancel', { runId: run.id })
+      await whenNotBusy('chat_cancel', { runId: run.id })
     } catch (_) {
-      if (!destroyed) onCancelError('Could not stop this reply. Try again.')
+      // A reply that ended meanwhile needs no Stop.
+      if (!destroyed && active()?.id === run.id) onCancelError('Could not stop this reply. Try again.')
     }
   }
 
@@ -1239,7 +1241,7 @@ export function createChatController({
     onQueueError('')
     const threadId = readThreadId()
     try {
-      await invoke('chat_queue', { runId: run.id, delivery, message })
+      await whenNotBusy('chat_queue', { runId: run.id, delivery, message })
       if (destroyed) return
       // The runtime took the message into the running reply, so it shows
       // inside that reply where its text stood, never after it as a turn
@@ -1256,7 +1258,11 @@ export function createChatController({
       onFollow()
       if (readDraft().trim() === message) onDraft('')
     } catch (error) {
-      if (!destroyed) onQueueError(typeof error === 'string' ? error : String(error))
+      if (destroyed) return
+      // The reply ended before the runtime took the message, so the message
+      // goes as the next turn instead of staying in the composer.
+      if (!active() && readThreadId() === threadId && readDraft().trim() === message) return send()
+      onQueueError(typeof error === 'string' ? error : String(error))
     }
   }
 

@@ -11460,6 +11460,23 @@ describe('permission modes', () => {
     expect(invoke).not.toHaveBeenCalledWith('agent_request', expect.objectContaining({ operation: 'thread.permission_mode_set' }))
   })
 
+  it('keeps the thread mode chip when its read again as a reply starts fails', async () => {
+    modesRuntime({ mode: 'plan' })
+    await screen.findByRole('button', { name: 'Permission mode: Plan first' })
+    const withMode = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, payload) => {
+      if (command === 'agent_request' && payload.operation === 'thread.permission_mode') throw 'Muniment is busy with another request. Try again.'
+      return withMode(command, payload)
+    })
+    const composer = await findReadyWorkspaceComposer()
+    await fireEvent.input(composer, { target: { value: 'Clean the exports.' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_submit', expect.objectContaining({ prompt: 'Clean the exports.' })))
+    await waitFor(() => expect(invoke.mock.calls.filter(([command, payload]) => command === 'agent_request' && payload.operation === 'thread.permission_mode').length).toBeGreaterThan(1))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(screen.getByRole('button', { name: 'Permission mode: Plan first' })).toBeInTheDocument()
+  })
+
   it('cycles the available modes with Shift+Tab in the composer and skips bypass while it is off', async () => {
     modesRuntime({ mode: 'dont_ask', listing: bypassOff })
     await fireEvent.click(await screen.findByRole('button', { name: "Permission mode: Don't ask" }))
