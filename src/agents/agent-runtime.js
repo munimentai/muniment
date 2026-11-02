@@ -8,6 +8,31 @@ export function agentRequest(tauri, runtime, operation, body = {}) {
   return tauri.invoke('agent_request', { runtime: runtime || LOCAL_RUNTIME_ID, operation, body })
 }
 
+// The lines a runtime answers while it starts, is busy or is slow. A read
+// that gets one asks again.
+export const UNREACHABLE_LINE = 'Muniment cannot reach its background service.'
+const TRANSIENT_LINES = [UNREACHABLE_LINE, 'Muniment is busy with another request.', 'The background service did not answer in time.']
+export function transientAgentError(error) {
+  const text = String(error?.message ?? error ?? '')
+  return TRANSIENT_LINES.some((line) => text.startsWith(line))
+}
+
+// How long a read waits before each new ask after a transient answer.
+export const READ_RETRY_DELAYS = [250, 500, 1000, 2000, 4000]
+
+// One read-only agent operation that asks again after a transient answer.
+// Only reads retry, so a busy answer never repeats a change.
+export async function agentRead(tauri, runtime, operation, body = {}, delays = READ_RETRY_DELAYS) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await agentRequest(tauri, runtime, operation, body)
+    } catch (error) {
+      if (attempt >= delays.length || !transientAgentError(error)) throw error
+      await new Promise((resolve) => setTimeout(resolve, delays[attempt]))
+    }
+  }
+}
+
 // One change to an agent through core's `agent.save` on its machine. It reads
 // the agent first, so edits made elsewhere stay, and a null schedule leaves
 // the routines as they are. Core validates the change and refuses with its reason.

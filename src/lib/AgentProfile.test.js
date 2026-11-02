@@ -634,3 +634,38 @@ it('cancels the delete confirmation with Escape and returns focus to Delete agen
     expect(onclose).not.toHaveBeenCalled()
   } finally { window.removeEventListener('keydown', outer) }
 })
+
+it('asks a busy runtime again and shows the History and Permissions it answers', async () => {
+  const { invoke: answer } = machine()
+  const busy = { 'agent.replays': 2, 'permission.modes': 2 }
+  const invoke = vi.fn(async (command, args) => {
+    if (command === 'agent_request' && busy[args.operation] > 0) {
+      busy[args.operation] -= 1
+      throw new Error('Muniment is busy with another request. Try again.')
+    }
+    return answer(command, args)
+  })
+  render(AgentProfile, { agent, tauri: { invoke }, onclose: vi.fn() })
+  const permissions = screen.getByRole('region', { name: 'Permissions' })
+  await waitFor(() => expect(within(permissions).getByRole('button', { name: 'Permissions: Ask before changes' })).toBeInTheDocument(), { timeout: 3000 })
+  expect(screen.queryByText(/Update .* to choose/)).not.toBeInTheDocument()
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  expect(invoke.mock.calls.filter(([, args]) => args?.operation === 'agent.replays')).toHaveLength(3)
+})
+
+it('never shows the unreachable line while the runtime is connected, and reads again when it returns', async () => {
+  const { invoke: answer } = machine()
+  let up = false
+  const invoke = vi.fn(async (command, args) => {
+    if (command === 'agent_request' && !up && ['agent.replays', 'permission.modes'].includes(args.operation)) throw new Error('Muniment cannot reach its background service.')
+    return answer(command, args)
+  })
+  const view = render(AgentProfile, { agent, tauri: { invoke }, connected: false, onclose: vi.fn() })
+  const permissions = screen.getByRole('region', { name: 'Permissions' })
+  expect(within(permissions).getByText('Loading…')).toBeInTheDocument()
+  expect(invoke.mock.calls.some(([, args]) => args?.operation === 'permission.modes')).toBe(false)
+  up = true
+  await view.rerender({ connected: true })
+  await waitFor(() => expect(within(permissions).getByRole('button', { name: 'Permissions: Ask before changes' })).toBeInTheDocument())
+  expect(screen.queryByText('Muniment cannot reach its background service.')).not.toBeInTheDocument()
+})

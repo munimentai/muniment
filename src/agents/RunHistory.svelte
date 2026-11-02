@@ -22,11 +22,13 @@
   import LucideIcon from '../lib/LucideIcon.svelte'
   import { runOutcome, runTimeLabel, runTitle } from '../lib/agent-labels.js'
   import { runFailureText } from '../lib/run-failure.js'
-  import { agentRequest } from './agent-runtime.js'
+  import { agentRequest, UNREACHABLE_LINE } from './agent-runtime.js'
   import { DELETED_THREAD_NOTE, threadDeleted } from '../lib/deleted-threads.svelte.js'
   import { loadReplays, replayRun } from './replays.js'
 
-  let { tauri, agent, runs = [], limit = 20, complete = false, embedded = false, disabled = false, onopen = null, onrun = () => {} } = $props()
+  // `connected` is false while this computer's runtime connection is down,
+  // and the replays read again once it returns.
+  let { tauri, agent, runs = [], limit = 20, complete = false, embedded = false, disabled = false, connected = true, onopen = null, onrun = () => {} } = $props()
   let replays = $state([])
   let busy = $state('')
   let error = $state('')
@@ -41,7 +43,15 @@
     shown = untrack(() => limit)
     older = []
     olderDone = false
-    void loadReplays(tauri, agent).then((answer) => { replays = answer.replays; error = answer.error })
+  })
+  $effect(() => {
+    agent.id
+    if (!connected) return
+    let alive = true
+    // A read that still finds the runtime unreachable while the connection
+    // is up shows no line. The read runs again when the connection returns.
+    void loadReplays(tauri, agent).then((answer) => { if (alive) { replays = answer.replays; error = answer.error === UNREACHABLE_LINE && untrack(() => connected) ? '' : answer.error } })
+    return () => { alive = false }
   })
   // The day words move on while the profile stays open.
   $effect(() => {

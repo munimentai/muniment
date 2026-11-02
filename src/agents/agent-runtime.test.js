@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { agentMachine, agentRequest, agentRuntimes, agentThreads, applyRunUpdate, keepNewerRuns, listAgents, listRuns } from './agent-runtime.js'
+import { agentMachine, agentRead, agentRequest, agentRuntimes, agentThreads, applyRunUpdate, keepNewerRuns, listAgents, listRuns } from './agent-runtime.js'
 
 const studio = { id: '018f0000-0000-7000-8000-000000000042', name: 'Studio', kind: 'desktop', status: 'online', local: false }
 const box = { id: '018f0000-0000-7000-8000-000000000043', name: 'Build box', kind: 'container', status: 'offline', local: false }
@@ -120,5 +120,20 @@ describe('a listing that answers after a run event', () => {
 
   it('drops the run of an agent the listing no longer names', () => {
     expect(keepNewerRuns({ latestRuns: { scout: failed } }, { agents: [], latestRuns: {} }).latestRuns).toEqual({})
+  })
+})
+
+describe('agentRead', () => {
+  it('asks again after a busy answer and never repeats a refusal', async () => {
+    let busy = 1
+    const invoke = vi.fn(async () => { if (busy-- > 0) throw new Error('Muniment is busy with another request. Try again.'); return { ok: true } })
+    expect(await agentRead({ invoke }, 'local', 'agent.replays', { id: 'a' }, [0])).toEqual({ ok: true })
+    expect(invoke).toHaveBeenCalledTimes(2)
+    const refuse = vi.fn(async () => { throw new Error('The machine refused the agent request. Check the fields and try again.') })
+    await expect(agentRead({ invoke: refuse }, 'local', 'agent.replays', {}, [0, 0])).rejects.toThrow('The machine refused')
+    expect(refuse).toHaveBeenCalledTimes(1)
+    const down = vi.fn(async () => { throw new Error('Muniment cannot reach its background service.') })
+    await expect(agentRead({ invoke: down }, 'local', 'agent.replays', {}, [0, 0])).rejects.toThrow('cannot reach')
+    expect(down).toHaveBeenCalledTimes(3)
   })
 })

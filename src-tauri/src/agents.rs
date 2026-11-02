@@ -82,7 +82,9 @@ fn agent_error((error, refusal): Refusal) -> String {
             "This device may not manage agents on that machine. Pair it again with agent access."
                 .into()
         }
-        _ => crate::auth::background_service_error(),
+        // A busy or slow runtime is up, so its line says so and the window
+        // asks again. Only a lost connection reads as unreachable.
+        error => crate::auth::desktop_client_error(error),
     }
 }
 
@@ -417,6 +419,38 @@ mod tests {
             .unwrap_err(),
             "The machine refused the agent request. Check the fields and try again."
         );
+    }
+
+    #[test]
+    fn a_busy_runtime_is_not_an_unreachable_one() {
+        let mut local = recorder("local");
+        let paired = recorder("box");
+        for (error, line) in [
+            (
+                ClientError::DesktopBusy,
+                "Muniment is busy with another request. Try again.",
+            ),
+            (
+                ClientError::Timeout,
+                "The background service did not answer in time. Try again.",
+            ),
+            (
+                ClientError::DesktopUnavailable,
+                "Muniment cannot reach its background service.",
+            ),
+        ] {
+            local.refusal = Some((error, None));
+            assert_eq!(
+                forward(
+                    None,
+                    "agent.replays",
+                    serde_json::json!({"id": "a"}),
+                    connect(&local, &paired)
+                )
+                .unwrap_err(),
+                line
+            );
+        }
     }
 
     #[test]

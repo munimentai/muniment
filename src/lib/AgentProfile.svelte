@@ -1,7 +1,7 @@
 <script>
   import { panelScroll } from './panel-scroll.js'
   import { focusLikeKeys } from './focus-source.js'
-  import { onMount, tick, untrack } from 'svelte'
+  import { tick, untrack } from 'svelte'
   import LucideIcon from './LucideIcon.svelte'
   import AgentAvatar from './AgentAvatar.svelte'
   import MemorySection from './MemorySection.svelte'
@@ -18,7 +18,7 @@
   import { modelDisplayName } from './provider-catalog.js'
   import { agentMachine, agentRequest } from '../agents/agent-runtime.js'
   import { emptyCatalog, missingSkills } from '../agents/agent-tools.js'
-  import { findMode, loadModes, modeIcon } from '../agents/permission-modes.js'
+  import { findMode, modeIcon, MODE_RETRY_DELAYS, readModes } from '../agents/permission-modes.js'
   import { activityLabel, activityState } from '../agents/activity.js'
   import { memberMachine } from '../agents/swarm.js'
   import { kindIcon } from '../runtimes/runtimes.js'
@@ -37,8 +37,9 @@
   // its profile, its primary machine and a move, since its settings live on
   // a machine this device does not reach.
   // `catalog` is core's `agent.tool_catalog` from the agent's own machine:
-  // the tools, skills and MCP servers it can offer this agent.
-  let { agent, tauri, projects = [], run, runs = [], threads = [], agents = [], runtimeList = null, swarm = null, inventory = null, catalog = emptyCatalog(), activity = undefined, webhooks = true,
+  // the tools, skills and MCP servers it can offer this agent. `connected`
+  // is false while this computer's runtime connection is down.
+  let { agent, tauri, projects = [], run, runs = [], threads = [], agents = [], runtimeList = null, swarm = null, inventory = null, catalog = emptyCatalog(), activity = undefined, webhooks = true, connected = true,
     deleteAsked = 0, onclose, onchange = async () => {}, ondelete, onopen, onopenrun = null, onopenfolder = null, onrun = () => {}, onmanagemodels = () => {}, onvisibility = () => {} } = $props()
   let editing = $state(null)
   let value = $state('')
@@ -62,11 +63,13 @@
   // Core's `permission.modes` from the agent's machine: undefined while it
   // loads, null when the machine lists none. An agent saves a mode only
   // once one is chosen, and follows the machine's default until then.
+  // A busy or starting runtime is asked again, and a listing that did not
+  // come reads again once this computer's runtime connection returns.
   let modes = $state(undefined)
-  onMount(() => {
-    if (agent.replica) return
+  $effect(() => {
+    if (agent.replica || !connected || untrack(() => modes)) return
     let alive = true
-    void loadModes(tauri, agent.runtimeId).then((value) => { if (alive) modes = value })
+    void readModes(tauri, agent.runtimeId, MODE_RETRY_DELAYS).then((value) => { if (alive && value !== undefined) modes = value })
     return () => { alive = false }
   })
   const shownMode = $derived(findMode(modes, permissions.mode ?? modes?.default_agent_mode))
@@ -363,7 +366,7 @@
 
     <RoutinesPanel {agent} {tauri} {catalog} {webhooks} disabled={busy} {onchange} />
 
-    <RunHistory {tauri} {agent} {runs} disabled={busy} {onrun} onopen={onopen || onopenrun ? openRun : null} />
+    <RunHistory {tauri} {agent} {runs} {connected} disabled={busy} {onrun} onopen={onopen || onopenrun ? openRun : null} />
 
     {#if chats.length}
       <section class="field" aria-label="Conversations">

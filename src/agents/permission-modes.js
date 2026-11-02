@@ -3,7 +3,7 @@
 // default_thread_mode, default_agent_mode }`. Core owns the list, the
 // titles, the descriptions and why a mode is unavailable. The desktop only
 // picks an icon for each id.
-import { agentRequest } from './agent-runtime.js'
+import { agentRead, agentRequest, transientAgentError } from './agent-runtime.js'
 
 const ICONS = { manual: 'hand', edit_auto: 'pencil', plan: 'map', auto: 'zap', dont_ask: 'shield-check', bypass: 'triangle-alert' }
 
@@ -19,6 +19,18 @@ export async function loadModes(tauri, runtime) {
     return Array.isArray(listing?.modes) && listing.modes.length ? listing : null
   } catch {
     return null
+  }
+}
+
+// The runtime's mode listing after transient answers are asked again: the
+// listing, null when the runtime lists none, or undefined when it did not
+// answer, so the caller keeps waiting.
+export async function readModes(tauri, runtime, delays) {
+  try {
+    const listing = await agentRead(tauri, runtime, 'permission.modes', {}, delays)
+    return Array.isArray(listing?.modes) && listing.modes.length ? listing : null
+  } catch (error) {
+    return transientAgentError(error) ? undefined : null
   }
 }
 
