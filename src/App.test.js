@@ -9689,6 +9689,39 @@ describe('agent chat', () => {
     expect(screen.queryByRole('list', { name: 'Weekly recap threads' })).toBeNull()
   })
 
+  it('clears a stale background error and the sent text once the runtime took the message and a Save succeeds', async () => {
+    const saved = []
+    chatMock(saved)
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, payload) => {
+      // Under load the runtime takes the message, but its answer never reaches the window.
+      if (command === 'agent_request' && payload?.operation === 'agent.draft' && payload.body.message === 'Make it daily') {
+        await original(command, payload)
+        await original(command, { ...payload, body: { draft_id: 'draft-1' } })
+        throw new Error('Muniment cannot reach its background service.')
+      }
+      return original(command, payload)
+    })
+    render(App)
+    await screen.findByPlaceholderText('Ask anything')
+    await openSidebarPage('Agents')
+    const panel = await screen.findByRole('region', { name: 'Agents' })
+    await fireEvent.click(within(await within(panel).findByRole('region', { name: 'Give an agent a job' })).getByRole('button', { name: /^Weekly report/ }))
+    await screen.findByRole('article', { name: 'Draft: Weekly recap' })
+    const composer = screen.getByPlaceholderText('Ask for a change')
+    await fireEvent.input(composer, { target: { value: 'Make it daily' } })
+    await fireEvent.keyDown(composer, { key: 'Enter' })
+    const chat = screen.getByLabelText('New agent chat')
+    expect(await within(chat).findByText('Muniment cannot reach its background service.')).toBeInTheDocument()
+    expect(composer).toHaveValue('Make it daily')
+    const replies = within(chat).getAllByRole('article', { name: 'Draft: Weekly recap' })
+    await fireEvent.click(within(replies.at(-1)).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', expect.objectContaining({ operation: 'agent.save' })))
+    await waitFor(() => expect(within(chat).queryByText('Muniment cannot reach its background service.')).not.toBeInTheDocument())
+    await waitFor(() => expect(within(chat).getAllByText('Make it daily', { selector: '.user-message p' })).toHaveLength(1))
+    expect(screen.getByPlaceholderText('Ask for a change')).toHaveValue('')
+  })
+
   it('shows one row for a new agent after Open agent starts its empty thread', async () => {
     const saved = []
     chatMock(saved)

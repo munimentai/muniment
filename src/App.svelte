@@ -399,6 +399,20 @@
   let newAgentChat = $state(null)
   let agentChatPending = $state(null)
   let agentChatError = $state('')
+  // The message whose draft request failed, with the chat's turn count then.
+  // The runtime can take a message whose answer timed out, so once a turn
+  // after that count holds it, the error and the restored draft go.
+  let agentChatFailure = $state(null)
+  function settleAgentChatFailure(message = agentChatFailure?.message) {
+    if (agentChatFailure && message === agentChatFailure.message && draft.trim() === message) draft = ''
+    agentChatFailure = null
+    agentChatError = ''
+  }
+  $effect(() => {
+    const failure = agentChatFailure
+    const turns = agentChat?.threadId === failure?.threadId ? agentChat?.record?.turns ?? [] : []
+    if (failure && turns.slice(failure.turns).some((turn) => turn.message === failure.message)) untrack(() => settleAgentChatFailure())
+  })
   const agentChat = $derived.by(() => {
     if (!currentThreadId) return null
     const record = creations.find((item) => item.threadId === currentThreadId && item.kind === 'agent' && item.turns?.length)
@@ -425,6 +439,7 @@
     if (!await newSidebarThread(projectId) || !currentThreadId) return
     newAgentChat = { threadId: currentThreadId, fromThread }
     agentChatError = ''
+    agentChatFailure = null
     draft = ''
     if (fromThread) await sendAgentChat(`Make an agent from ${fromThread.title || 'this thread'}`)
     else if (description.trim()) await sendAgentChat(description)
@@ -438,15 +453,20 @@
     if (!chat || !message || agentChatPending) return
     agentChatPending = { threadId: chat.threadId, message }
     agentChatError = ''
+    const turns = chat.record?.turns?.length ?? 0
     try {
       const answer = await requestDraft(tauri, LOCAL_RUNTIME_ID, { chatId: chat.threadId, message, threadId: chat.record ? null : chat.fromThread?.id ?? null })
       if (answer?.creation) {
         creationsRevision += 1
         creations = [...creations.filter((item) => item.threadId !== answer.creation.threadId), answer.creation]
       }
+      // The runtime took this message, so an earlier attempt's error and the
+      // text it put back in the composer go.
+      if (agentChat?.threadId === chat.threadId) settleAgentChatFailure(message)
     } catch (error) {
       if (agentChat?.threadId === chat.threadId) {
         agentChatError = String(error?.message ?? error)
+        agentChatFailure = { threadId: chat.threadId, message, turns }
         if (!draft.trim()) draft = message
       }
     } finally { agentChatPending = null }
@@ -458,6 +478,11 @@
   }
   // A saved agent's chat stays its creation chat, and the agent shows in the lists.
   async function agentChatSaved(agent, threadId) {
+    // A Save that succeeds ends a stale error. After a failed message the
+    // chat reads its record again first, since the runtime can have taken
+    // it, and a record saved from the window's copy would drop that turn.
+    if (agentChat?.threadId === threadId) agentChatError = ''
+    if (agentChatFailure?.threadId === threadId) await refreshCreations()
     const record = creations.find((item) => item.threadId === threadId)
     if (record && record.resultId !== agent.id) {
       const plan = await tauri.invoke('creation_save', { creation: { ...$state.snapshot(record), resultId: agent.id } }).catch(() => null)
