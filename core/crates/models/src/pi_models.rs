@@ -30,6 +30,11 @@ pub const SAVE_ERROR: &str =
 pub const RECORD_FILE: &str = "muniment-models.json";
 /// The record key that keeps each endpoint's decision models by provider.
 const DECISION_MODELS: &str = "decisionModels";
+/// The record key that keeps each endpoint's name by provider.
+const NAMES: &str = "names";
+/// The record key that lists the endpoints whose models the person named,
+/// so a refresh keeps exactly those models.
+const NAMED_MODELS: &str = "namedModels";
 const LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 const LOCK_RETRY: Duration = Duration::from_millis(20);
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(4);
@@ -180,6 +185,112 @@ pub fn store_decision_models(agent: &Path, provider: &str, ids: &[String]) -> Re
         providers.insert(provider.to_owned(), json!(ids));
     }
     write_record(agent, &record)
+}
+
+/// The strings a record key lists.
+fn record_list(record: &Map<String, Value>, key: &str) -> Vec<String> {
+    record
+        .get(key)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Sets a record key's list, and drops the key when the list is empty.
+fn set_record_list(record: &mut Map<String, Value>, key: &str, mut values: Vec<String>) {
+    values.sort();
+    values.dedup();
+    if values.is_empty() {
+        record.remove(key);
+    } else {
+        record.insert(key.into(), json!(values));
+    }
+}
+
+/// Whether the person named the models of the endpoint `provider`.
+pub fn named_models(record: &Map<String, Value>, provider: &str) -> bool {
+    record_list(record, NAMED_MODELS)
+        .iter()
+        .any(|id| id == provider)
+}
+
+/// Drops what the record keeps for the endpoint `provider`: its name, its
+/// named list and its decision models. Answers whether the record changed.
+fn drop_endpoint(record: &mut Map<String, Value>, provider: &str) -> bool {
+    let mut changed = false;
+    for key in [NAMES, DECISION_MODELS] {
+        if let Some(entries) = record.get_mut(key).and_then(Value::as_object_mut) {
+            changed |= entries.remove(provider).is_some();
+            if entries.is_empty() {
+                record.remove(key);
+            }
+        }
+    }
+    let named = record_list(record, NAMED_MODELS);
+    if named.iter().any(|id| id == provider) {
+        let rest = named.into_iter().filter(|id| id != provider).collect();
+        set_record_list(record, NAMED_MODELS, rest);
+        changed = true;
+    }
+    changed
+}
+
+/// Drops what the record keeps for the endpoint `provider`, as after a
+/// disconnect.
+pub fn forget_endpoint(agent: &Path, provider: &str) -> Result<(), String> {
+    let path = agent.join(RECORD_FILE);
+    if !path.is_file() {
+        return Ok(());
+    }
+    let mut record = read_record(agent)?;
+    if drop_endpoint(&mut record, provider) {
+        write_record(agent, &record)?;
+    }
+    Ok(())
+}
+
+/// Drops what the record keeps for each endpoint `models.json` no longer
+/// holds, and answers how many endpoints it dropped. A `models.json` that
+/// is missing or unreadable drops nothing, so a name never leaves while its
+/// endpoint may exist.
+pub fn sweep_endpoints(agent: &Path) -> Result<usize, String> {
+    let models_file = models_file(agent);
+    if !models_file.is_file() || !agent.join(RECORD_FILE).is_file() {
+        return Ok(0);
+    }
+    let Ok(root) = read_json(&models_file) else {
+        return Ok(0);
+    };
+    let Some(providers) = root.get("providers").and_then(Value::as_object) else {
+        return Ok(0);
+    };
+    let mut record = read_record(agent)?;
+    let mut kept: Vec<String> = Vec::new();
+    for key in [NAMES, DECISION_MODELS] {
+        kept.extend(
+            record
+                .get(key)
+                .and_then(Value::as_object)
+                .into_iter()
+                .flat_map(|entries| entries.keys().cloned()),
+        );
+    }
+    kept.extend(record_list(&record, NAMED_MODELS));
+    kept.sort();
+    kept.dedup();
+    let mut dropped = 0;
+    for provider in kept.iter().filter(|id| !providers.contains_key(*id)) {
+        if drop_endpoint(&mut record, provider) {
+            dropped += 1;
+        }
+    }
+    if dropped > 0 {
+        write_record(agent, &record)?;
+    }
+    Ok(dropped)
 }
 
 /// One endpoint model as Pi reads it, with its window when the server
@@ -504,19 +615,26 @@ pub fn store_endpoint(
         }),
     );
     write_for_update(&models_file, &root)?;
+    let mut record = read_record(agent)?;
     if kind == "custom" {
-        let mut record = read_record(agent)?;
         let names = record
-            .entry("names")
+            .entry(NAMES)
             .or_insert_with(|| json!({}))
             .as_object_mut()
             .ok_or_else(|| SAVE_ERROR.to_string())?;
         names.insert(provider.clone(), name.into());
-        write_record(agent, &record)?;
     }
-    if let Some(ids) = decisions {
-        store_decision_models(agent, &provider, &ids)?;
+    let mut named: Vec<String> = record_list(&record, NAMED_MODELS)
+        .into_iter()
+        .filter(|id| *id != provider)
+        .collect();
+    if decisions.is_none() {
+        named.push(provider.clone());
     }
+    set_record_list(&mut record, NAMED_MODELS, named);
+    write_record(agent, &record)?;
+    // A named list names no decision model.
+    store_decision_models(agent, &provider, &decisions.unwrap_or_default())?;
     Ok(provider)
 }
 
@@ -552,7 +670,9 @@ pub fn endpoints(agent: &Path) -> Result<Vec<(String, String, String)>, String> 
 /// Rewrites each endpoint's model list from what its server serves now, with
 /// each model's window, and answers whether any list changed. A model the
 /// server still serves keeps the settings the user gave it. A server that
-/// lists no chat model keeps its saved list.
+/// lists no chat model keeps its saved list. An endpoint whose models the
+/// person named keeps exactly those models, and the server only adds the
+/// limits a model lacks.
 pub fn refresh_endpoints(agent: &Path) -> Result<bool, String> {
     refresh_endpoints_with(agent, &resolve_key)
 }
@@ -571,6 +691,7 @@ pub fn refresh_endpoints_with(
     }
     let _lock = lock(&models_file).map_err(|_| SAVE_ERROR.to_string())?;
     let mut root = read_for_update(&models_file)?;
+    let record = read_record(agent)?;
     let mut changed = false;
     let mut decisions = Vec::new();
     if let Some(providers) = root.get_mut("providers").and_then(Value::as_object_mut) {
@@ -598,12 +719,42 @@ pub fn refresh_endpoints_with(
             else {
                 continue;
             };
-            decisions.push((id.clone(), found.decisions));
             let current = entry
                 .get("models")
                 .and_then(Value::as_array)
                 .cloned()
                 .unwrap_or_default();
+            if named_models(&record, id) {
+                // The person named these models, so the list stays as it
+                // is and the server only adds the limits a model lacks.
+                let next: Vec<Value> = current
+                    .iter()
+                    .map(|old| {
+                        let mut next = old.clone();
+                        let window = old
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .and_then(|model| found.windows.get(model).map(|w| (model, w)));
+                        if let (Some((model, window)), Some(fields)) =
+                            (window, next.as_object_mut())
+                        {
+                            let reported = model_entry(model, Some(window));
+                            for field in ["contextWindow", "maxTokens"] {
+                                if let Some(value) = reported.get(field) {
+                                    fields.entry(field).or_insert_with(|| value.clone());
+                                }
+                            }
+                        }
+                        next
+                    })
+                    .collect();
+                if current != next {
+                    entry.insert("models".into(), next.into());
+                    changed = true;
+                }
+                continue;
+            }
+            decisions.push((id.clone(), found.decisions));
             let next: Vec<Value> = found
                 .chat
                 .iter()
@@ -864,6 +1015,118 @@ mod tests {
         );
         assert_eq!(root["providers"]["openai"]["models"][0]["id"], "kept");
         assert!(!refresh_endpoints(&agent).unwrap());
+        fs::remove_dir_all(agent).unwrap();
+    }
+
+    #[test]
+    fn a_refresh_keeps_exactly_the_models_the_person_named() {
+        let agent = temporary_directory();
+        let url = serve_routes(vec![(
+            "GET /v1/models",
+            json!({"data": [
+                {"id": "served", "max_model_len": 32768},
+                {"id": "other", "max_model_len": 8192}
+            ]}),
+        )]);
+        // A one-id Connect keeps one id, and an id the server does not list stays.
+        let id = store_endpoint(
+            &agent,
+            "custom",
+            "Live29",
+            &url,
+            "",
+            &["served".into(), "unlisted".into()],
+        )
+        .unwrap();
+        let mut root = models(&agent);
+        root["providers"][&id]["models"][0]["contextWindow"] = 16384.into();
+        fs::write(models_file(&agent), root.to_string()).unwrap();
+        refresh_endpoints(&agent).unwrap();
+        assert_eq!(
+            models(&agent)["providers"][&id]["models"],
+            json!([{"id": "served", "contextWindow": 16384}, {"id": "unlisted"}])
+        );
+        // The server adds a limit a named model lacks.
+        let mut root = models(&agent);
+        root["providers"][&id]["models"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("contextWindow");
+        fs::write(models_file(&agent), root.to_string()).unwrap();
+        assert!(refresh_endpoints(&agent).unwrap());
+        assert_eq!(
+            models(&agent)["providers"][&id]["models"],
+            json!([{"id": "served", "contextWindow": 32768}, {"id": "unlisted"}])
+        );
+        assert!(!refresh_endpoints(&agent).unwrap());
+        assert!(decision_models(&read_record(&agent).unwrap(), &id).is_empty());
+        // An empty list takes the server's list, and its refresh follows the server.
+        store_endpoint(&agent, "custom", "Live29", &url, "", &[]).unwrap();
+        assert!(!named_models(&read_record(&agent).unwrap(), &id));
+        let ids = |agent: &Path| {
+            models(agent)["providers"][&id]["models"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|entry| entry["id"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(&agent), ["served", "other"]);
+        fs::remove_dir_all(agent).unwrap();
+    }
+
+    #[test]
+    fn a_disconnected_endpoint_leaves_the_record_and_a_sweep_keeps_live_ones() {
+        let agent = temporary_directory();
+        fs::write(
+            models_file(&agent),
+            json!({"providers": {
+                "custom-live30": {"baseUrl": "http://127.0.0.1:9/v1", "models": [{"id": "m"}]}
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        write_record(
+            &agent,
+            json!({
+                "names": {"custom-live27": "Live27", "custom-live30": "Live30"},
+                "namedModels": ["custom-live27", "custom-live30"],
+                "decisionModels": {"custom-live28": ["kev"]},
+                "hidden": ["custom-live30/m"]
+            })
+            .as_object()
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(sweep_endpoints(&agent).unwrap(), 2);
+        assert_eq!(
+            Value::Object(read_record(&agent).unwrap()),
+            json!({
+                "names": {"custom-live30": "Live30"},
+                "namedModels": ["custom-live30"],
+                "hidden": ["custom-live30/m"]
+            })
+        );
+        assert_eq!(sweep_endpoints(&agent).unwrap(), 0);
+        forget_endpoint(&agent, "custom-live30").unwrap();
+        assert_eq!(
+            Value::Object(read_record(&agent).unwrap()),
+            json!({"hidden": ["custom-live30/m"]})
+        );
+        // A missing model file drops no name.
+        write_record(
+            &agent,
+            json!({"names": {"custom-live31": "Live31"}})
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap();
+        fs::remove_file(models_file(&agent)).unwrap();
+        assert_eq!(sweep_endpoints(&agent).unwrap(), 0);
+        assert_eq!(
+            read_record(&agent).unwrap()["names"]["custom-live31"],
+            "Live31"
+        );
         fs::remove_dir_all(agent).unwrap();
     }
 

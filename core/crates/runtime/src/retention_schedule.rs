@@ -48,6 +48,7 @@ pub fn start_retention_schedule(
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         state.bind_swarm();
+        state.models().sweep_endpoints();
         state.models().restore_router();
         let models = Arc::downgrade(state.models());
         muniment_core::shared_models::set_on_change(move || {

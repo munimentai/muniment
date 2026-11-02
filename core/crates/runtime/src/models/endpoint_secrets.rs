@@ -12,6 +12,11 @@
 //! the state root. The runtime asks the keychain once per entry at a time,
 //! only when a request needs the key, and records a late answer for the next
 //! request.
+//!
+//! A key the store refuses lives in the runtime's memory alone, and the
+//! store may still hold the key it replaced. A mark under the state root
+//! names each such provider, so after a restart the runtime never answers
+//! the old key and the endpoint card asks for the key again.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -153,6 +158,21 @@ pub fn seal_with(
 pub const MEMORY_KEY_NOTICE: &str =
     "The key is kept until Muniment quits; the keychain refused it.";
 
+/// The sentence an endpoint card shows after a restart when the store
+/// refused the key the person saved last, so the store holds an older key or
+/// none: the person enters the key again, and how to remove the old one.
+pub fn stale_key_notice(provider: &str) -> String {
+    if cfg!(target_os = "macos") {
+        format!(
+            "The keychain holds an older key for this endpoint. Enter the key again. To remove the old key, open Keychain Access, search for {SERVICE}, and delete the item for {provider}."
+        )
+    } else {
+        format!(
+            "The system credential store holds an older key for this endpoint. Enter the key again. To remove the old key, delete the {SERVICE} entry for {provider} there."
+        )
+    }
+}
+
 /// The sentence a disconnect shows when the store kept `provider`'s key:
 /// where the key stays and how the person removes it.
 pub fn kept_key_notice(provider: &str) -> String {
@@ -191,6 +211,20 @@ pub const SOCKET_DIRECTORY_NAME: &str = "endpoint-keys";
 /// The socket the runtime answers `secret get` on, under `state`.
 pub fn socket_path(state: &Path) -> PathBuf {
     state.join(SOCKET_DIRECTORY_NAME).join("socket")
+}
+
+/// The folder beside the socket that holds one empty mark per provider whose
+/// stored key is stale, because the store refused the key that replaced it.
+const STALE_DIRECTORY_NAME: &str = "stale";
+
+/// The folder of stale-key marks under `state`.
+pub fn stale_marks_path(state: &Path) -> PathBuf {
+    state.join(SOCKET_DIRECTORY_NAME).join(STALE_DIRECTORY_NAME)
+}
+
+/// Whether `marks` holds the stale-key mark of `provider`.
+fn marked_stale(marks: &Path, provider: &str) -> bool {
+    safe_provider(provider) && marks.join(provider).is_file()
 }
 
 /// How long the runtime holds a `secret get` for the keychain's answer,
@@ -255,6 +289,8 @@ pub struct KeyBroker {
     slots: Mutex<BTreeMap<String, Slot>>,
     /// The providers whose key the store refused, so the broker alone holds it.
     memory: Mutex<std::collections::BTreeSet<String>>,
+    /// The folder of stale-key marks, which outlive the runtime.
+    marks: Option<PathBuf>,
     wait: Duration,
 }
 
@@ -303,10 +339,20 @@ impl KeyBroker {
 
     /// A broker that holds a request `wait` for the store's answer.
     pub fn waiting(store: Arc<dyn CredentialStore>, wait: Duration) -> Arc<Self> {
+        Self::build(store, wait, None)
+    }
+
+    /// A broker over `store` that keeps its stale-key marks in `marks`.
+    pub fn marking(store: Arc<dyn CredentialStore>, marks: PathBuf) -> Arc<Self> {
+        Self::build(store, ANSWER_WAIT, Some(marks))
+    }
+
+    fn build(store: Arc<dyn CredentialStore>, wait: Duration, marks: Option<PathBuf>) -> Arc<Self> {
         Arc::new(Self {
             store,
             slots: Mutex::new(BTreeMap::new()),
             memory: Mutex::new(Default::default()),
+            marks,
             wait,
         })
     }
@@ -321,7 +367,8 @@ impl KeyBroker {
     /// holds answers at once. Otherwise the broker asks the store, unless a
     /// read for the entry already runs, and waits for the answer up to its
     /// bound. A read that outlasts the bound answers [`KeyAnswer::Pending`]
-    /// and keeps running, so its answer serves the next request.
+    /// and keeps running, so its answer serves the next request. A stale
+    /// stored key answers [`KeyAnswer::Missing`] without a store read.
     pub fn answer(self: &Arc<Self>, provider: &str) -> KeyAnswer {
         if !safe_provider(provider) {
             return KeyAnswer::Missing;
@@ -331,6 +378,12 @@ impl KeyBroker {
             match slots.get(provider) {
                 Some(Slot::Held(key)) => return KeyAnswer::Key(key.clone()),
                 Some(Slot::Asking(ask)) => Arc::clone(ask),
+                None if self.stale(provider) => {
+                    muniment_core::runtime_eprintln!(
+                        "muniment-runtime: endpoint_key provider={provider} read=stale"
+                    );
+                    return KeyAnswer::Missing;
+                }
                 None => {
                     let ask = Arc::new(Ask::default());
                     slots.insert(provider.to_owned(), Slot::Asking(Arc::clone(&ask)));
@@ -398,6 +451,15 @@ impl KeyBroker {
     pub fn forget(&self, provider: &str) {
         self.slots().remove(provider);
         self.memory().remove(provider);
+        if let (Some(marks), true) = (&self.marks, safe_provider(provider)) {
+            match std::fs::remove_file(marks.join(provider)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => muniment_core::runtime_eprintln!(
+                    "muniment-runtime: endpoint_key provider={provider} stale_mark=kept error={error}"
+                ),
+            }
+        }
     }
 
     /// The store refused `key`, the new key for `provider`: the broker holds
@@ -409,12 +471,33 @@ impl KeyBroker {
         self.slots()
             .insert(provider.to_owned(), Slot::Held(key.to_owned()));
         self.memory().insert(provider.to_owned());
+        // The store may still hold the key this one replaced, so a later
+        // runtime must not answer it.
+        if let Some(marks) = &self.marks {
+            let marked = std::fs::create_dir_all(marks)
+                .and_then(|()| std::fs::write(marks.join(provider), b""));
+            if let Err(error) = marked {
+                muniment_core::runtime_eprintln!(
+                    "muniment-runtime: endpoint_key provider={provider} stale_mark=failed error={error}"
+                );
+            }
+        }
     }
 
     /// Whether the broker alone holds `provider`'s key, because the store
     /// refused it.
     pub fn kept_in_memory(&self, provider: &str) -> bool {
         self.memory().contains(provider)
+    }
+
+    /// Whether the store's key for `provider` is stale: the store refused
+    /// the key that replaced it, and this runtime holds no key in its place.
+    pub fn stale(&self, provider: &str) -> bool {
+        !self.kept_in_memory(provider)
+            && self
+                .marks
+                .as_deref()
+                .is_some_and(|marks| marked_stale(marks, provider))
     }
 
     fn memory(&self) -> std::sync::MutexGuard<'_, std::collections::BTreeSet<String>> {
@@ -516,7 +599,7 @@ fn ask_runtime(socket: &Path, provider: &str) -> Option<KeyAnswer> {
 /// [`REFUSED_STATUS`] when the store refused it and [`PENDING_STATUS`] while
 /// the keychain waits for the person. The running runtime answers through
 /// its socket under the state root. Only without one does the command read
-/// `store` itself.
+/// `store` itself, and never for a provider whose stored key is stale.
 pub fn run_command(
     arguments: &[String],
     store: impl FnOnce() -> Arc<dyn CredentialStore>,
@@ -547,8 +630,16 @@ pub fn run_command_through(
         let _ = socket;
         None
     };
-    let answer =
-        answer.unwrap_or_else(|| KeyAnswer::from_lookup(store().lookup(SERVICE, provider)));
+    let stale = socket
+        .and_then(Path::parent)
+        .is_some_and(|folder| marked_stale(&folder.join(STALE_DIRECTORY_NAME), provider));
+    let answer = answer.unwrap_or_else(|| {
+        if stale {
+            KeyAnswer::Missing
+        } else {
+            KeyAnswer::from_lookup(store().lookup(SERVICE, provider))
+        }
+    });
     if let KeyAnswer::Key(key) = &answer {
         println!("{key}");
     }
@@ -687,6 +778,61 @@ mod tests {
         );
         broker.forget("custom-proxy");
         assert!(!broker.kept_in_memory("custom-proxy"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_key_the_store_refused_never_brings_back_the_old_key_after_a_restart() {
+        let root = temporary("stale");
+        let marks = stale_marks_path(&root);
+        let credentials = root.join("credentials");
+        // The keychain holds the old key and refuses to replace it.
+        let store = Arc::new(FileCredentialStore::new(&credentials));
+        store.write(SERVICE, "custom-live29", "sk-old").unwrap();
+        let broker = KeyBroker::marking(
+            Arc::clone(&store) as Arc<dyn CredentialStore>,
+            marks.clone(),
+        );
+        broker.keep("custom-live29", "sk-new");
+        assert_eq!(
+            broker.answer("custom-live29"),
+            KeyAnswer::Key("sk-new".into())
+        );
+        assert!(!broker.stale("custom-live29"));
+
+        // After a restart the runtime holds no key, and the old one stays out.
+        let restarted = KeyBroker::marking(
+            Arc::clone(&store) as Arc<dyn CredentialStore>,
+            marks.clone(),
+        );
+        assert!(restarted.stale("custom-live29"));
+        assert_eq!(restarted.answer("custom-live29"), KeyAnswer::Missing);
+        assert_eq!(restarted.held("custom-live29"), None);
+        // A command that finds no runtime reads no stale key either.
+        let open = || Arc::new(FileCredentialStore::new(&credentials)) as Arc<dyn CredentialStore>;
+        let socket = socket_path(&root);
+        assert_eq!(
+            run_command_through(&secret_get("custom-live29"), Some(&socket), open),
+            Some(1)
+        );
+        assert_eq!(
+            run_command_through(&secret_get("custom-other"), Some(&socket), open),
+            Some(1)
+        );
+        store.write(SERVICE, "custom-other", "sk-other").unwrap();
+        assert_eq!(
+            run_command_through(&secret_get("custom-other"), Some(&socket), open),
+            Some(0)
+        );
+
+        // A key the store takes, or a disconnect, clears the mark.
+        restarted.forget("custom-live29");
+        assert!(!restarted.stale("custom-live29"));
+        assert_eq!(
+            restarted.answer("custom-live29"),
+            KeyAnswer::Key("sk-old".into())
+        );
+        assert!(stale_key_notice("custom-live29").contains("Enter the key again"));
         let _ = std::fs::remove_dir_all(root);
     }
 

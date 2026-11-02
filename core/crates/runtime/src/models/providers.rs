@@ -1189,6 +1189,7 @@ pub(super) fn disconnect_provider(agent: &Path, provider: &str) -> Result<(), St
         if pi_models_file(agent).is_file() {
             remove_json_entry(&pi_models_file(agent), provider)?;
         }
+        pi_models::forget_endpoint(agent, provider)?;
     }
     let settings_file = pi_settings_file(&pi_models_file(agent));
     if settings_file.is_file() {

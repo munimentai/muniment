@@ -109,7 +109,10 @@ impl ModelService {
         store: Arc<dyn CredentialStore>,
         executable: PathBuf,
     ) -> Self {
-        let broker = endpoint_secrets::KeyBroker::new(Arc::clone(&store));
+        let broker = endpoint_secrets::KeyBroker::marking(
+            Arc::clone(&store),
+            endpoint_secrets::stale_marks_path(&self.state_directory),
+        );
         #[cfg(unix)]
         if let Err(error) = endpoint_secrets::serve(
             Arc::clone(&broker),
@@ -152,7 +155,8 @@ impl ModelService {
     }
 
     /// `inventory` with a `key_notice` on each endpoint whose key the runtime
-    /// holds in memory alone, because the store refused it.
+    /// holds in memory alone, because the store refused it, and on each
+    /// endpoint whose stored key is stale after a restart.
     fn with_key_notices(&self, mut inventory: Value) -> Value {
         let Some(keys) = &self.endpoint_keys else {
             return inventory;
@@ -163,12 +167,13 @@ impl ModelService {
             .into_iter()
             .flatten()
         {
-            let kept = provider
-                .get("id")
-                .and_then(Value::as_str)
-                .is_some_and(|id| keys.broker.kept_in_memory(id));
-            if kept {
+            let Some(id) = provider.get("id").and_then(Value::as_str) else {
+                continue;
+            };
+            if keys.broker.kept_in_memory(id) {
                 provider["key_notice"] = endpoint_secrets::MEMORY_KEY_NOTICE.into();
+            } else if keys.broker.stale(id) {
+                provider["key_notice"] = endpoint_secrets::stale_key_notice(id).into();
             }
         }
         inventory
@@ -185,6 +190,20 @@ impl ModelService {
         ) {
             (Some(keys), Some(provider)) => keys.broker.held(provider),
             _ => muniment_core::models::pi_models::resolve_key(value),
+        }
+    }
+
+    /// Drops the names and model lists the record keeps for endpoints that
+    /// `models.json` no longer holds.
+    pub fn sweep_endpoints(&self) {
+        match muniment_core::models::pi_models::sweep_endpoints(&self.agent) {
+            Ok(0) => {}
+            Ok(dropped) => muniment_core::runtime_eprintln!(
+                "muniment-runtime: endpoint_records swept={dropped}"
+            ),
+            Err(error) => muniment_core::runtime_eprintln!(
+                "muniment-runtime: endpoint_records sweep=failed error={error}"
+            ),
         }
     }
 
@@ -1042,7 +1061,48 @@ mod tests {
             endpoint_secrets::MEMORY_KEY_NOTICE
         );
         assert!(inventory["providers"][1].get("key_notice").is_none());
-        // A disconnect drops the key the runtime held.
+        // After a restart the runtime never answers the store's older key,
+        // and the card asks for the key again.
+        let restarted = Arc::new(
+            ModelService::new(&profile, Arc::new(crate::host::plain_sign_in_page))
+                .with_endpoint_keys(
+                    Arc::clone(&store) as Arc<dyn CredentialStore>,
+                    PathBuf::from("/opt/muniment/muniment-runtime"),
+                ),
+        );
+        let again = restarted.endpoint_keys.as_ref().unwrap();
+        assert_eq!(
+            again.broker.answer("custom-live28"),
+            endpoint_secrets::KeyAnswer::Missing
+        );
+        let inventory = restarted.with_key_notices(serde_json::json!({"providers": [
+            {"id": "custom-live28"}, {"id": "custom-other"}
+        ]}));
+        assert_eq!(
+            inventory["providers"][0]["key_notice"],
+            endpoint_secrets::stale_key_notice("custom-live28")
+        );
+        assert!(inventory["providers"][1].get("key_notice").is_none());
+        let names = || {
+            muniment_core::models::pi_models::read_record(&agent)
+                .unwrap()
+                .get("names")
+                .and_then(|names| names.get("custom-live28"))
+                .cloned()
+        };
+        assert_eq!(names(), Some(Value::from("Live28")));
+        // A disconnect drops the key the runtime held, the stale mark and the name.
+        restarted
+            .request(
+                request(
+                    ModelAction::DisconnectProvider,
+                    serde_json::json!({"provider": "custom-live28"}),
+                ),
+                None,
+            )
+            .unwrap();
+        assert!(!again.broker.stale("custom-live28"));
+        assert_eq!(names(), None);
         service
             .request(
                 request(
