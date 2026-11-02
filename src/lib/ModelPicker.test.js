@@ -140,6 +140,20 @@ it('says routing is off and points to Roles while a decision model is connected'
   expect(onrouting).toHaveBeenCalledTimes(1)
 })
 
+it('gives each custom endpoint in the rail its own monogram mark', () => {
+  const inventory = { providers: [
+    { id: 'custom-do-test', name: 'DO Test', source: 'custom', models: [{ id: 'qwen' }] },
+    { id: 'custom-live31', name: 'Live31', source: 'custom', models: [{ id: 'llama' }] },
+    { id: 'openai', name: 'OpenAI', source: 'key', models: [{ id: 'gpt-6.1-sol' }] },
+  ], hidden: [], shown: [] }
+  render(ModelPicker, props(inventory))
+  const rail = screen.getByRole('navigation', { name: 'Providers' })
+  expect(within(rail).getByRole('button', { name: 'DO Test' }).querySelector('.monogram')).toHaveTextContent('DT')
+  expect(within(rail).getByRole('button', { name: 'Live31' }).querySelector('.monogram')).toHaveTextContent('L3')
+  expect(within(rail).getByRole('button', { name: 'OpenAI' }).querySelector('.monogram')).toBeNull()
+  expect(within(rail).getByRole('button', { name: 'OpenAI' }).querySelector('.logo svg')).not.toBeNull()
+})
+
 it('lists only the picked provider\'s models without a search', async () => {
   const inventory = { providers: [
     { id: 'custom-omlx', name: 'oMLX', source: 'custom', models: [{ id: 'Qwen3.8-27B-4bit' }] },

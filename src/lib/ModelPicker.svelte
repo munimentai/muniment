@@ -132,7 +132,7 @@
         {#each groups as group (group.id)}
           {@const chosen = !searching && group.id === selected?.id}
           <button type="button" class="rail-mark" aria-label={group.label} aria-current={chosen ? 'true' : undefined} aria-controls={`${uid}-list`} tabindex={chosen || (searching && group === groups[0]) ? 0 : -1} onclick={() => pick(group)} onpointerenter={(event) => showTip(event, group)} onpointerleave={() => tip = null} onfocus={(event) => showTip(event, group)} onblur={() => tip = null}>
-            {#if group.classifier}<LucideIcon name="route" variant="action" size={18} />{:else}<ProviderLogo color provider={group.providerId} size={18} />{/if}
+            {#if group.classifier}<LucideIcon name="route" variant="action" size={18} />{:else}<ProviderLogo color provider={group.providerId} name={group.label} size={18} />{/if}
           </button>
         {/each}
       </nav>
@@ -178,7 +178,7 @@
   <button type="button" class="quiet picker-manage" onclick={onmanage}><LucideIcon name="settings" variant="action" size={14} />Manage models</button>
 </div>
 
-{#snippet mark(group)}{#if group.classifier}<LucideIcon name="route" variant="action" size={14} />{:else}<ProviderLogo color provider={group.providerId} size={14} />{/if}{/snippet}
+{#snippet mark(group)}{#if group.classifier}<LucideIcon name="route" variant="action" size={14} />{:else}<ProviderLogo color provider={group.providerId} name={group.label} size={14} />{/if}{/snippet}
 
 {#snippet row(group, model)}
   {@const used = inUse(model)}
