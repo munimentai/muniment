@@ -179,3 +179,15 @@ describe('link lines', () => {
     expect(linkLabel(null)).toBe('Through another machine')
   })
 })
+
+describe('keychainRefusal', () => {
+  it('names the fleet key and the other refused secrets once each, or nothing', async () => {
+    const { keychainRefusal } = await import('./swarm.js')
+    expect(keychainRefusal(null)).toBe(null)
+    expect(keychainRefusal({ views: { local: { fleet_key: null, keychain: [] } } })).toBe(null)
+    expect(keychainRefusal({ views: { local: { fleet_key: { state: 'failed' }, keychain: [{ label: 'webhook secrets', state: 'failed' }, { label: 'webhook secrets', state: 'failed' }] } } }))
+      .toEqual({ declined: false, labels: ['fleet key', 'webhook secrets'] })
+    expect(keychainRefusal({ views: { local: { keychain: [{ label: 'protected prompts', state: 'declined' }] } } }))
+      .toEqual({ declined: true, labels: ['protected prompts'] })
+  })
+})

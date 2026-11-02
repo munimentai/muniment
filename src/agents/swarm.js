@@ -91,12 +91,16 @@ export async function listSwarm(tauri, runtimeList) {
   return withLocalSelf(mergeSwarm(answers), runtimeList)
 }
 
-// The keychain's refusal of this computer's fleet key, from its own
-// `swarm.members` answer, or null while core holds the key.
-export function fleetKeyRefusal(swarm) {
-  const status = swarm?.views?.[LOCAL_RUNTIME_ID]?.fleet_key
-  if (!status?.state) return null
-  return { declined: status.state === 'declined', message: String(status.message ?? '') }
+// What the keychain refused this computer, from its own `swarm.members`
+// answer: the fleet key and the other secrets core holds back, or null when
+// the keychain refused nothing. `declined` is true when the person turned
+// the keychain's prompt down, which only Try again or a restart asks again.
+export function keychainRefusal(swarm) {
+  const view = swarm?.views?.[LOCAL_RUNTIME_ID]
+  const items = [...(view?.fleet_key?.state ? [{ label: 'fleet key', state: view.fleet_key.state }] : []), ...(Array.isArray(view?.keychain) ? view.keychain : [])]
+  const labels = [...new Set(items.map((item) => String(item.label ?? '')).filter(Boolean))]
+  if (!labels.length) return null
+  return { declined: items.some((item) => item.state === 'declined'), labels }
 }
 
 // This computer's fleet id when its own `swarm.members` did not answer this
