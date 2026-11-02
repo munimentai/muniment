@@ -112,6 +112,8 @@ enum Channel {
 pub(super) struct FleetState {
     signer: Mutex<Option<Arc<IdentitySigner>>>,
     keys: Mutex<Option<Arc<Keys>>>,
+    /// Whether the credential store may hear a request for the fleet key.
+    gate: Mutex<super::fleet_key::KeyGate>,
     view: Mutex<Option<(String, Arc<View>)>>,
     peers: Mutex<HashMap<String, FleetPeer>>,
     /// Held while this runtime refreshes the sign-ins it seals or hands one
@@ -293,6 +295,10 @@ fn credential_store(inner: &Inner) -> Arc<dyn CredentialStore> {
 }
 
 /// This runtime's keys, created on first use.
+///
+/// A store that refuses the key closes the gate, so later calls answer the
+/// refusal without asking the store, and a refused key is never replaced
+/// with a new one. See [`super::fleet_key`].
 pub(super) fn keys(inner: &Inner) -> Result<Arc<Keys>, String> {
     let mut held = lock(&inner.fleet.keys);
     if let Some(keys) = held.as_ref() {
@@ -301,9 +307,26 @@ pub(super) fn keys(inner: &Inner) -> Result<Arc<Keys>, String> {
     let signer = lock(&inner.fleet.signer)
         .clone()
         .ok_or("Turn on remote access to hold fleet keys.")?;
+    {
+        let gate = lock(&inner.fleet.gate);
+        if !gate.may_ask(std::time::Instant::now()) {
+            return Err(gate.closed_message());
+        }
+    }
     let store = credential_store(inner);
-    let stored = store
-        .read(KEY_SERVICE, KEY_NAME)
+    let stored = match store.lookup(KEY_SERVICE, KEY_NAME) {
+        Ok(stored) => stored,
+        Err(refusal) => {
+            crate::runtime_eprintln!(
+                "muniment-runtime: the credential store refused the fleet key: {}",
+                refusal.message()
+            );
+            let mut gate = lock(&inner.fleet.gate);
+            gate.refused(&refusal, std::time::Instant::now());
+            return Err(gate.closed_message());
+        }
+    };
+    let stored = stored
         .and_then(|text| decode(text.trim()))
         .map(Zeroizing::new)
         .and_then(|bytes| <[u8; 32]>::try_from(bytes.as_slice()).ok());
@@ -313,12 +336,18 @@ pub(super) fn keys(inner: &Inner) -> Result<Arc<Keys>, String> {
             let mut bytes = Zeroizing::new([0u8; 32]);
             getrandom::fill(bytes.as_mut()).map_err(|_| "The system random source failed.")?;
             let text = Zeroizing::new(encode(bytes.as_ref()));
-            store
-                .write(KEY_SERVICE, KEY_NAME, &text)
-                .map_err(|error| format!("The fleet key could not be saved: {error}"))?;
+            if let Err(error) = store.write(KEY_SERVICE, KEY_NAME, &text) {
+                let refusal = crate::model_router::credentials::CredentialRefusal::Failed(error);
+                lock(&inner.fleet.gate).refused(&refusal, std::time::Instant::now());
+                return Err(format!(
+                    "The fleet key could not be saved: {}",
+                    refusal.message()
+                ));
+            }
             AgreementKeyPair::from_private_bytes(*bytes)
         }
     };
+    lock(&inner.fleet.gate).answered();
     let card = sign_card(&signer, &fleet.public_key())?;
     let keys = Arc::new(Keys {
         signer,
@@ -327,6 +356,18 @@ pub(super) fn keys(inner: &Inner) -> Result<Arc<Keys>, String> {
     });
     *held = Some(Arc::clone(&keys));
     Ok(keys)
+}
+
+/// The fleet key's refusal that `swarm.members` shows, or none.
+pub(super) fn key_status(inner: &Inner) -> Value {
+    lock(&inner.fleet.gate).view()
+}
+
+/// Opens the fleet key's gate on the person's request and asks the store
+/// once more.
+pub(super) fn retry_key(inner: &Inner) {
+    lock(&inner.fleet.gate).retry();
+    let _ = keys(inner);
 }
 
 /// This runtime's card, once it has an identity.

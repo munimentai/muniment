@@ -1668,6 +1668,7 @@ dependencies = [
  "muniment-core",
  "muniment-search",
  "rusqlite",
+ "security-framework 3.7.0",
  "serde",
  "url",
  "uuid",

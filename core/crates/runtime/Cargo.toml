@@ -15,7 +15,7 @@ default = ["keyring"]
 # store, and prompt history outside local mode. A host without a keychain
 # turns it off, and prompts and credentials then live in files under the
 # state root.
-keyring = ["muniment-core/keyring"]
+keyring = ["muniment-core/keyring", "dep:security-framework"]
 
 [dependencies]
 muniment-attach = { path = "../attach", features = ["client"] }
@@ -24,6 +24,11 @@ muniment-search = { path = "../search" }
 serde = { version = "1", features = ["derive"] }
 url = "2"
 uuid = { version = "1", features = ["v4", "v7"] }
+
+# The keychain's status codes, so a declined prompt reads as a refusal and
+# not as a missing secret. The keyring's own macOS backend uses this crate.
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = { version = "3", optional = true }
 
 [dev-dependencies]
 # Marks the core as a test build, so no test writes the owner's runtime logs.

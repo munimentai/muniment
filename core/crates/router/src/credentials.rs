@@ -11,11 +11,36 @@ pub trait CredentialStore: Send + Sync {
     /// The stored secret, or none.
     fn read(&self, service: &str, name: &str) -> Option<String>;
 
+    /// The stored secret, none when the store holds none, or the store's
+    /// refusal. A caller never replaces a secret the store refused to read.
+    fn lookup(&self, service: &str, name: &str) -> Result<Option<String>, CredentialRefusal> {
+        Ok(self.read(service, name))
+    }
+
     /// Stores a secret, replacing the one there. The error names the store's refusal.
     fn write(&self, service: &str, name: &str, secret: &str) -> Result<(), String>;
 
     /// Removes a secret. Removing a secret that is not there succeeds.
     fn remove(&self, service: &str, name: &str) -> Result<(), String>;
+}
+
+/// Why a store answered no secret for an entry it may hold.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CredentialRefusal {
+    /// The person declined the system's access prompt, or the store may not
+    /// show one now. Another read shows the prompt again.
+    Declined(String),
+    /// The store failed. The text names the failure.
+    Failed(String),
+}
+
+impl CredentialRefusal {
+    /// The sentence that names the refusal.
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Declined(message) | Self::Failed(message) => message,
+        }
+    }
 }
 
 /// The directory under a host's state root that [`FileCredentialStore`]

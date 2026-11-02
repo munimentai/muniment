@@ -1085,3 +1085,139 @@ fn a_removed_worker_threads_stay_readable() {
     // The worker keeps its own copy.
     assert_eq!(w.posts(&thread).len(), 2);
 }
+
+/// A keychain that refuses the fleet key, as a person who declines the
+/// system prompt does, and counts each request.
+struct RefusingStore {
+    asked: std::sync::atomic::AtomicUsize,
+    writes: std::sync::atomic::AtomicUsize,
+    refusal: Mutex<Option<crate::model_router::credentials::CredentialRefusal>>,
+}
+
+impl crate::model_router::credentials::CredentialStore for RefusingStore {
+    fn read(&self, _service: &str, _name: &str) -> Option<String> {
+        None
+    }
+
+    fn lookup(
+        &self,
+        _service: &str,
+        _name: &str,
+    ) -> Result<Option<String>, crate::model_router::credentials::CredentialRefusal> {
+        self.asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        match lock(&self.refusal).clone() {
+            Some(refusal) => Err(refusal),
+            None => Ok(None),
+        }
+    }
+
+    fn write(&self, _service: &str, _name: &str, _secret: &str) -> Result<(), String> {
+        self.writes
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn remove(&self, _service: &str, _name: &str) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+struct RefusingHost(Arc<RefusingStore>);
+
+impl SwarmHost for RefusingHost {
+    fn replica_scope(&self) -> Option<ReplicaScope> {
+        None
+    }
+
+    fn steer(&self, _thread_id: &str, _text: &str) -> Option<String> {
+        None
+    }
+
+    fn answer_permission(
+        &self,
+        _run_id: &str,
+        _gate_id: &str,
+        _answer: ChatPermissionAnswer,
+    ) -> Result<(), String> {
+        Err("No runs here.".into())
+    }
+
+    fn kick_runs(&self) {}
+
+    fn credentials(&self) -> Option<Arc<dyn crate::model_router::credentials::CredentialStore>> {
+        Some(Arc::clone(&self.0) as Arc<dyn crate::model_router::credentials::CredentialStore>)
+    }
+}
+
+#[test]
+fn a_refused_fleet_key_asks_once_and_waits_for_a_retry() {
+    use crate::model_router::credentials::CredentialRefusal;
+    use std::sync::atomic::Ordering;
+    let store = Arc::new(RefusingStore {
+        asked: Default::default(),
+        writes: Default::default(),
+        refusal: Mutex::new(Some(CredentialRefusal::Declined(
+            "User canceled the operation.".into(),
+        ))),
+    });
+    let root = std::env::temp_dir().join(format!("swarm-fleet-refused-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let storage = Arc::new(Mutex::new(crate::run_events::ChatStorage {
+        journal: crate::journal::RunJournal::open(root.join("runs.sqlite3")).unwrap(),
+        cas: crate::cas::LocalCas::open(&root.join("cas")).unwrap(),
+    }));
+    let host = Arc::new(RefusingHost(Arc::clone(&store)));
+    let swarm = Swarm::open(&root, storage, host as Arc<dyn SwarmHost>).unwrap();
+    let id = uuid::Uuid::now_v7().to_string();
+    *lock(&swarm.inner.identity) = Some(Identity {
+        access: None,
+        runtime_id: id.clone(),
+        runtime_name: "refused".into(),
+        runtime_version: "1.0.0".into(),
+        form_factor: None,
+    });
+    swarm.inner.store.set_meta("runtime_id", Some(&id)).unwrap();
+    swarm.set_identity_signer(IdentitySigner::generate());
+
+    // Every caller that wants the key, many times over, reaches the store once.
+    for _ in 0..20 {
+        assert!(fleet::keys(&swarm.inner).is_err());
+        assert!(fleet::card(&swarm.inner).is_none());
+    }
+    let members = swarm
+        .operation(Operation::SwarmMembers, json!({}), None)
+        .unwrap();
+    assert_eq!(store.asked.load(Ordering::SeqCst), 1);
+    // A refused key is never replaced with a new one.
+    assert_eq!(store.writes.load(Ordering::SeqCst), 0);
+    assert_eq!(members["fleet_key"]["state"], "declined");
+
+    // A retry asks once more. A second decline closes the gate again.
+    let members = swarm
+        .operation(
+            Operation::SwarmMembers,
+            json!({"retry_fleet_key": true}),
+            None,
+        )
+        .unwrap();
+    assert_eq!(store.asked.load(Ordering::SeqCst), 2);
+    assert_eq!(members["fleet_key"]["state"], "declined");
+
+    // A retry the store answers opens the gate and makes the key.
+    *lock(&store.refusal) = None;
+    let members = swarm
+        .operation(
+            Operation::SwarmMembers,
+            json!({"retry_fleet_key": true}),
+            None,
+        )
+        .unwrap();
+    assert_eq!(members["fleet_key"], Value::Null);
+    assert!(fleet::keys(&swarm.inner).is_ok());
+    assert_eq!(store.writes.load(Ordering::SeqCst), 1);
+    assert!(swarm
+        .operation(Operation::SwarmMembers, json!({"retry": 1}), None)
+        .is_err());
+    swarm.stop();
+    let _ = std::fs::remove_dir_all(&root);
+}

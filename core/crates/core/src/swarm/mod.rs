@@ -44,6 +44,7 @@ mod credentials;
 mod directory;
 mod extensions;
 mod fleet;
+mod fleet_key;
 mod groups;
 mod hlc;
 mod keys;
@@ -586,7 +587,13 @@ impl Swarm {
             Operation::SwarmJoin => link::join(inner, body),
             Operation::SwarmLeave => link::leave(inner, body),
             Operation::SwarmMembers => {
-                empty(&body)?;
+                // `{"retry_fleet_key": true}` is the person's retry of a
+                // fleet key the keychain refused.
+                if body == json!({"retry_fleet_key": true}) {
+                    fleet::retry_key(inner);
+                } else {
+                    empty(&body)?;
+                }
                 link::members_view(inner)
             }
             Operation::SwarmAgents => {
