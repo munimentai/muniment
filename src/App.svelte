@@ -1181,9 +1181,9 @@
   // the open thread is read, and until the first thread opens at launch an
   // arrangement made without it would light that thread's result.
   let threadShown = $state(false)
-  // Until then the window names no thread and offers no starters, so a
-  // launch never shows an empty list or a new thread before the last one opens.
-  const threadsLoading = $derived(!threadShown)
+  // Until launch settles the window names no thread and offers no starters, so
+  // a launch never shows an empty list or a new thread before the last one opens.
+  const threadsLoading = $derived(!launchSettled)
   // Until the first thread view settles at launch, the title, the transcript
   // and the composer stay hidden in the loading shell, so launch never shows an
   // untitled page, a model check or a held composer before the restored thread.
@@ -1211,6 +1211,22 @@
     const timer = setTimeout(() => { agentWaitOver = true }, AGENT_LIST_WAIT_MS)
     return () => clearTimeout(timer)
   })
+  // Launch settles once the first thread opens, the agent listing says whose
+  // thread it is, and the sidebar is arranged. Until then the thread header
+  // stays neutral and the list stays empty, so the restored thread and the
+  // list appear in one frame, and an agent's thread never draws as a plain one.
+  // Past the same wait after the thread opens, launch settles regardless.
+  let launchSettled = $state(false)
+  let launchWaitOver = $state(false)
+  $effect.pre(() => {
+    if (!launchSettled && threadShown && (agentsListed || agentWaitOver || launchWaitOver) && (sidebarArranged || !tauri || launchWaitOver)) launchSettled = true
+  })
+  $effect(() => {
+    if (!threadShown || launchSettled) return
+    const timer = setTimeout(() => { launchWaitOver = true }, AGENT_LIST_WAIT_MS)
+    return () => clearTimeout(timer)
+  })
+  const shownSidebar = $derived(launchSettled ? sidebarArrangement : emptySidebar())
   // Core answers identical input with the same sections, so the same input is not asked twice in a row.
   let sidebarAsked = ''
   $effect(() => {
@@ -4028,7 +4044,7 @@
       </section>
     {/if}
     {#if workspaceMode() && desktopClientStatus}
-      <section class="workspace" inert={auth.name === 'signing-in' || !!deletingThreadId} data-testid={auth.name === 'local' ? 'local-mode' : undefined} class:macos={macOS} class:sidebar-collapsed={sidebarCollapsed} class:rail-open={railOccupant !== null} class:agents-open={agentsOpen || artifactsOpen || projectsOpen || !!fullPage} class:tools-open={!!browserPanel} class:agent-profile-open={agentProfileOpen && !!profileAgent && !agentsOpen} class:record-maximized={(recordPanelOpen || filePanelOpen) && recordMaximized} class:artifact-resizing={artifactRailPointer !== undefined || workspacePanelPointer !== undefined} class:sidebar-resizing={sidebarPointer !== undefined} class:settings-open={settingsOpen} style:--workspace-panel-width={`${workspacePanelWidth}px`} style:--agent-panel-width={`${agentPanelWidth}px`} style:--artifact-rail-width={`${artifactRailWidth}px`} style:--sidebar-column={`${sidebarCollapsed ? 0 : sidebarWidth}px`} bind:this={workspace}>
+      <section class="workspace" inert={auth.name === 'signing-in' || !!deletingThreadId} data-testid={auth.name === 'local' ? 'local-mode' : undefined} class:macos={macOS} class:sidebar-collapsed={sidebarCollapsed} class:rail-open={railOccupant !== null} class:agents-open={agentsOpen || artifactsOpen || projectsOpen || !!fullPage} class:tools-open={!!browserPanel} class:agent-profile-open={launchSettled && agentProfileOpen && !!profileAgent && !agentsOpen} class:record-maximized={(recordPanelOpen || filePanelOpen) && recordMaximized} class:artifact-resizing={artifactRailPointer !== undefined || workspacePanelPointer !== undefined} class:sidebar-resizing={sidebarPointer !== undefined} class:settings-open={settingsOpen} style:--workspace-panel-width={`${workspacePanelWidth}px`} style:--agent-panel-width={`${agentPanelWidth}px`} style:--artifact-rail-width={`${artifactRailWidth}px`} style:--sidebar-column={`${sidebarCollapsed ? 0 : sidebarWidth}px`} bind:this={workspace}>
         <header class="titlebar" data-tauri-drag-region use:overflowLabels={'.agent-chat-title span'}>
           <div class="titlebar-sidebar" data-tauri-drag-region>
             <button type="button" class="quiet side-toggle" aria-controls="sidebar" aria-expanded={!sidebarCollapsed} aria-keyshortcuts={sidebarKeyShortcut} aria-label={`${sidebarCollapsed ? 'Expand' : 'Collapse'} sidebar`} onclick={toggleSidebar}>
@@ -4105,8 +4121,8 @@
             <div class="side-scroll" use:panelScroll use:keepSidebarScroll>
             {#if folderAccess}<FolderAccessPrompt access={folderAccess} onallow={() => folderAccessWatch?.allow()} />{/if}
             {#if swarm.absence.paused}<AbsencePrompt {tauri} runtime={swarm.self[LOCAL_RUNTIME_ID] ? LOCAL_RUNTIME_ID : Object.keys(swarm.self)[0]} pausedAt={swarm.absence.paused_at} count={roster.filter(agent => agent.paused_reason === 'absence').length} onresumed={() => refreshAgents()} />{/if}
-            <SidebarSections sidebar={sidebarArrangement} row={coreRow} fresh={freshRow} library={libraryRow} query={threadSearch} pages={sidebarPages} owners={projectOwners}
-              showFresh={showFreshThread} disabled={switchLocked} expanded={expandedProjects} bind:archivedOpen
+            <SidebarSections sidebar={shownSidebar} row={coreRow} fresh={freshRow} library={libraryRow} query={threadSearch} pages={sidebarPages} owners={projectOwners}
+              showFresh={launchSettled && showFreshThread} disabled={switchLocked} expanded={expandedProjects} bind:archivedOpen
               {projectForm} bind:projectName {projectBusy} {projectError}
               onpage={openSidebarPage} ontoggleproject={selectProject} onnewthread={newProjectThread} onsettings={showProjectSettings} dragType={THREAD_DRAG} onmovethread={(threadId, projectId) => { void moveThread(threadId, projectId) }}
               onrenameproject={(id, name) => { projectForm = id; projectName = name }} onopenfolder={openProjectFolder}
@@ -4115,7 +4131,7 @@
               onretryprojects={() => refreshProjects()}>
               {#snippet footer()}
                 {#if threadSearch.trim() && !sidebarArrangement.results.length}<p class="side-empty">{loadingOlderThreads ? 'Searching threads…' : 'No matching threads.'}</p>{/if}
-                {#if !threadSearch.trim() && !sidebarArrangement.projects.length && !showFreshThread}<p class="side-empty" role="status">{threadShown && sidebarArranged ? 'No threads yet.' : 'Loading threads…'}</p>{/if}
+                {#if !threadSearch.trim() && !shownSidebar.projects.length && !(launchSettled && showFreshThread)}<p class="side-empty" role="status">{launchSettled && sidebarArranged ? 'No threads yet.' : 'Loading threads…'}</p>{/if}
                 {#if threadListError}<p class="side-empty" role="alert">{threadListError} {#if threadListErrorAction}<button disabled={loadingOlderThreads} onclick={loadOlderThreads}>Retry</button>{/if}</p>{/if}
                 {#if moreThreads && !threadListError}
                   <button type="button" class="older-threads" disabled={loadingOlderThreads} onclick={loadOlderThreads}>Older threads</button>
@@ -4617,7 +4633,7 @@
           {/if}
           {#await loadFilePanel() then module}{@const FilePanel = module.default}<FilePanel file={viewedFile} {tauri} threadId={currentThreadId} maximized={recordMaximized} ontogglemaximized={toggleRecordMaximized} onclose={closeRail} />{/await}
         {/if}
-    {#if agentProfileOpen && profileAgent && !agentsOpen}
+    {#if launchSettled && agentProfileOpen && profileAgent && !agentsOpen}
       <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
       <div class="artifact-divider agent-divider" role="separator" aria-label="Agent profile width" aria-orientation="vertical" aria-valuemin="240" aria-valuemax={agentPanelMaximum} aria-valuenow={agentPanelWidth} tabindex="0" onpointerdown={agentResize.pointerDown} onpointermove={agentResize.pointerMove} onpointerup={agentResize.pointerEnd} onpointercancel={agentResize.pointerEnd} onkeydown={agentResize.keydown}><span class="divider-grip" aria-hidden="true"><LucideIcon name="ellipsis-vertical" size={14} variant="action" /></span></div>
       {#key `${profileAgent.runtimeId}:${profileAgent.id}`}<AgentProfile agent={profileAgent} {tauri} projects={projectRows} run={agentListing.latestRuns[profileAgent.id]}

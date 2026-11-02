@@ -3813,7 +3813,7 @@ describe('thread name', () => {
     })
     render(App)
 
-    await screen.findByText('Lease renewal')
+    await screen.findByText('Lease renewal', { selector: '.thread-row-title' })
     await waitFor(() => expect(document.querySelector('#sidebar .thread-row[data-thread-id="thread-1"]')).toHaveAttribute('aria-current', 'true'))
     expect(document.querySelectorAll('.thread-row')).toHaveLength(3)
     for (const summary of threadSummaryResult) {
@@ -3892,7 +3892,7 @@ describe('thread name', () => {
   it('marks the open row with the accent edge in place of a dot, so its text takes the width', async () => {
     threadSummaryResult = [{ threadId: 'thread-1', title: 'Lease renewal', updatedAt: '2026-07-28T11:55:00Z', runtimeId: 'local' }]
     render(App)
-    await screen.findByText('Lease renewal')
+    await screen.findByText('Lease renewal', { selector: '.thread-row-title' })
     await waitFor(() => expect(document.querySelector('#sidebar .thread-row[data-thread-id="thread-1"]')).toHaveAttribute('aria-current', 'true'))
     const row = document.querySelector('#sidebar .thread-row[data-thread-id="thread-1"]')
     expect(row).toHaveAttribute('data-accent-edge')
@@ -4062,7 +4062,7 @@ describe('thread name', () => {
     await waitFor(() => expect(localStorage.getItem('muniment.open-thread')).toBe('morning'))
   })
 
-  it('marks no row current and keeps the header neutral until launch settles on the thread open at quit', async () => {
+  it('shows no row and keeps the header neutral until launch settles on the thread open at quit', async () => {
     localStorage.setItem('muniment.open-thread', 'lease')
     threadSummaryResult = [{ threadId: 'morning', title: 'Tauri Morning', updatedAt: '2026-07-28T11:55:00Z', runtimeId: 'local' }, { threadId: 'lease', title: 'Lease renewal', updatedAt: '2026-07-27T11:55:00Z', runtimeId: 'local' }]
     const held = deferred()
@@ -4078,12 +4078,15 @@ describe('thread name', () => {
     onTestFinished(() => observer.disconnect())
     render(App)
     const list = await screen.findByRole('list', { name: 'Projects list' })
-    await within(list).findByText('Tauri Morning')
     await waitFor(() => expect(opening).toBe(true))
-    expect(list.querySelector('[aria-current="true"]')).toBeNull()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    // The list waits for the thread, so no row shows beside an empty pane.
+    expect(list.querySelector('.thread-row')).toBeNull()
+    expect(within(document.getElementById('sidebar')).getByRole('status')).toHaveTextContent('Loading threads…')
     expect(screen.getByRole('heading', { level: 1, name: 'Loading threads…' })).toHaveAttribute('aria-busy', 'true')
     held.resolve()
     expect(await screen.findByRole('heading', { level: 1, name: 'Lease renewal' })).not.toHaveAttribute('aria-busy', 'true')
+    expect(within(list).getByText('Tauri Morning')).toBeInTheDocument()
     await waitFor(() => expect(list.querySelector('[aria-current="true"]')?.dataset.threadId).toBe('lease'))
     expect(current).not.toContain('morning')
   })
@@ -4134,14 +4137,67 @@ describe('thread name', () => {
       summaries.resolve()
     } else {
       summaries.resolve()
-      await screen.findByRole('heading', { level: 1, name: 'Tauri Morning' })
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_select_thread', expect.objectContaining({ threadId: 'morning-thread' })))
       await new Promise((resolve) => setTimeout(resolve, 50))
       expect(document.querySelector('#sidebar .thread-row')).toBeNull()
       expect(within(document.getElementById('sidebar')).getByRole('status')).toHaveTextContent('Loading threads…')
+      // The agent's thread waits for the listing, so it never draws as a plain thread.
+      expect(screen.getByRole('heading', { level: 1, name: 'Loading threads…' })).toHaveAttribute('aria-busy', 'true')
       answer()
     }
     await waitFor(() => expect(document.querySelectorAll('#sidebar .thread-row-title')).toHaveLength(2))
     expect([...seen]).toEqual(['Tauri Morning|Lease renewal'])
+  })
+
+  it.each(['agents first', 'threads first', 'thread open last'])('draws the restored agent thread with its chip, its profile and the list in one frame at launch with the %s', async (order) => {
+    threadSummaryResult = [
+      { threadId: 'morning-thread', title: 'Tauri Morning', updatedAt: '2026-07-28T11:55:00Z', runtimeId: 'local' },
+      { threadId: 'plain-thread', title: 'Lease renewal', updatedAt: '2026-07-27T11:55:00Z', runtimeId: 'local' },
+    ]
+    const summaries = deferred()
+    const agents = deferred()
+    const opened = deferred()
+    const fallback = invoke.getMockImplementation()
+    const machines = { appVersion: '0.2.0', deviceName: 'Laptop', selected: 'local', runtimes: [{ id: 'local', name: 'This computer', kind: 'local', status: 'online', local: true, active: true, scopes: [] }] }
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args) ? agents.promise : command === 'runtime_list' ? machines : fallback(command, args))
+    const core = window.__TAURI__.core.invoke
+    window.__TAURI__.core.invoke = (command, ...args) => command === 'chat_thread_summaries' && !args[0]?.cursor ? summaries.promise.then(() => core(command, ...args))
+      : command === 'chat_thread_open' && order === 'thread open last' ? opened.promise.then(() => core(command, ...args))
+        : core(command, ...args)
+    onTestFinished(() => { window.__TAURI__.core.invoke = core })
+    // Each state the page draws: the thread pane shows or holds, and what the
+    // header, the profile and the list show with it.
+    const frames = new Set()
+    const look = () => {
+      const header = document.querySelector('.titlebar-thread')
+      if (!header) return
+      // A held header is in the DOM but hidden, so what it holds never draws.
+      const held = header.hasAttribute('data-launch-hold')
+      const heading = header.querySelector('.thread-title-heading')?.textContent.trim() ?? ''
+      frames.add(JSON.stringify({
+        held,
+        chip: held ? null : header.querySelector('.agent-chat-title')?.textContent.trim() ?? null,
+        plain: !held && !!heading,
+        profile: !!document.querySelector('aside[aria-label="Agent profile"]'),
+        rows: document.querySelectorAll('#sidebar .thread-row').length,
+      }))
+    }
+    const observer = new MutationObserver(look)
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true })
+    onTestFinished(() => observer.disconnect())
+    render(App)
+    const answer = () => agents.resolve(agentListAnswer([{ id: 'agent-1', name: 'Morning', instructions: '', projectId: null, schedule: null, routines: [] }], { 'agent-1': 'morning-thread' }))
+    const pause = () => new Promise((resolve) => setTimeout(resolve, 50))
+    if (order === 'agents first') { answer(); await pause(); summaries.resolve() }
+    else if (order === 'threads first') { summaries.resolve(); await pause(); answer() }
+    else { summaries.resolve(); answer(); await pause(); opened.resolve() }
+    await screen.findByRole('complementary', { name: 'Agent profile' })
+    await waitFor(() => expect(document.querySelectorAll('#sidebar .thread-row')).toHaveLength(2))
+    look()
+    const settled = JSON.stringify({ held: false, chip: 'Morning', plain: false, profile: true, rows: 2 })
+    const loading = JSON.stringify({ held: true, chip: null, plain: false, profile: false, rows: 0 })
+    expect([...frames].filter((frame) => frame !== settled && frame !== loading)).toEqual([])
+    expect(frames).toContain(settled)
   })
 
   it('names an empty thread list once the first read finds no threads', async () => {
@@ -4158,21 +4214,23 @@ describe('thread name', () => {
     const thread = (id, title) => ({ thread_id: id, title, project_id: '', project_name: '', status: 'done', status_label: 'Done', home: false, pinned: false, updated_at: at })
     const project = (row) => ({ id: row.thread_id, name: row.title, kind: 'thread', triggers: '', agent_ids: [], updated_at: at, status: row.status, status_label: row.status_label, pinned: false, threads: [row] })
     let open
+    let opening = false
     const opened = new Promise((resolve) => { open = resolve })
     const core = window.__TAURI__.core.invoke
     // Core's arrangement made before the window knows the open thread calls both results unread.
     window.__TAURI__.core.invoke = (command, ...args) => command === 'sidebar_arrange'
       ? Promise.resolve({ projects: [thread('morning', 'Tauri Morning'), thread('other', 'Other result')].map(project), archived: [], results: [] })
       : command === 'chat_current_thread' ? Promise.resolve('morning')
-        : command === 'chat_thread_open' ? opened.then(() => core(command, ...args))
+        : command === 'chat_thread_open' ? (opening = true, opened.then(() => core(command, ...args)))
           : core(command, ...args)
     onTestFinished(() => { window.__TAURI__.core.invoke = core })
     render(App)
     const list = await screen.findByRole('list', { name: 'Projects list' })
     const row = async (title) => (await within(list).findByText(title, { selector: '.thread-row-title' })).closest('.thread-row')
-    await row('Tauri Morning')
+    await waitFor(() => expect(opening).toBe(true))
     await new Promise((resolve) => setTimeout(resolve, 50))
-    expect(list.querySelector('.status-ring')).toBeNull()
+    // The list waits for the thread, so no row lights before it opens.
+    expect(list.querySelector('.thread-row')).toBeNull()
     open()
     await waitFor(async () => expect((await row('Other result')).querySelector('.status-ring')).toHaveAttribute('data-phase', 'lit'))
     expect((await row('Tauri Morning')).querySelector('.status-ring')).toBeNull()
