@@ -1354,7 +1354,10 @@ fn remove_agent(profile: &Path, id: &str, remove_memory: bool) -> Result<Deleted
     }
     fs::remove_file(directory.join("agent.md")).map_err(|_| "The agent could not be deleted.")?;
     crate::agent_replays::remove_all(profile, id)?;
-    let folder_kept = remove_folder(&directory);
+    // The folder's name record goes with the folder, so the index never
+    // names a folder that is gone. A kept folder keeps its record.
+    let folder_kept =
+        crate::workspace_names::remove_recorded(profile, &root(profile)?, id, remove_folder)?;
     if remove_memory {
         match fs::remove_dir_all(memory.join(id)) {
             Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
@@ -2779,9 +2782,21 @@ mod tests {
         let (root_dir, profile) = profile();
         let (agent, folder) = saved(&profile, "Failure Probe");
         run_output(&folder);
+        let root = root(&profile).unwrap();
+        assert!(crate::workspace_names::recorded(&profile, &root, &agent.id)
+            .unwrap()
+            .is_some());
         let deleted = delete_agent(&profile, &agent.id, false).unwrap();
         assert_eq!(deleted, Deleted::default());
         assert!(!folder.exists());
+        // The delete forgets the folder's name record with the folder.
+        assert_eq!(
+            crate::workspace_names::recorded(&profile, &root, &agent.id).unwrap(),
+            None
+        );
+        assert!(crate::workspace_names::recorded_names(&profile, &root)
+            .unwrap()
+            .is_empty());
         fs::remove_dir_all(root_dir).unwrap();
     }
 
@@ -2810,6 +2825,13 @@ mod tests {
         );
         assert!(folder.join(".muniment/tasks/run-1/output.txt").exists());
         assert!(list(&profile).unwrap().agents.is_empty());
+        // The kept folder keeps its name record, so the start sweep finds it.
+        assert_eq!(
+            crate::workspace_names::recorded(&profile, &root(&profile).unwrap(), &agent.id)
+                .unwrap()
+                .as_deref(),
+            folder.file_name().and_then(|name| name.to_str())
+        );
         fs::remove_dir_all(root_dir).unwrap();
     }
 
