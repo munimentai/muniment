@@ -32,6 +32,23 @@ it('loads and replaces a profile, then saves and deletes a sourced fact', async 
   await waitFor(() => expect(invoke).toHaveBeenCalledWith('memory_fact_delete', { id: 'fact-1' }))
 })
 
+it('keeps Save profile off while the profile matches the saved one', async () => {
+  const invoke = vi.fn(async (cmd) => cmd === 'memory_profile_read' ? '# Profile\n\n## Name\n\nSam\n' : cmd === 'memory_facts' ? [] : null)
+  render(MemorySection, { tauri: { invoke }, part: 'profile' })
+  const name = screen.getByLabelText('Name')
+  await waitFor(() => expect(name).toHaveValue('Sam'))
+  const save = screen.getByRole('button', { name: 'Save profile' })
+  expect(save).toBeDisabled()
+  await fireEvent.input(name, { target: { value: 'Alex' } })
+  expect(save).toBeEnabled()
+  await fireEvent.input(name, { target: { value: 'Sam' } })
+  expect(save).toBeDisabled()
+  await fireEvent.input(name, { target: { value: 'Alex' } })
+  await fireEvent.click(save)
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('memory_profile_save', { content: expect.stringContaining('## Name\n\nAlex') }))
+  await waitFor(() => expect(save).toBeDisabled())
+})
+
 it('starts agent creation in chat without a manual form', async () => {
   const invoke=vi.fn(async()=>({agents:[],state:{runs:{},threads:{}}}))
   const oncreate=vi.fn()

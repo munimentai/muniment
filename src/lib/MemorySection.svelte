@@ -78,6 +78,9 @@
   }
   const memory = { invoke: (action, args = {}) => agentId ? tauri.invoke("agent_memory", { id: agentId, action, fact: args.fact, factId: args.id }) : tauri.invoke(action, args) }
   let profile = $state(parseProfile())
+  // Save profile waits for a change from the saved profile.
+  let savedProfile = $state(serializeProfile(parseProfile()))
+  const profileChanged = $derived(serializeProfile(profile) !== savedProfile)
   let facts = $state([])
   let filter = $state('')
   let showDeleted = $state(false)
@@ -208,6 +211,7 @@
     try {
       const [text, rows] = await Promise.all([agentId ? Promise.resolve('') : memory.invoke('memory_profile_read'), memory.invoke('memory_facts')])
       profile = parseProfile(text)
+      savedProfile = serializeProfile(profile)
       facts = rows
       loaded = true
     } catch (e) { status = String(e) }
@@ -215,7 +219,8 @@
   })
   async function saveProfile() {
     busy = true
-    try { await memory.invoke('memory_profile_save', { content: serializeProfile(profile) }); status = 'Profile saved. New replies use these preferences.' }
+    const content = serializeProfile(profile)
+    try { await memory.invoke('memory_profile_save', { content }); savedProfile = content; status = 'Profile saved. New replies use these preferences.' }
     catch (e) { status = String(e) }
     finally { busy = false }
   }
@@ -295,7 +300,7 @@
     <PageHead intro={part === 'profile' ? 'Your profile guides replies.' : 'Your profile and saved facts guide replies.'}>
       {#snippet actions()}
         <label class="import">Load Markdown<input type="file" accept=".md,.txt,text/plain,text/markdown" disabled={!loaded || busy} onchange={importProfile} /></label>
-        <Button variant="primary" disabled={!loaded || busy} onclick={saveProfile}>Save profile</Button>
+        <Button variant="primary" disabled={!loaded || busy || !profileChanged} onclick={saveProfile}>Save profile</Button>
       {/snippet}
     </PageHead>
     <Group heading="About you" info="Saved in memory/profile.md.">
