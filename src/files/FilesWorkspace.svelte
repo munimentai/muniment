@@ -250,7 +250,7 @@
     <button role="menuitem" disabled={!selection.size} onclick={() => copyPaths(false)}>Copy Path</button>
     <button role="menuitem" disabled={!selection.size} onclick={() => copyPaths(true)}>Copy Relative Path</button>
     <hr />
-    <button role="menuitem" class="delete" disabled={busy || !selection.size} onclick={() => { deleting = picked(); menu = null }}>Delete{selection.size > 1 ? ` ${selection.size} items` : ''}…</button>
+    <button role="menuitem" class="delete" data-danger disabled={busy || !selection.size} onclick={() => { deleting = picked(); menu = null }}>Delete{selection.size > 1 ? ` ${selection.size} items` : ''}…</button>
   </div>
 {/if}
 {#if deleting}<ConfirmDialog title={`Delete ${deleting.length} ${deleting.length === 1 ? 'item' : 'items'}?`} cancelLabel="Cancel" confirmLabel="Move to Trash" destructive onDecision={yes => yes ? run('trash',deleting) : deleting = null}><p>The selected items will move to the system Trash.</p>{#if error}<p role="alert">{error}</p>{/if}</ConfirmDialog>{/if}

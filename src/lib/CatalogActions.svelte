@@ -44,7 +44,7 @@
       {#each extraActions as action}<button role="menuitem" disabled={busy} onclick={() => choose(action.id)}><LucideIcon name={action.icon} size={16}/>{action.label}</button>{/each}
       {#if allowRename}<button role="menuitem" onclick={async () => { value = name; mode = 'rename'; await tick(); menu.querySelector('input')?.select() }}><LucideIcon name="pencil" size={16}/>Rename</button>{/if}
       {#if allowArchive}<button role="menuitem" onclick={() => choose(archived ? 'restore' : 'archive')} disabled={busy}><LucideIcon name="archive" size={16}/>{archived ? 'Restore' : 'Archive'}</button>{/if}
-      {#if allowDelete}<button role="menuitem" disabled={busy} onclick={() => confirmDelete ? mode = 'delete' : choose('delete')}><LucideIcon name="trash-2" size={16}/>Delete</button>{/if}
+      {#if allowDelete}<button role="menuitem" data-danger disabled={busy} onclick={() => confirmDelete ? mode = 'delete' : choose('delete')}><LucideIcon name="trash-2" size={16}/>Delete</button>{/if}
     {:else if mode === 'rename'}
       <header><strong>Rename</strong><PopupClose label="Close rename" disabled={busy} onclick={close} /></header>
       <form onsubmit={event => { event.preventDefault(); void choose('rename') }}>
@@ -66,6 +66,8 @@
   .catalog-actions {padding:4px;color:var(--muted);flex:none}
   .catalog-menu {position:fixed;z-index:100;width:220px;padding:6px;box-sizing:border-box;}
   .catalog-menu > button {width:100%;text-align:left}
+  /* Delete is the menu's destructive item and reads in the danger color, as the native popup draws it too. */
+  .catalog-menu > button[data-danger] {color:var(--danger)}
   p {margin:8px;overflow-wrap:anywhere;font:var(--text-13) var(--font-human)} .muted {color:var(--muted)}
   form {padding:6px} label {font:var(--text-13) var(--font-human)} input {box-sizing:border-box;width:100%;margin:6px 0;padding:6px;color:var(--ink);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-control)} .buttons {display:flex;gap:4px}
 </style>

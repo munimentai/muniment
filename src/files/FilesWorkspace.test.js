@@ -61,6 +61,8 @@ it('creates a file inside the selected folder and protects bulk deletion with co
   const readme=screen.getByRole('treeitem',{name:'README.md'})
   await fireEvent.click(readme,{ctrlKey:true})
   await fireEvent.contextMenu(readme)
+  // Delete is the menu's one destructive item, marked so the native popup draws it in the danger color too.
+  expect(screen.getAllByRole('menuitem').filter(item=>item.hasAttribute('data-danger')).map(item=>item.textContent)).toEqual(['Delete 2 items…'])
   await fireEvent.click(screen.getByRole('menuitem',{name:'Delete 2 items…'}))
   expect(screen.getByRole('dialog',{name:'Delete 2 items?'})).toBeInTheDocument()
   expect(invoke.mock.calls.some(([c,a])=>c==='workspace_file_action' && a.action==='trash')).toBe(false)

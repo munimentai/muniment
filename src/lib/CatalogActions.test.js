@@ -46,3 +46,12 @@ it('hands Delete to its owner when the owner confirms it',async()=>{
  expect(onaction).toHaveBeenCalledWith('delete','')
  expect(screen.queryByRole('button',{name:'Confirm delete'})).not.toBeInTheDocument()
 })
+it('draws Delete, the one destructive item, in the danger color on agent, artifact and creation cards',async()=>{
+ const source=(await import('./CatalogActions.svelte?raw')).default
+ render(CatalogActions,{name:'Scout',confirmDelete:false,extraActions:[{id:'profile',label:'Open profile',icon:'user'}],onaction:vi.fn()})
+ await fireEvent.click(screen.getByRole('button',{name:'Actions for Scout'}))
+ const remove=screen.getByRole('menuitem',{name:'Delete'})
+ expect(remove).toHaveAttribute('data-danger')
+ expect(screen.getAllByRole('menuitem').filter(item=>item.hasAttribute('data-danger'))).toEqual([remove])
+ expect(source).toMatch(/\.catalog-menu > button\[data-danger\]\s*\{\s*color:\s*var\(--danger\)\s*\}/)
+})
