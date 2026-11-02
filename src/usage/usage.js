@@ -83,10 +83,16 @@ export function providerColor(provider) {
 }
 
 // A family's name, else the catalog's name for a provider such as a local server.
-export function providerLabel(provider) {
+// A provider the catalog names keeps that name. A custom endpoint takes the
+// name the inventory gives it, and one the inventory no longer lists, such as
+// a deleted endpoint, reads as its id.
+export function providerLabel(provider, inventory = null) {
   if (!provider) return 'Unknown'
   const family = familyName(provider)
-  return family !== provider ? family : providerName(provider) || provider
+  if (family !== provider) return family
+  const named = providerName(provider)
+  if (named && named !== provider) return named
+  return inventory?.providers?.find((entry) => entry.id === provider)?.name || provider
 }
 
 const WINDOW_NAMES = { five_hour: '5-hour', daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly', other: 'Window' }
@@ -193,9 +199,9 @@ export function rowLabel(row, breakdown, inventory = null) {
 }
 
 // Every provider the page can filter by: those with usage and those with a window.
-export function providerOptions(summary) {
+export function providerOptions(summary, inventory = null) {
   const ids = new Set([...(summary?.providers ?? []), ...(summary?.accounts ?? []).map((account) => account.provider)])
-  return [{ value: '', label: 'All providers' }, ...[...ids].sort().map((id) => ({ value: id, label: providerLabel(id), provider: id }))]
+  return [{ value: '', label: 'All providers' }, ...[...ids].sort().map((id) => ({ value: id, label: providerLabel(id, inventory), provider: id }))]
 }
 
 const UNMETERED = { local: 'No limit', key: 'Billed by use', pending: 'Allowance pending', unread: 'Allowance unavailable' }

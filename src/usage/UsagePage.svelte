@@ -95,7 +95,7 @@
         <span class="sep" aria-hidden="true">›</span>
         <span class="filter" use:fullName><ChoiceField label="Machine" hideLabel inline={false} value={machine} options={machineOptions} onchange={(value) => { machine = value; if (breakdown === 'machine' && value) breakdown = 'model' }} /></span>
         <span class="sep" aria-hidden="true">›</span>
-        <span class="filter" use:fullName><ChoiceField label="Provider" hideLabel inline={false} value={provider} options={providerOptions(summary)} onchange={(value) => { provider = value }} /></span>
+        <span class="filter" use:fullName><ChoiceField label="Provider" hideLabel inline={false} value={provider} options={providerOptions(summary, inventory)} onchange={(value) => { provider = value }} /></span>
       </div>
       <div class="controls">
         <SegmentedField label="Usage view" hideLabel value={view} options={USAGE_VIEWS} onchange={(value) => { view = value }} />
@@ -125,7 +125,7 @@
       </dl>
       {#if view === 'cost'}<p class="estimate">API estimate from each model's list price. Subscriptions bill differently.<InfoTip text="Each finished run's receipt carries the catalog price of its tokens. A run that failed or stopped keeps no receipt." label="About the estimate" /></p>{/if}
       <Group heading={view === 'cost' ? 'Cost by provider' : 'Tokens by provider'} plain>
-        {#if summary.totals.runs}<UsageChart series={summary.series} bucket={summary.bucket} {view} />{:else}<p class="note">No finished runs in this range.</p>{/if}
+        {#if summary.totals.runs}<UsageChart series={summary.series} bucket={summary.bucket} {view} {inventory} />{:else}<p class="note">No finished runs in this range.</p>{/if}
       </Group>
       <Group heading="Breakdown" plain>
         {#snippet actions()}<SegmentedField label="Breakdown" hideLabel value={breakdown} options={breakdowns} onchange={(value) => { breakdown = value }} />{/snippet}
