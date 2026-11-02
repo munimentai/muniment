@@ -8,7 +8,7 @@ use serde_json::json;
 use crate::active_run::RunRegistry;
 use crate::attachment::{prepare_pi_images, AttachmentDeliveryError};
 use crate::chat_launch::ChatGrant;
-use crate::engine::{AgentEngine, ContextUsage, OpenError, PiOpen, PiRpcEngine};
+use crate::engine::{AgentEngine, ContextUsage, OpenError, PiLaunch, PiOpen, PiRpcEngine};
 use crate::journal::reducer::ChatProjector;
 use crate::journal::{pi_translation::model_stream_delta_payload, split_model_stream_delta};
 use crate::pi_launch::{pi_launch_config, PiLaunchBoundaries, PiLaunchError};
@@ -111,6 +111,12 @@ pub enum IdleStop {
     Limit,
     /// The runtime drains or stops.
     Shutdown,
+    /// A new process took its slot, as a read or a reply found it unfit.
+    Replaced,
+    /// Its slot left the slot list, as more slots were kept than the limit.
+    Evicted,
+    /// A read started it and it could not wait for its thread's next reply.
+    Unparked,
 }
 
 impl IdleStop {
@@ -120,6 +126,9 @@ impl IdleStop {
             Self::Deleted => "deleted",
             Self::Limit => "limit",
             Self::Shutdown => "shutdown",
+            Self::Replaced => "replaced",
+            Self::Evicted => "evicted",
+            Self::Unparked => "unparked",
         }
     }
 }
@@ -246,20 +255,25 @@ impl PiProcesses {
         };
         slots.push((thread.to_owned(), Arc::clone(&slot)));
         let mut index = 0;
+        let mut evicted = Vec::new();
         while slots.len() > self.slots.idle && index + 1 < slots.len() {
             // A slot a run holds stays; its process ends with the run's next start.
             let idle = slots[index]
                 .1
                 .try_lock()
-                .map(|mut process| {
-                    *process = None;
-                })
-                .is_ok();
-            if idle {
-                slots.remove(index);
-            } else {
-                index += 1;
+                .map(|mut process| process.take())
+                .ok();
+            match idle {
+                Some(process) => {
+                    let (held, _) = slots.remove(index);
+                    evicted.extend(process.map(|process| (held, process)));
+                }
+                None => index += 1,
             }
+        }
+        drop(slots);
+        for (held, process) in evicted {
+            stop_idle(&held, process, IdleStop::Evicted);
         }
         slot
     }
@@ -350,6 +364,20 @@ fn stop_idle(thread: &str, mut process: PiRuntime, reason: IdleStop) {
     );
 }
 
+/// Stops the idle process a reply found in its slot and cannot take.
+pub fn stop_replaced(run_id: &str, mut process: PiRuntime) {
+    let _ = process.supervisor.shutdown();
+    log_replaced(run_id);
+}
+
+/// Names the idle process a reply's reuse check stopped.
+pub fn log_replaced(run_id: &str) {
+    crate::runtime_eprintln!(
+        "muniment-runtime: pi_reuse stopped reason={} run_id={run_id}",
+        IdleStop::Replaced.as_str()
+    );
+}
+
 /// Stops each marked idle process whose window ended, then the oldest ones
 /// past the parked limit, and sleeps until the next window ends or a run
 /// frees its slot.
@@ -406,7 +434,7 @@ pub fn open_thread_conversation(
     app: &impl PiLaunchBoundaries,
     grant: &ChatGrant,
     locator: &PiSessionLocator,
-) -> Result<(PiRuntime, Arc<PiRpcTransport>), String> {
+) -> Result<(PiRuntime, Arc<PiRpcTransport>, PiLaunch), String> {
     let root = app
         .pi_install_root()
         .map_err(|_| "The agent runtime is not installed.".to_string())?;
@@ -422,11 +450,12 @@ pub fn open_thread_conversation(
     })?;
     let engine = PiRpcEngine::new(app.pi_session_root().ok());
     match engine.open(PiOpen {
-        config,
+        config: config.clone(),
         cancelled: &AtomicBool::new(false),
         observe: &mut |_| {},
     }) {
-        Ok(opened) => Ok(opened),
+        // The launch is read once Pi is ready, as a reply reads its own.
+        Ok((process, transport)) => Ok((process, transport, PiLaunch::ready(config))),
         Err(OpenError::Spawn(_)) => Err("The agent runtime could not start.".into()),
         Err(_) => Err("The agent runtime did not become ready.".into()),
     }
@@ -435,8 +464,10 @@ pub fn open_thread_conversation(
 /// Reads a thread's context usage from the process that holds its saved
 /// conversation: the active run's when a run is in this thread, the idle
 /// process the thread's last run left when it holds this conversation, or a
-/// process this read starts. A started process stays in the thread's slot
-/// for the next read. A thread with no saved conversation answers `None`.
+/// process this read starts. A started process waits in the thread's slot,
+/// marked for the thread's next read or reply, so the reaper stops it like
+/// any idle process. One that cannot be marked stops after the read. A
+/// thread with no saved conversation answers `None`.
 #[allow(clippy::too_many_arguments)]
 pub fn thread_context_usage(
     app: &impl PiLaunchBoundaries,
@@ -473,6 +504,9 @@ pub fn thread_context_usage(
             .session_locator(&session_root, RPC_TIMEOUT.min(Duration::from_secs(5)))
             .is_ok_and(|held| held == locator)
     };
+    // Dropped after the slot's lock, so the reaper sees a process this read
+    // leaves marked.
+    let _reaper_wake = ReaperWake;
     let runtime = processes.slot(thread_id);
     let usage = match runtime.try_lock() {
         Ok(mut slot) => {
@@ -483,15 +517,24 @@ pub fn thread_context_usage(
             {
                 return engine.context_usage(&transport).map(Some);
             }
-            *slot = None;
-            let (process, transport) = open_thread_conversation(app, &grant()?, &locator)?;
-            *slot = Some(process);
-            engine.context_usage(&transport).map(Some)
+            if let Some(process) = slot.take() {
+                stop_idle(thread_id, process, IdleStop::Replaced);
+            }
+            let (mut process, transport, launch) =
+                open_thread_conversation(app, &grant()?, &locator)?;
+            let usage = engine.context_usage(&transport).map(Some);
+            engine.park(&mut process, launch);
+            if process.reuse.is_some() {
+                *slot = Some(process);
+            } else {
+                stop_idle(thread_id, process, IdleStop::Unparked);
+            }
+            usage
         }
         Err(_) => {
-            let (mut process, transport) = open_thread_conversation(app, &grant()?, &locator)?;
+            let (process, transport, _) = open_thread_conversation(app, &grant()?, &locator)?;
             let usage = engine.context_usage(&transport).map(Some);
-            engine.stop(&mut process);
+            stop_idle(thread_id, process, IdleStop::Unparked);
             usage
         }
     };
@@ -747,10 +790,13 @@ mod tests {
                 IdleStop::Idle,
                 IdleStop::Deleted,
                 IdleStop::Limit,
-                IdleStop::Shutdown
+                IdleStop::Shutdown,
+                IdleStop::Replaced,
+                IdleStop::Evicted,
+                IdleStop::Unparked
             ]
             .map(IdleStop::as_str),
-            ["idle", "deleted", "limit", "shutdown"]
+            ["idle", "deleted", "limit", "shutdown", "replaced", "evicted", "unparked"]
         );
         let processes = PiProcesses::with_idle_limit(4);
         // A thread with no slot gets none from a stop.

@@ -393,6 +393,7 @@ fn run_runtime_activation_inner(
     };
     let _ = wake_tx.send(ActivationWake::ListenerFinished);
     state.stop_remote_route();
+    state.stop_idle_processes();
     let _ = command_tx.send(RetentionScheduleCommand::Stop);
     if let Some(retention_thread) = retention_thread {
         retention_thread

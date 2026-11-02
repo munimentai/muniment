@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use muniment_core::active_run::RunRegistry;
 use muniment_core::attach::RuntimeActivityRegistry;
-use muniment_core::pi_execution::PiProcesses;
+use muniment_core::pi_execution::{IdleStop, PiProcesses};
 use muniment_core::run_events::SharedStorage;
 use muniment_core::session_thread::SessionThread;
 use muniment_core::sidecar::pi_install::PiArtifactDescriptor;
@@ -138,6 +138,54 @@ impl Harness {
                 (text == prompt).then(|| std::path::PathBuf::from(folder))
             })
             .unwrap_or_else(|| panic!("no folder answered {prompt}"))
+    }
+
+    /// The runtime's attach boundaries over this harness's slots, in local mode.
+    fn boundaries(&self) -> muniment_runtime_core::RuntimeAttachBoundaries {
+        std::fs::create_dir_all(&self.temporary.config).unwrap();
+        std::fs::write(
+            self.temporary
+                .config
+                .join(muniment_core::local_mode::LOCAL_MODE_MARKER),
+            [],
+        )
+        .unwrap();
+        muniment_runtime_core::RuntimeAttachBoundaries::new(
+            Arc::clone(&self.storage),
+            self.active.clone(),
+            self.temporary.profile.clone(),
+            self.temporary.config.clone(),
+            self.processes.clone(),
+            Arc::new(
+                muniment_core::memory_runtime::ApplicationMemoryRuntime::new(
+                    self.temporary.config.clone(),
+                    self.temporary.profile.join("memory"),
+                ),
+            ),
+            self.activity.clone(),
+            RuntimeHost::default(),
+            muniment_core::attach::SignedWorkspaceApproval::default(),
+            Arc::new(SessionThread::default()),
+            muniment_runtime_core::open_companion_registry(&self.temporary.profile).unwrap(),
+        )
+        .with_pi_artifact(self.descriptor)
+    }
+
+    /// Reads a thread's context usage, as opening the thread does, and
+    /// waits for the answer.
+    fn read_context(&self, thread: &str) {
+        use muniment_core::run_start::RunAttachBoundaries;
+
+        let boundaries = self.boundaries();
+        let deadline = Instant::now() + CI_WAIT;
+        loop {
+            let snapshot = boundaries.thread_context_usage("local", thread).unwrap();
+            if !snapshot.reading && snapshot.usage.is_some() {
+                return;
+            }
+            assert!(Instant::now() < deadline, "{snapshot:?}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     fn agent_directory(&self) -> std::path::PathBuf {
@@ -458,4 +506,103 @@ fn the_oldest_idle_process_stops_past_the_parked_limit() {
         harness.prompt_process("three")
     );
     assert_eq!(harness.spawns().len(), 3);
+}
+
+/// A thread with a saved conversation and no process: its first reply ran,
+/// and its process stopped since.
+fn thread_without_process(harness: &mut Harness) -> String {
+    let first = harness.reply(None, "first");
+    assert_eq!(first.phase, "complete");
+    harness.processes.stop_all(IdleStop::Shutdown);
+    assert!(ends(&harness.prompt_process("first")));
+    assert!(harness.processes.is_empty());
+    first.thread
+}
+
+#[test]
+fn a_context_read_leaves_its_process_marked_for_the_next_reply() {
+    let _environment = ENVIRONMENT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut harness = Harness::new("pi-reuse-context");
+    let thread = thread_without_process(&mut harness);
+
+    // The thread's memory extension exists while the read starts, so the
+    // read's launch is the one the thread's next reply starts with.
+    let memory = muniment_core::memory_runtime::ApplicationMemoryRuntime::new(
+        harness.temporary.config.clone(),
+        harness.temporary.profile.join("memory"),
+    );
+    memory
+        .open_session(
+            "context-read",
+            &thread,
+            muniment_core::memory_index::ModelMemoryCapability {
+                minimum_cacheable_prefix_characters: local_grant()
+                    .minimum_cacheable_prefix_characters,
+            },
+        )
+        .unwrap();
+    harness.read_context(&thread);
+    memory.close_session("context-read");
+
+    // The read's process waits marked in the thread's slot, never unmarked.
+    assert_eq!(harness.spawns().len(), 2, "{:?}", harness.spawns());
+    let read = harness.spawns().last().unwrap().clone();
+    assert!(alive(&read));
+    assert_eq!(harness.processes.len(), 1);
+    assert_eq!(harness.processes.parked(), 1);
+
+    // The next read and the next reply take that process.
+    harness.read_context(&thread);
+    assert_eq!(harness.spawns().len(), 2);
+    assert_eq!(harness.reply(Some(&thread), "second").phase, "complete");
+    assert_eq!(harness.prompt_process("second"), read);
+    assert_eq!(harness.spawns().len(), 2);
+    assert_eq!(harness.processes.parked(), 1);
+}
+
+#[test]
+fn a_reply_replaces_a_context_reads_process_whose_launch_differs() {
+    let _environment = ENVIRONMENT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut harness = Harness::new("pi-reuse-context-replace");
+    let thread = thread_without_process(&mut harness);
+
+    // With no memory extension at the read, the read's launch differs from
+    // the reply's. The reply stops the read's process and starts its own.
+    harness.read_context(&thread);
+    let read = harness.spawns().last().unwrap().clone();
+    assert_eq!(harness.processes.parked(), 1);
+    assert_eq!(harness.reply(Some(&thread), "second").phase, "complete");
+    assert_ne!(harness.prompt_process("second"), read);
+    assert!(ends(&read), "the replaced process still runs");
+    assert_eq!(harness.spawns().len(), 3);
+    assert_eq!(harness.processes.parked(), 1);
+}
+
+#[test]
+fn a_context_reads_process_stops_when_its_window_ends() {
+    let _environment = ENVIRONMENT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let processes = PiProcesses::with_reaper(4, Duration::from_millis(1000), 3);
+    let mut harness = Harness::with_processes("pi-reuse-context-idle", processes);
+    let thread = thread_without_process(&mut harness);
+
+    harness.read_context(&thread);
+    let read = harness.spawns().last().unwrap().clone();
+    assert_eq!(harness.spawns().len(), 2);
+    assert_eq!(harness.processes.parked(), 1);
+    assert!(ends(&read), "the context read's process still runs");
+    assert_eq!(harness.processes.parked(), 0);
+
+    // Shutdown stops a read's process like any idle one.
+    harness.read_context(&thread);
+    let again = harness.spawns().last().unwrap().clone();
+    assert_ne!(again, read);
+    assert!(alive(&again));
+    harness.processes.stop_all(IdleStop::Shutdown);
+    assert!(ends(&again), "shutdown left the context read's process");
 }

@@ -674,9 +674,12 @@ fn coordinate_work(
     // last reply left idle only when that process answers as a new one
     // would; any other process stops before this run's own starts.
     diagnostics.startup_stage("runtime_reset");
-    let mut idle = runtime
-        .take()
-        .filter(|_| resume.is_none() && compaction.is_none());
+    let mut idle = runtime.take();
+    if resume.is_some() || compaction.is_some() {
+        if let Some(process) = idle.take() {
+            crate::pi_execution::stop_replaced(&run_id, process);
+        }
+    }
     let opening = {
         diagnostics.startup_stage("grant_renewal");
         if let Err(error) = crate::chat_launch::renew_grant_if_needed(&mut grant, || {
@@ -762,6 +765,7 @@ fn coordinate_work(
                             "muniment-runtime: run_id={run_id} pi_reuse miss={}",
                             miss.as_str()
                         );
+                        crate::pi_execution::log_replaced(&run_id);
                         None
                     }
                 }
