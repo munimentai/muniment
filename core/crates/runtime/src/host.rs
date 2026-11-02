@@ -285,9 +285,18 @@ pub fn platform_credentials() -> Arc<dyn CredentialStore> {
     if muniment_core::state_root::keychain_allowed() {
         // One store per process, so every host shares what it remembers of
         // the keychain's refusals.
+        // The runtime's start forgets the declines an earlier start shared.
         static KEYCHAIN: std::sync::OnceLock<Arc<KeyringCredentialStore>> =
             std::sync::OnceLock::new();
-        KEYCHAIN.get_or_init(Arc::default).clone()
+        KEYCHAIN
+            .get_or_init(|| {
+                let store = KeyringCredentialStore::sharing_declines();
+                if let Some(shared) = &store.shared {
+                    shared.clear();
+                }
+                Arc::new(store)
+            })
+            .clone()
     } else {
         Arc::new(FileCredentialStore::new(
             muniment_core::state_root::test_credentials_directory(),
@@ -295,21 +304,57 @@ pub fn platform_credentials() -> Arc<dyn CredentialStore> {
     }
 }
 
+/// The store the `secret get` command answers Pi from: the platform
+/// keychain, holding back a service the runtime or an earlier command saw
+/// the keychain decline, so a declined endpoint key raises the prompt once
+/// until the person retries or the runtime starts again. In a test run it is
+/// [`platform_credentials`]'s file store.
+#[cfg(feature = "keyring")]
+pub fn secret_command_credentials() -> Arc<dyn CredentialStore> {
+    if muniment_core::state_root::keychain_allowed() {
+        Arc::new(KeyringCredentialStore::sharing_declines())
+    } else {
+        platform_credentials()
+    }
+}
+
+/// The folder under the state root where the runtime and the commands it
+/// starts share the keychain's declines.
+pub const KEYCHAIN_DECLINES_DIRECTORY_NAME: &str = "keychain-declines";
+
 /// The platform keychain through the system keyring. A test run that opens
 /// it panics unless it is marked as a keychain test.
 ///
 /// The store remembers each entry the keychain refused. A declined prompt
 /// holds until the person retries or the process ends, and any other failure
 /// holds for a backoff, so a refused entry never raises the prompt in a loop.
-/// A write never replaces an entry whose read the keychain refused.
+/// A write never replaces an entry whose read the keychain refused. A store
+/// that shares its declines also holds back a service another process saw
+/// the keychain decline.
 #[cfg(feature = "keyring")]
 #[derive(Default)]
 pub struct KeyringCredentialStore {
     refusals: muniment_core::model_router::credentials::RefusalMemory,
+    shared: Option<muniment_core::model_router::credentials::SharedDeclines>,
 }
 
 #[cfg(feature = "keyring")]
 impl KeyringCredentialStore {
+    /// A store that shares its declines under the state root.
+    fn sharing_declines() -> Self {
+        Self::sharing_declines_in(
+            muniment_core::state_root::state_directory()
+                .map(|state| state.join(KEYCHAIN_DECLINES_DIRECTORY_NAME)),
+        )
+    }
+
+    fn sharing_declines_in(directory: Option<PathBuf>) -> Self {
+        Self {
+            refusals: Default::default(),
+            shared: directory.map(muniment_core::model_router::credentials::SharedDeclines::new),
+        }
+    }
+
     fn ask(
         &self,
         service: &str,
@@ -317,6 +362,9 @@ impl KeyringCredentialStore {
         get: impl FnOnce() -> Result<String, muniment_core::keyring::Error>,
     ) -> Result<Option<String>, CredentialRefusal> {
         if let Some(refusal) = self.refusals.held(service, name, std::time::Instant::now()) {
+            return Err(refusal);
+        }
+        if let Some(refusal) = self.shared.as_ref().and_then(|shared| shared.held(service)) {
             return Err(refusal);
         }
         match get() {
@@ -336,6 +384,9 @@ impl KeyringCredentialStore {
                 );
                 self.refusals
                     .note(service, name, &refusal, std::time::Instant::now());
+                if let Some(shared) = &self.shared {
+                    shared.note(service, &refusal);
+                }
                 Err(refusal)
             }
         }
@@ -394,11 +445,18 @@ impl CredentialStore for KeyringCredentialStore {
     }
 
     fn refusals(&self) -> Vec<muniment_core::model_router::credentials::RefusedEntry> {
-        self.refusals.list()
+        let mut refused = self.refusals.list();
+        if let Some(shared) = &self.shared {
+            refused.extend(shared.list());
+        }
+        refused
     }
 
     fn retry_refused(&self) {
         self.refusals.clear();
+        if let Some(shared) = &self.shared {
+            shared.clear();
+        }
     }
 }
 
@@ -478,6 +536,59 @@ mod keyring_store_tests {
         assert!(store.refusals().is_empty());
         assert!(store.put("ai.muniment.hooks", "hook-1", || Ok(())).is_ok());
         let _ = declined();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_declined_endpoint_key_asks_the_keychain_once_across_secret_commands_until_a_retry() {
+        // Each `secret get` Pi runs is a new process with a new store, and
+        // they share the runtime's folder of declines, a temporary one here.
+        let directory = muniment_core::state_root::test_root()
+            .join(format!("keychain-declines-{}", uuid::Uuid::new_v4()));
+        let runtime = KeyringCredentialStore::sharing_declines_in(Some(directory.clone()));
+        let command = || KeyringCredentialStore::sharing_declines_in(Some(directory.clone()));
+        let asked = Cell::new(0);
+        let ask = |answer: fn() -> Result<String, muniment_core::keyring::Error>| {
+            command().ask(
+                crate::models::endpoint_secrets::SERVICE,
+                "custom-proxy",
+                || {
+                    asked.set(asked.get() + 1);
+                    answer()
+                },
+            )
+        };
+        for _ in 0..10 {
+            assert!(ask(|| Err(user_canceled())).is_err());
+        }
+        assert_eq!(asked.get(), 1);
+        // The runtime names the decline for Settings, and holds the service
+        // back itself.
+        let refused = runtime.refusals();
+        assert_eq!(refused.len(), 1);
+        assert_eq!(refused[0].service, crate::models::endpoint_secrets::SERVICE);
+        assert!(matches!(refused[0].refusal, CredentialRefusal::Declined(_)));
+        assert!(runtime
+            .ask(crate::models::endpoint_secrets::SERVICE, "other", || {
+                panic!("held back")
+            })
+            .is_err());
+        // A retry asks once more, and the answer reaches Pi.
+        runtime.retry_refused();
+        assert_eq!(ask(|| Ok("sk-key".into())), Ok(Some("sk-key".into())));
+        assert_eq!(asked.get(), 2);
+        assert!(runtime.refusals().is_empty());
+        // A new decline holds again, until the runtime's next start.
+        assert!(ask(|| Err(user_canceled())).is_err());
+        assert!(ask(|| Err(user_canceled())).is_err());
+        assert_eq!(asked.get(), 3);
+        KeyringCredentialStore::sharing_declines_in(Some(directory.clone()))
+            .shared
+            .unwrap()
+            .clear();
+        assert_eq!(ask(|| Ok("sk-key".into())), Ok(Some("sk-key".into())));
+        assert_eq!(asked.get(), 4);
+        let _ = std::fs::remove_dir_all(directory);
     }
 }
 

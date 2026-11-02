@@ -185,6 +185,81 @@ impl RefusalMemory {
     }
 }
 
+/// The declines a runtime shares with the short processes it starts, such
+/// as the `secret get` command Pi runs for an endpoint key, so a declined
+/// service raises the system prompt once across all of them. One file per
+/// service under `directory` holds the decline's message and never a
+/// secret. The runtime forgets every decline at its start and on the
+/// person's retry.
+#[derive(Clone, Debug)]
+pub struct SharedDeclines {
+    directory: std::path::PathBuf,
+}
+
+impl SharedDeclines {
+    pub fn new(directory: impl Into<std::path::PathBuf>) -> Self {
+        Self {
+            directory: directory.into(),
+        }
+    }
+
+    fn path(&self, service: &str) -> Option<std::path::PathBuf> {
+        valid_component(service).then(|| self.directory.join(service))
+    }
+
+    /// The decline a process shared for `service`, if one holds.
+    pub fn held(&self, service: &str) -> Option<CredentialRefusal> {
+        let message = std::fs::read_to_string(self.path(service)?).ok()?;
+        Some(CredentialRefusal::Declined(message))
+    }
+
+    /// Shares a decline of `service` with the runtime and its other
+    /// processes.
+    pub fn note(&self, service: &str, refusal: &CredentialRefusal) {
+        let (CredentialRefusal::Declined(message), Some(path)) = (refusal, self.path(service))
+        else {
+            return;
+        };
+        if std::fs::create_dir_all(&self.directory).is_ok() {
+            let _ = std::fs::write(path, message);
+        }
+    }
+
+    /// Every shared decline, one entry per service.
+    pub fn list(&self) -> Vec<RefusedEntry> {
+        let Ok(entries) = std::fs::read_dir(&self.directory) else {
+            return Vec::new();
+        };
+        let mut services: Vec<String> = entries
+            .flatten()
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .filter(|service| valid_component(service))
+            .collect();
+        services.sort();
+        services
+            .into_iter()
+            .filter_map(|service| {
+                let refusal = self.held(&service)?;
+                Some(RefusedEntry {
+                    service,
+                    name: String::new(),
+                    refusal,
+                })
+            })
+            .collect()
+    }
+
+    /// The runtime started or the person asked to try again: every shared
+    /// decline goes.
+    pub fn clear(&self) {
+        for entry in self.list() {
+            if let Some(path) = self.path(&entry.service) {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+}
+
 /// The directory under a host's state root that [`FileCredentialStore`]
 /// keeps secrets in.
 pub const CREDENTIALS_DIRECTORY_NAME: &str = "credentials";
@@ -270,6 +345,11 @@ fn file_component(value: &str) -> String {
         }
     }
     component
+}
+
+/// Whether `value` is a file name [`file_component`] leaves as it is.
+fn valid_component(value: &str) -> bool {
+    !value.is_empty() && file_component(value) == value
 }
 
 fn create_private_directory(path: &Path) -> std::io::Result<()> {
@@ -411,6 +491,30 @@ mod refusal_memory_tests {
         memory.answered("s", "a");
         memory.note("s", "a", &failed(), now);
         assert!(memory.held("s", "a", now + FIRST_REFUSAL_BACKOFF).is_none());
+    }
+
+    #[test]
+    fn a_shared_decline_holds_in_every_process_until_cleared() {
+        let directory =
+            std::env::temp_dir().join(format!("muniment-shared-declines-{}", uuid::Uuid::new_v4()));
+        let runtime = SharedDeclines::new(&directory);
+        let child = SharedDeclines::new(&directory);
+        assert_eq!(child.held("ai.muniment.endpoints"), None);
+        // A failure is not shared, and neither is a service name a file
+        // cannot carry as it is.
+        child.note("ai.muniment.endpoints", &failed());
+        child.note("../escape", &declined());
+        assert!(runtime.list().is_empty());
+        child.note("ai.muniment.endpoints", &declined());
+        assert_eq!(runtime.held("ai.muniment.endpoints"), Some(declined()));
+        assert_eq!(runtime.held("ai.muniment.hooks"), None);
+        let listed = runtime.list();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].service, "ai.muniment.endpoints");
+        assert_eq!(listed[0].refusal, declined());
+        runtime.clear();
+        assert_eq!(child.held("ai.muniment.endpoints"), None);
+        let _ = std::fs::remove_dir_all(directory);
     }
 }
 

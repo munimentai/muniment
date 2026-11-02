@@ -115,9 +115,14 @@ pub fn forget(store: &dyn CredentialStore, provider: &str) -> Result<(), String>
     store.remove(SERVICE, provider)
 }
 
+/// The exit status of `secret get` when the store refused the key, as after
+/// a declined keychain prompt. The command prints nothing then.
+pub const REFUSED_STATUS: i32 = 2;
+
 /// Answers `secret get <provider>`, the command a reference runs: the key on
 /// standard output. Answers none for other arguments, so the caller handles
-/// them, and the exit status otherwise: 0 with the key, 1 without one.
+/// them, and the exit status otherwise: 0 with the key, 1 without one and
+/// [`REFUSED_STATUS`] when the store refused it.
 pub fn run_command(
     arguments: &[String],
     store: impl FnOnce() -> Arc<dyn CredentialStore>,
@@ -131,19 +136,20 @@ pub fn run_command(
     if !safe_provider(provider) {
         return Some(1);
     }
-    match store().read(SERVICE, provider) {
-        Some(key) => {
+    match store().lookup(SERVICE, provider) {
+        Ok(Some(key)) => {
             println!("{key}");
             Some(0)
         }
-        None => Some(1),
+        Ok(None) => Some(1),
+        Err(_) => Some(REFUSED_STATUS),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::host::FileCredentialStore;
+    use crate::host::{CredentialRefusal, FileCredentialStore};
     use muniment_core::serde_json::{self, json};
     use std::path::PathBuf;
 
@@ -242,6 +248,29 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// A store whose every read the keychain declined.
+    struct Refusing;
+
+    impl CredentialStore for Refusing {
+        fn read(&self, _: &str, _: &str) -> Option<String> {
+            None
+        }
+
+        fn lookup(&self, _: &str, _: &str) -> Result<Option<String>, CredentialRefusal> {
+            Err(CredentialRefusal::Declined(
+                "User canceled the operation.".into(),
+            ))
+        }
+
+        fn write(&self, _: &str, _: &str, _: &str) -> Result<(), String> {
+            Err("refused".into())
+        }
+
+        fn remove(&self, _: &str, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
     #[test]
     fn the_runtime_answers_only_the_secret_command() {
         let root = temporary("command");
@@ -269,6 +298,11 @@ mod tests {
             Some(1)
         );
         assert_eq!(run_command(&arguments(&["--version"]), open), None);
+        let refusing = || Arc::new(Refusing) as Arc<dyn CredentialStore>;
+        assert_eq!(
+            run_command(&arguments(&["secret", "get", "custom-proxy"]), refusing),
+            Some(REFUSED_STATUS)
+        );
         assert_eq!(
             run_command(&arguments(&["secret", "list", "x"]), open),
             None
