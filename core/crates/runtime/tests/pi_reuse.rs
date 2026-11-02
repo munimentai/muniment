@@ -633,3 +633,49 @@ fn a_context_reads_process_stops_when_its_window_ends() {
     harness.processes.stop_all(IdleStop::Shutdown);
     assert!(ends(&again), "shutdown left the context read's process");
 }
+
+#[test]
+fn past_the_slot_limit_empty_slots_go_then_read_only_processes_then_the_oldest_reply() {
+    let _environment = ENVIRONMENT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let processes = PiProcesses::with_reaper(4, Duration::from_secs(600), 8);
+    let mut harness = Harness::with_processes("pi-reuse-slots", processes);
+    let first_read = thread_without_process(&mut harness);
+    let second_read = thread_without_process(&mut harness);
+
+    // The user replies in one thread, opens two others, and one slot stays
+    // empty. The reply's slot is the oldest.
+    assert_eq!(harness.reply(None, "replied").phase, "complete");
+    let replied = harness.prompt_process("replied");
+    harness.read_context(&first_read);
+    let first = harness.spawns().last().unwrap().clone();
+    harness.read_context(&second_read);
+    let second = harness.spawns().last().unwrap().clone();
+    harness.processes.slot("empty");
+    assert_eq!(harness.processes.len(), 4);
+    assert_eq!(harness.processes.parked(), 3);
+
+    // A new thread's slot pushes the empty slot out, though it is the newest.
+    assert_eq!(harness.reply(None, "next").phase, "complete");
+    assert_eq!(harness.processes.len(), 4);
+    assert_eq!(harness.processes.parked(), 4);
+    assert!(alive(&replied) && alive(&first) && alive(&second));
+
+    // Then the read-only processes stop, the oldest first, while the
+    // thread the user replied in keeps its process.
+    assert_eq!(harness.reply(None, "later").phase, "complete");
+    assert!(ends(&first), "the oldest read-only process still runs");
+    assert!(alive(&second) && alive(&replied));
+    assert_eq!(harness.reply(None, "latest").phase, "complete");
+    assert!(ends(&second), "the read-only process still runs");
+    assert!(alive(&replied));
+
+    // With no read-only process left, the oldest reply's process goes.
+    assert_eq!(harness.reply(None, "last").phase, "complete");
+    assert!(ends(&replied), "the oldest reply process still runs");
+    for prompt in ["next", "later", "latest", "last"] {
+        assert!(alive(&harness.prompt_process(prompt)), "{prompt}");
+    }
+    assert_eq!(harness.processes.len(), 4);
+}

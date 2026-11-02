@@ -90,8 +90,9 @@ pub struct PiRuntime {
 /// The engine processes of a runtime, one slot per thread. A run takes its
 /// thread's slot for its whole length, so runs in different threads drive
 /// different processes at once. After a run, its process idles in the slot
-/// for the thread's next read or run. The least recently used idle slots go
-/// once more than `idle` are kept. A reaper stops each marked idle process
+/// for the thread's next read or run. Once more than `idle` slots are kept,
+/// empty slots go first, then read-only processes, then reply processes. A
+/// reaper stops each marked idle process
 /// when its idle window ends, and the oldest ones once more than the parked
 /// limit wait. A slot a run holds is never touched, so no turn is stopped.
 /// One thread's process slot.
@@ -245,7 +246,10 @@ impl PiProcesses {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// The slot of one thread's process.
+    /// The slot of one thread's process. Past the slot limit, the slots that
+    /// go are empty ones first, then those of processes only a read started,
+    /// then those a reply left, the longest idle of each first. The slot just
+    /// asked for and a slot a run holds stay.
     pub fn slot(&self, thread: &str) -> PiProcessSlot {
         self.start_reaper();
         let mut slots = self.list();
@@ -254,21 +258,41 @@ impl PiProcesses {
             None => Arc::new(Mutex::new(None)),
         };
         slots.push((thread.to_owned(), Arc::clone(&slot)));
-        let mut index = 0;
+        let excess = slots.len().saturating_sub(self.slots.idle);
         let mut evicted = Vec::new();
-        while slots.len() > self.slots.idle && index + 1 < slots.len() {
-            // A slot a run holds stays; its process ends with the run's next start.
-            let idle = slots[index]
-                .1
-                .try_lock()
-                .map(|mut process| process.take())
-                .ok();
-            match idle {
-                Some(process) => {
-                    let (held, _) = slots.remove(index);
-                    evicted.extend(process.map(|process| (held, process)));
+        if excess > 0 {
+            let newest = slots.len() - 1;
+            let mut order: Vec<_> = slots[..newest]
+                .iter()
+                .enumerate()
+                .filter_map(|(index, (_, held))| {
+                    // A slot a run holds stays; its process ends with the run's next start.
+                    let process = held.try_lock().ok()?;
+                    let rank = match process.as_ref().map(|process| process.reuse.as_ref()) {
+                        None => (0, None),
+                        Some(Some(reuse)) if reuse.read_only() => (1, Some(reuse.parked_at())),
+                        Some(reuse) => (2, reuse.map(crate::engine::PiReuse::parked_at)),
+                    };
+                    Some((rank, index))
+                })
+                .collect();
+            order.sort();
+            let mut gone = Vec::new();
+            for (_, index) in order {
+                if gone.len() == excess {
+                    break;
                 }
-                None => index += 1,
+                let Ok(mut process) = slots[index].1.try_lock() else {
+                    continue;
+                };
+                let taken = process.take();
+                drop(process);
+                gone.push(index);
+                evicted.extend(taken.map(|process| (slots[index].0.clone(), process)));
+            }
+            gone.sort_unstable();
+            for index in gone.into_iter().rev() {
+                slots.remove(index);
             }
         }
         drop(slots);
