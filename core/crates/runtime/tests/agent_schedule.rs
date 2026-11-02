@@ -192,19 +192,14 @@ fn an_idle_schedule_pass_writes_no_agent_state() {
     )
     .unwrap();
     let state = RuntimeAttachState::open(RuntimeHost::default(), profile, profile).unwrap();
-    // The first pass records the routine's next fire time.
-    let saved = state_file_identity(profile);
-    state
-        .check_agent_schedules_with(state.boundaries())
-        .unwrap();
-    let recorded = state_file_identity(profile);
-    assert_ne!(recorded.0, saved.0, "the first pass records the fire time");
+    // The save records the routine's next fire time, so no pass has to.
     assert!(
         agents::state(profile).unwrap().routines[&agent.id]["schedule"]
             .next_fire_at
             .is_some()
     );
-    // Later passes find nothing to change and leave the file alone.
+    let recorded = state_file_identity(profile);
+    // Passes find nothing to change and leave the file alone.
     for _ in 0..3 {
         std::thread::sleep(Duration::from_millis(20));
         state
@@ -216,16 +211,19 @@ fn an_idle_schedule_pass_writes_no_agent_state() {
     let mut moved = agents::get(profile, &agent.id).unwrap();
     moved.schedule.as_mut().unwrap().time = "10:00".into();
     moved.routines.clear();
+    let fired = agents::state(profile).unwrap().routines[&agent.id]["schedule"].next_fire_at;
     agents::save(profile, moved).unwrap();
-    let edited = state_file_identity(profile);
-    state
-        .check_agent_schedules_with(state.boundaries())
-        .unwrap();
     let rescheduled = state_file_identity(profile);
-    assert_ne!(rescheduled.0, edited.0, "the pass records the new time");
-    std::thread::sleep(Duration::from_millis(20));
-    state
-        .check_agent_schedules_with(state.boundaries())
-        .unwrap();
-    assert_eq!(state_file_identity(profile), rescheduled);
+    assert_ne!(rescheduled.0, recorded.0, "the save records the new time");
+    assert_ne!(
+        agents::state(profile).unwrap().routines[&agent.id]["schedule"].next_fire_at,
+        fired
+    );
+    for _ in 0..2 {
+        std::thread::sleep(Duration::from_millis(20));
+        state
+            .check_agent_schedules_with(state.boundaries())
+            .unwrap();
+        assert_eq!(state_file_identity(profile), rescheduled);
+    }
 }

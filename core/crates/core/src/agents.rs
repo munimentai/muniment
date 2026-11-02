@@ -885,9 +885,38 @@ pub(crate) fn save_definition(
     run.next_run = next_routine_fire(&agent, chrono::Utc::now());
     let saved = state.routines.entry(agent.id.clone()).or_default();
     saved.retain(|id, _| agent.routines.iter().any(|routine| &routine.id == id));
+    plan_cron_fires(&agent, saved, chrono::Utc::now());
     persist_state(profile, &state)?;
     apply_routine_state(&mut agent, &state);
     Ok(agent)
+}
+/// Sets each cron routine's next fire time as the run queue's pass does, so
+/// the save and the next list name it at once. A routine turned off has
+/// none. A new or changed schedule fires next after `now`, and an unchanged
+/// one keeps its due time. A paused agent or one with a primary machine
+/// waits for the pass, which knows the machine it runs on.
+fn plan_cron_fires(
+    agent: &Agent,
+    saved: &mut BTreeMap<String, RoutineState>,
+    now: chrono::DateTime<chrono::Utc>,
+) {
+    let here = agent.paused_reason.is_none() && agent.primary_runtime.is_none();
+    for routine in &agent.routines {
+        let Trigger::Cron(schedule) = &routine.trigger else {
+            continue;
+        };
+        let key = crate::agent_routines::schedule_key(routine);
+        let fire = saved.entry(routine.id.clone()).or_default();
+        if !routine.enabled {
+            fire.next_fire_at = None;
+            fire.key = key;
+        } else if here && (fire.key != key || fire.next_fire_at.is_none()) {
+            fire.next_fire_at = crate::agent_routines::next_cron_after(schedule, now)
+                .ok()
+                .map(|time| time.timestamp());
+            fire.key = key;
+        }
+    }
 }
 /// The earliest next fire of an agent's enabled cron routines.
 pub fn next_routine_fire(agent: &Agent, after: chrono::DateTime<chrono::Utc>) -> Option<i64> {
@@ -3061,6 +3090,67 @@ mod tests {
         let mirrored = &state(&profile).unwrap().runs[&agent.id];
         assert_eq!(mirrored.trigger.as_deref(), Some("manual"));
         assert_eq!(mirrored.status, "queued");
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    #[test]
+    fn a_save_names_each_cron_routines_next_fire_without_waiting_for_the_queue() {
+        let (root_dir, profile) = profile();
+        let saved = operation(
+            &profile,
+            "agent.save",
+            serde_json::json!({"agent": {"name": "Morning", "instructions": "Work."}}),
+        )
+        .unwrap();
+        let id = saved["agent"]["id"].as_str().unwrap().to_owned();
+        let save = |expr: &str, enabled: bool, routine_id: Option<&str>| {
+            let mut routine = serde_json::json!({"name": "Daily", "enabled": enabled,
+                "trigger": {"kind": "cron", "expr": expr, "tz": "UTC"}});
+            if let Some(routine_id) = routine_id {
+                routine["id"] = routine_id.into();
+            }
+            operation(
+                &profile,
+                "routine.save",
+                serde_json::json!({"agent_id": id, "routine": routine}),
+            )
+            .unwrap()["routine"]
+                .clone()
+        };
+        let listed = || {
+            operation(&profile, "agent.list", serde_json::json!({})).unwrap()["agents"][0]
+                ["routines"][0]["next_fire_at"]
+                .clone()
+        };
+        let expected = |expr: &str| {
+            let schedule = CronSchedule {
+                expr: expr.into(),
+                tz: "UTC".into(),
+            };
+            crate::agent_routines::next_cron_after(&schedule, chrono::Utc::now())
+                .unwrap()
+                .timestamp()
+        };
+        // The save answer and the list right after it name the next fire.
+        let routine = save("0 9 * * *", true, None);
+        let routine_id = routine["id"].as_str().unwrap().to_owned();
+        let first = routine["next_fire_at"].as_i64().unwrap();
+        assert_eq!(first, expected("0 9 * * *"));
+        assert_eq!(listed(), first);
+        // A save that keeps the schedule keeps its due time.
+        save("0 9 * * *", true, Some(&routine_id));
+        assert_eq!(listed(), first);
+        // A changed schedule fires on its new time.
+        let changed = save("30 17 * * *", true, Some(&routine_id));
+        assert_eq!(changed["next_fire_at"], expected("30 17 * * *"));
+        assert_eq!(listed(), expected("30 17 * * *"));
+        // A routine turned off fires never, and on again fires next.
+        assert!(save("30 17 * * *", false, Some(&routine_id))["next_fire_at"].is_null());
+        assert!(listed().is_null());
+        assert_eq!(
+            save("30 17 * * *", true, Some(&routine_id))["next_fire_at"],
+            expected("30 17 * * *")
+        );
         fs::remove_dir_all(root_dir).unwrap();
     }
 
