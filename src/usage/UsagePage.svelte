@@ -143,6 +143,9 @@
   .sep { color: var(--muted); }
   .filter { position: relative; width: 170px; }
   .filter :global(button[aria-haspopup] > span) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* The open menu widens past its filter to keep each name on one line, and a name past its cap ends in an ellipsis. */
+  .filter :global([role="menu"]) { right: auto; min-width: 100%; width: max-content; max-width: 320px; box-sizing: border-box; }
+  .filter :global([role="menuitemradio"] > span) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .filter:global([data-tooltip])::after { content: attr(data-tooltip); position: absolute; z-index: 4; left: 0; top: calc(100% + 6px); padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-12) var(--font-human); white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity 80ms ease; }
   .filter:global([data-tooltip]):hover:not(:has([aria-expanded="true"]))::after { opacity: 1; transition-delay: 350ms; }
   .note { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--muted); font-size: var(--text-13); }

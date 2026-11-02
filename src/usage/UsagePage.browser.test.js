@@ -60,3 +60,29 @@ it('keeps a long machine name on one line with an ellipsis, the whole name on ho
   await userEvent.hover(trigger())
   await expect.poll(() => filter.dataset.tooltip).toBeUndefined()
 })
+
+it('keeps each machine name in the open machine menu on one line', async () => {
+  const target = document.createElement('div')
+  Object.assign(target.style, { position: 'absolute', inset: '0', display: 'grid', gridTemplateAreas: '"thread"' })
+  document.body.append(target)
+  component = mount(UsagePage, { target, props: { tauri: { invoke: async () => summary }, runtimeList } })
+  flushSync()
+  const trigger = target.querySelector('button[aria-label^="Machine:"]')
+  await expect.poll(() => target.textContent.includes('Reading usage')).toBe(false)
+  await userEvent.click(trigger)
+  const menu = target.querySelector('[role="menu"][aria-label="Machine"]')
+  const items = [...menu.querySelectorAll('[role="menuitemradio"]')]
+  expect(items.map((item) => item.textContent.trim())).toEqual(['All machines', 'This computer', 'Docker container (offline)'])
+  // Every option is as tall as a one-line option, and no name clips.
+  const line = items[0].getBoundingClientRect().height
+  for (const item of items) {
+    expect(item.getBoundingClientRect().height).toBe(line)
+    const label = item.querySelector('span')
+    expect(label.scrollWidth).toBeLessThanOrEqual(label.clientWidth)
+  }
+  // The menu widens past its filter, from the filter's left edge, inside the window.
+  const box = menu.getBoundingClientRect()
+  expect(box.width).toBeGreaterThan(trigger.getBoundingClientRect().width)
+  expect(Math.abs(box.left - trigger.getBoundingClientRect().left)).toBeLessThan(1)
+  expect(box.right).toBeLessThanOrEqual(window.innerWidth)
+})
