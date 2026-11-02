@@ -5,12 +5,14 @@ import '../styles/tokens.css'
 import '../styles/base.css'
 import '../styles/panels.css'
 import UsagePage from './UsagePage.svelte'
+import { resetUsageView } from './usage-view.js'
 
 let component
 afterEach(() => {
   if (component) unmount(component)
   component = null
   document.body.replaceChildren()
+  resetUsageView()
 })
 
 const runtimeList = { runtimes: [

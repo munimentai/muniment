@@ -18,14 +18,18 @@
   import UsageBreakdown from './UsageBreakdown.svelte'
   import { accountCache } from '../lib/account-cache.js'
   import { LOCAL_RUNTIME_ID } from '../runtimes/runtimes.js'
+  import { keepUsageView, usageView } from './usage-view.js'
   import { BREAKDOWNS, USAGE_RANGES, USAGE_VIEWS, failedNote, machineRefs, offlineMembers, providerOptions, readUsage, totalTiles } from './usage.js'
 
   let { tauri, runtimeList = null, folderAccess = null, inventory = null, onconnect = null } = $props()
-  let view = $state('limits')
-  let range = $state('7d')
-  let machine = $state('')
-  let provider = $state('')
-  let breakdown = $state('model')
+  // The view starts where the session left it and follows every change.
+  const start = usageView()
+  let view = $state(start.view)
+  let range = $state(start.range)
+  let machine = $state(start.machine)
+  let provider = $state(start.provider)
+  let breakdown = $state(start.breakdown)
+  $effect(() => keepUsageView({ view, range, machine, provider, breakdown }))
   let summary = $state(null)
   let loading = $state(false)
   let error = $state('')

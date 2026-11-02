@@ -2,12 +2,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import '@testing-library/jest-dom/vitest'
 import UsagePage from './UsagePage.svelte'
+import { resetUsageView } from './usage-view.js'
 import LimitBanner from './LimitBanner.svelte'
 import LimitCard from './LimitCard.svelte'
 import { machineRows } from '../runtimes/machines.js'
 import { composerLimit, compactTokens, dollars, failedNote, isUsageShortcut, machineRefs, meterLevel, providerLabel, resetsIn, rowLabel, totalTiles, unmeteredSubtitle, windowLabel } from './usage.js'
 
-afterEach(cleanup)
+afterEach(() => { cleanup(); resetUsageView() })
 
 const NOW = Date.UTC(2026, 9, 17, 12)
 const HOUR = 3_600_000
@@ -166,6 +167,24 @@ describe('Usage page', () => {
     expect(screen.getByText('API estimate', { selector: 'dt' })).toBeInTheDocument()
     await fireEvent.click(screen.getByRole('radio', { name: '30d' }))
     await vi.waitFor(() => expect(invoke).toHaveBeenLastCalledWith('usage_summary', expect.objectContaining({ body: expect.objectContaining({ range: '30d' }) })))
+  })
+
+  it('keeps its view, range, breakdown and machine when the runtime switch draws the page again', async () => {
+    const invoke = vi.fn(async () => summary())
+    const first = render(UsagePage, { tauri: { invoke }, runtimeList })
+    await screen.findByRole('article', { name: 'Anthropic, sam@example.com · max' })
+    await fireEvent.click(screen.getByRole('radio', { name: 'Tokens' }))
+    await fireEvent.click(screen.getByRole('radio', { name: '30d' }))
+    await fireEvent.click(screen.getByRole('radio', { name: 'Agent' }))
+    first.unmount()
+    // The child runtime answers in the local runtime's place, and the workspace draws a new page.
+    invoke.mockClear()
+    render(UsagePage, { tauri: { invoke }, runtimeList: { runtimes: [{ id: 'local', local: true, kind: 'child' }, ...runtimeList.runtimes.slice(1)] } })
+    expect(screen.getByRole('radio', { name: 'Tokens' })).toBeChecked()
+    expect(screen.getByRole('radio', { name: '30d' })).toBeChecked()
+    expect(await screen.findByRole('list', { name: 'Usage by agent' })).toBeInTheDocument()
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('usage_summary', expect.objectContaining({ body: expect.objectContaining({ range: '30d' }) })))
+    expect(invoke.mock.calls.some(([, args]) => args?.body?.range === '7d')).toBe(false)
   })
 
   it('lists a machine that does not answer and counts it from the copies the others hold', async () => {
