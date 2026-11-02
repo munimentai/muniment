@@ -431,13 +431,22 @@ pub fn arrange(input: &Input) -> Sidebar {
     let query = input.query.trim().to_lowercase();
     let mut seen = BTreeSet::new();
     // An agent's home thread the client has not listed yet still shows,
-    // named for the agent.
+    // named for the agent, while no other thread of the agent shows. An empty
+    // home thread beside the agent's creation chat would repeat its row.
+    let listed_agents: BTreeSet<&str> = input
+        .threads
+        .iter()
+        .filter_map(|thread| agent_threads.get(&thread.id))
+        .map(String::as_str)
+        .collect();
     let homes: Vec<Thread> = input
         .agents
         .iter()
         .filter_map(|agent| {
             let id = agent.home_thread_id.as_ref()?;
-            (!input.threads.iter().any(|thread| &thread.id == id)).then(|| Thread {
+            (!listed_agents.contains(agent.id.as_str())
+                && !input.threads.iter().any(|thread| &thread.id == id))
+            .then(|| Thread {
                 id: id.clone(),
                 ..Thread::default()
             })
@@ -692,6 +701,28 @@ mod tests {
         assert_eq!(project.threads[0].title, "Scout");
         assert_eq!(project.status, Status::Read);
         assert_eq!(project.updated_at, "");
+    }
+
+    #[test]
+    fn an_unlisted_home_thread_gives_way_to_the_agents_listed_thread() {
+        let input = Input {
+            threads: vec![thread("made", "Scout", "2026-10-18T10:00:00Z")],
+            agents: vec![Agent {
+                id: "scout".into(),
+                name: "Scout".into(),
+                home_thread_id: Some("home".into()),
+                ..Agent::default()
+            }],
+            agent_threads: BTreeMap::from([("made".into(), "scout".into())]),
+            ..Input::default()
+        };
+        let sidebar = arrange(&input);
+        let rows: Vec<&str> = sidebar
+            .projects
+            .iter()
+            .flat_map(|project| ids(&project.threads))
+            .collect();
+        assert_eq!(rows, vec!["made"], "the agent shows one row");
     }
 
     #[test]
