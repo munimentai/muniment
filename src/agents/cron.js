@@ -1,7 +1,7 @@
 // The schedule builder's view of a 5-field cron expression. The runtime
 // parses, validates and fires the expression. The builder only writes the
 // shapes it offers, and any other expression stays custom.
-import { displayZone, scheduleTime } from '../lib/time-format.svelte.js'
+import { displayZone, scheduleTime, zoneOffsetMinutes } from '../lib/time-format.svelte.js'
 
 export const WEEKDAYS = [['1', 'Monday'], ['2', 'Tuesday'], ['3', 'Wednesday'], ['4', 'Thursday'], ['5', 'Friday'], ['6', 'Saturday'], ['0', 'Sunday']]
 export const INTERVALS = [5, 10, 15, 30, 60, 120, 180, 240, 360, 720]
@@ -80,6 +80,43 @@ export function cronLabel(expr, tz = '', now = Date.now()) {
   if (choice.mode === 'weekdays') return shift ? `${dayName(1 + shift)}s to ${dayName(5 + shift)}s at ${time}` : `Weekdays at ${time}`
   if (choice.mode === 'weekly') return `${dayName(Number(choice.weekday) + shift)}s at ${time}`
   return `Every day at ${time}`
+}
+
+// The next instant, in ms, a builder expression fires in the zone `tz`
+// after `now`, or null for an expression the builder cannot show. Core
+// reports `next_fire_at` once its scheduler reads a saved routine, and the
+// card shows this time until then, so it reads the same words before and after.
+const DAY = 86_400_000
+export function nextCronFire(expr, tz = '', now = Date.now()) {
+  const choice = builderFromCron(expr)
+  if (!choice) return null
+  const zone = tz || displayZone()
+  const offset = (at) => zoneOffsetMinutes(at, zone) * 60_000
+  // The instant of a wall time in the zone: the wall time less the zone's
+  // offset at that instant.
+  const instant = (wall) => wall - offset(wall - offset(wall))
+  const nowWall = now + offset(now)
+  const today = Math.floor(nowWall / DAY) * DAY
+  if (choice.mode === 'interval') {
+    const step = choice.minutes * 60_000
+    const first = today + (Math.floor((nowWall - today) / step) + 1) * step
+    // A clock change can hand back an instant at or before now, so try the next step.
+    for (let wall = first; wall <= first + 2 * step; wall += step) {
+      const at = instant(wall)
+      if (at > now) return at
+    }
+    return null
+  }
+  const [hour, minute] = choice.time.split(':').map(Number)
+  for (let day = 0; day <= 8; day += 1) {
+    const wall = today + day * DAY + (hour * 60 + minute) * 60_000
+    const weekday = new Date(wall).getUTCDay()
+    if (choice.mode === 'weekdays' && (weekday === 0 || weekday === 6)) continue
+    if (choice.mode === 'weekly' && weekday !== Number(choice.weekday)) continue
+    const at = instant(wall)
+    if (at > now) return at
+  }
+  return null
 }
 
 // The time zone a new schedule uses: the zone the Time setting shows.

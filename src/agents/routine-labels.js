@@ -1,5 +1,5 @@
 // The words a routine row shows for its trigger and its last result.
-import { cronLabel } from './cron.js'
+import { cronLabel, nextCronFire } from './cron.js'
 import { runStatusLabel, runTimeLabel, whenLabel } from '../lib/agent-labels.js'
 import { formatClock } from '../lib/time-format.svelte.js'
 
@@ -33,13 +33,16 @@ export function routineWhen(routine, now = Date.now()) {
 }
 
 // When the agent starts itself next, in local time with no time zone: the
-// soonest time core reports for an enabled routine, else the first enabled
-// routine's trigger as its routine row words it.
+// soonest time core reports for an enabled routine, or for a schedule core
+// has not timed yet, such as one just saved, the time its expression fires
+// next. Else the first enabled routine's trigger as its routine row words it.
+const firesAt = (routine, now) => Number.isFinite(routine.next_fire_at) ? routine.next_fire_at * 1000
+  : routine.trigger?.kind === 'cron' ? nextCronFire(routine.trigger.expr, routine.trigger.tz, now) : null
 export function nextRunLabel(agent, now = Date.now()) {
   if (agent?.paused_reason) return 'Paused'
   const routines = (agent?.routines ?? []).filter((routine) => routine.enabled && !isProposal(routine))
-  const times = routines.map((routine) => routine.next_fire_at).filter(Number.isFinite)
-  if (times.length) return runTimeLabel(Math.min(...times) * 1000, now)
+  const times = routines.map((routine) => firesAt(routine, now)).filter(Number.isFinite)
+  if (times.length) return runTimeLabel(Math.min(...times), now)
   return routines.length ? routineWhen(routines[0], now) : 'Manual'
 }
 
