@@ -241,7 +241,7 @@ background at rest, and a theme hover background. Escape, X and a click outside
 close the topmost popup. Clicking panel whitespace or dragging from inside to
 outside does not close it. Nested dismissal leaves the parent open. A pending
 operation blocks all dismissal paths together. Dismissal never approves an action.
-Confirmation dialogs and inline confirms keep explicit decision buttons and focus the safe choice. Escape answers the safe choice, and closing returns focus to the control that asked.
+Confirmation dialogs and inline confirms keep explicit decision buttons and focus the safe choice. Escape answers the safe choice from anywhere in the confirm's panel, Tab loops through an inline confirm's controls with the ring, and closing returns focus to the control that asked.
 Menus close on selection, Escape or outside click without an extra close row.
 Dialogs fit their content, cap height to the viewport, and scroll only as needed. The native browser view hides while a full-window dialog is open, since it draws above the page.
 Appearance spaces Browse color schemes below the frame control. Skills and plugins use

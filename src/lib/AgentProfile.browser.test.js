@@ -206,3 +206,34 @@ it('draws the ring on a control code focused while the keys lead, when the engin
   document.documentElement.dataset.pointer = ''
   try { expect(ringed(button)).toBe(false) } finally { delete document.documentElement.dataset.pointer }
 })
+
+it('keeps keyboard focus in the delete confirmation with its ring, and Escape cancels from anywhere in the profile', async () => {
+  const group = (aside) => aside.querySelector('[role="group"][aria-label="Delete agent"]')
+  const control = (aside, name) => [...group(aside).querySelectorAll('button, input')].find((node) => (node.type === 'checkbox' ? 'Also delete its memory' : node.textContent.trim()) === name)
+  const remove = (aside) => [...aside.querySelectorAll('button')].find((button) => button.textContent.trim() === 'Delete agent')
+  const stop = trackFocusSource(document.documentElement)
+  try {
+    const aside = profile()
+    remove(aside).focus()
+    await userEvent.keyboard('{Enter}')
+    await expect.poll(() => document.activeElement).toBe(control(aside, 'Cancel'))
+    // Tab and Shift+Tab loop through the confirmation, and each stop shows the ring.
+    const loop = ['Also delete its memory', 'Confirm delete', 'Cancel', 'Also delete its memory']
+    for (const name of loop) {
+      await userEvent.keyboard('{Tab}')
+      expect(document.activeElement, name).toBe(control(aside, name))
+      expect(ringed(document.activeElement), name).toBe(true)
+    }
+    for (const name of ['Cancel', 'Confirm delete', 'Also delete its memory']) {
+      await userEvent.keyboard('{Shift>}{Tab}{/Shift}')
+      expect(document.activeElement, name).toBe(control(aside, name))
+      expect(ringed(document.activeElement), name).toBe(true)
+    }
+    // Escape cancels while focus sits elsewhere in the profile.
+    aside.querySelector('button[aria-label="Collapse agent profile"]').focus()
+    await userEvent.keyboard('{Escape}')
+    await expect.poll(() => group(aside)).toBeNull()
+    await expect.poll(() => document.activeElement).toBe(remove(aside))
+    expect(ringed(remove(aside))).toBe(true)
+  } finally { stop(); delete document.documentElement.dataset.pointer }
+})

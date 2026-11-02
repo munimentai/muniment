@@ -133,6 +133,23 @@
     await tick()
     focusLikeKeys(deleteRow?.querySelector('button:not(:disabled)'))
   }
+  // While the confirmation shows, Escape anywhere in the profile answers
+  // Cancel, and Tab and Shift+Tab loop through its controls, so focus never
+  // leaves it for a spot that draws no ring.
+  function confirmKeydown(event) {
+    if (!deleting || busy || event.defaultPrevented) return
+    if (event.key === 'Escape') {
+      event.preventDefault(); event.stopPropagation()
+      void cancelDelete()
+      return
+    }
+    if (event.key !== 'Tab' || !confirmBox?.contains(event.target)) return
+    const stops = [...confirmBox.querySelectorAll('button:not(:disabled), input:not(:disabled)')]
+    const edge = event.shiftKey ? stops[0] : stops.at(-1)
+    if (event.target !== edge) return
+    event.preventDefault()
+    focusLikeKeys(event.shiftKey ? stops.at(-1) : stops[0])
+  }
   function settleDelete(box) {
     const reveal = () => {
       if (!box.isConnected) return stop()
@@ -259,7 +276,8 @@
     if (entry.thread_id && onopen) return action(() => onopen(entry.thread_id))
   }
 </script>
-<aside data-panel="agent" class="profile" aria-label="Agent profile" bind:this={panel}>
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+<aside data-panel="agent" class="profile" aria-label="Agent profile" bind:this={panel} onkeydown={confirmKeydown}>
   <!-- The header carries the accent edge in the agent's color, as the title pill does. -->
   <header data-panel-header data-accent-edge="top" style:--edge-color={agentColor(agent)}><h2>Agent profile</h2><button data-panel-control class="quiet" aria-label="Collapse agent profile" onclick={onclose}><LucideIcon name="panel-right-close" size={16} /></button></header>
   <div class="body" use:panelScroll bind:this={body}>
@@ -366,8 +384,7 @@
         {#if menu === 'export'}<ChoiceMenu label="Export agent" options={[{ value: 'muniment', label: 'Muniment agent file', icon: 'download' }, { value: 'grok_bot', label: 'Grok Bot notes', icon: 'file-text' }]} onchoose={chooseExport} onclose={closeMenu} />{/if}
       </div>
       {#if deleting}
-        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-        <div class="confirm" role="group" aria-label="Delete agent" bind:this={confirmBox} onkeydown={(event) => { if (event.key === 'Escape' && !busy) { event.preventDefault(); event.stopPropagation(); void cancelDelete() } }}>
+        <div class="confirm" role="group" aria-label="Delete agent" bind:this={confirmBox}>
           <label class="check"><input type="checkbox" bind:checked={removeMemory} disabled={busy} />Also delete its memory</label>
           <div class="actions"><Button variant="danger" disabled={busy} onclick={() => action(async () => { const answer = await agentRequest(tauri, agent.runtimeId, 'agent.delete', { id: agent.id, remove_memory: removeMemory }); ondelete(answer) })}>Confirm delete</Button><Button data-safe disabled={busy} onclick={cancelDelete}>Cancel</Button></div>
         </div>
