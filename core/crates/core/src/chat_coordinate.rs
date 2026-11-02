@@ -664,6 +664,9 @@ fn coordinate_work(
         return;
     }
     diagnostics.startup_stage("runtime_lock");
+    // Dropped after the slot's lock, so the reaper sees the process this
+    // run leaves idle.
+    let _reaper_wake = crate::pi_execution::ReaperWake;
     let mut runtime = runtime
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);

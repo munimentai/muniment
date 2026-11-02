@@ -149,6 +149,7 @@ pub fn run_runtime_with_updates(
     )
     .map_err(RunRuntimeError::Listener);
     state.stop_remote_route();
+    state.stop_idle_processes();
     let _ = commands.send(RetentionScheduleCommand::Stop);
     retention.join().expect("retention schedule does not panic");
     result

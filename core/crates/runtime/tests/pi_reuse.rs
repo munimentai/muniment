@@ -43,6 +43,10 @@ struct Reply {
 
 impl Harness {
     fn new(name: &str) -> Self {
+        Self::with_processes(name, PiProcesses::default())
+    }
+
+    fn with_processes(name: &str, processes: PiProcesses) -> Self {
         use_test_prompt_store();
         let temporary = TemporaryProfile::new(name, true);
         let descriptor = stage_pi_stub(&temporary.root);
@@ -59,7 +63,7 @@ impl Harness {
             temporary,
             descriptor,
             storage,
-            processes: PiProcesses::default(),
+            processes,
             activity: RuntimeActivityRegistry::new(),
             active: RunRegistry::default(),
             session_thread: SessionThread::default(),
@@ -150,10 +154,32 @@ impl Drop for Harness {
             "PI_RESUME_STUB_START_DELAY_MS",
             "PI_RESUME_STUB_SESSION_HEADER",
             "PI_RESUME_STUB_PROMPT_FOLDERS",
+            "PI_RESUME_STUB_PROMPT_DELAY_MS",
         ] {
             std::env::remove_var(variable);
         }
     }
+}
+
+/// Whether the process with this id still runs.
+fn alive(pid: &str) -> bool {
+    std::process::Command::new("kill")
+        .args(["-0", pid])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+/// Waits until the process with this id ends, and answers whether it did.
+fn ends(pid: &str) -> bool {
+    let deadline = Instant::now() + CI_WAIT;
+    while Instant::now() < deadline {
+        if !alive(pid) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    false
 }
 
 fn lines(path: &Path) -> Vec<String> {
@@ -303,5 +329,133 @@ fn a_stopped_reply_leaves_no_process_and_threads_never_share_one() {
     assert_eq!(harness.prompt_process("[hold the run] a held"), process_a);
     assert_eq!(harness.reply(Some(&thread_a), "a after").phase, "complete");
     assert_ne!(harness.prompt_process("a after"), process_a);
+    assert_eq!(harness.spawns().len(), 3);
+}
+
+#[test]
+fn an_idle_process_stops_when_its_window_ends_and_never_during_a_turn() {
+    let _environment = ENVIRONMENT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let window = Duration::from_millis(1000);
+    let processes = PiProcesses::with_reaper(4, window, 3);
+    let mut harness = Harness::with_processes("pi-reuse-idle", processes);
+    // Each turn runs twice as long as the idle window. The stub reads the
+    // delay when it starts.
+    std::env::set_var(
+        "PI_RESUME_STUB_PROMPT_DELAY_MS",
+        (window.as_millis() * 2).to_string(),
+    );
+    let first = harness.reply(None, "first");
+    assert_eq!(first.phase, "complete");
+    let thread = first.thread.clone();
+    let process = harness.prompt_process("first");
+    assert_eq!(harness.processes.parked(), 1);
+
+    // A turn that runs past the window of the process it took keeps it.
+    assert_eq!(harness.reply(Some(&thread), "slow").phase, "complete");
+    assert_eq!(harness.prompt_process("slow"), process);
+    assert_eq!(harness.spawns().len(), 1);
+    assert!(alive(&process));
+
+    // Once the process waits past its window, it stops.
+    assert!(ends(&process), "the idle process still runs");
+    assert_eq!(harness.processes.parked(), 0);
+    assert_eq!(harness.reply(Some(&thread), "after").phase, "complete");
+    assert_ne!(harness.prompt_process("after"), process);
+    assert_eq!(harness.spawns().len(), 2);
+}
+
+#[test]
+fn a_deleted_thread_stops_its_idle_process() {
+    use muniment_core::run_start::RunAttachBoundaries;
+
+    let _environment = ENVIRONMENT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut harness = Harness::new("pi-reuse-delete");
+    std::fs::create_dir_all(&harness.temporary.config).unwrap();
+    std::fs::write(
+        harness
+            .temporary
+            .config
+            .join(muniment_core::local_mode::LOCAL_MODE_MARKER),
+        [],
+    )
+    .unwrap();
+    let kept = harness.reply(None, "kept");
+    let deleted = harness.reply(None, "deleted");
+    let kept_process = harness.prompt_process("kept");
+    let deleted_process = harness.prompt_process("deleted");
+    assert_eq!(harness.processes.parked(), 2);
+
+    let boundaries = muniment_runtime_core::RuntimeAttachBoundaries::new(
+        Arc::clone(&harness.storage),
+        harness.active.clone(),
+        harness.temporary.profile.clone(),
+        harness.temporary.config.clone(),
+        harness.processes.clone(),
+        Arc::new(
+            muniment_core::memory_runtime::ApplicationMemoryRuntime::new(
+                harness.temporary.config.clone(),
+                harness.temporary.profile.join("memory"),
+            ),
+        ),
+        harness.activity.clone(),
+        RuntimeHost::default(),
+        muniment_core::attach::SignedWorkspaceApproval::default(),
+        Arc::new(SessionThread::default()),
+        muniment_runtime_core::open_companion_registry(&harness.temporary.profile).unwrap(),
+    );
+    let provenance = muniment_core::journal::Provenance {
+        source: "muniment-attach".into(),
+        source_version: "test".into(),
+        actor_id: None,
+        device_id: None,
+        rpc_request_id: None,
+        capability_versions: None,
+        extra: Default::default(),
+    };
+    boundaries
+        .delete_thread(&deleted.thread, provenance)
+        .unwrap();
+    assert!(!alive(&deleted_process));
+    assert!(alive(&kept_process));
+    assert_eq!(harness.processes.parked(), 1);
+    assert_eq!(
+        harness.reply(Some(&kept.thread), "kept again").phase,
+        "complete"
+    );
+    assert_eq!(harness.prompt_process("kept again"), kept_process);
+}
+
+#[test]
+fn the_oldest_idle_process_stops_past_the_parked_limit() {
+    let _environment = ENVIRONMENT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let processes = PiProcesses::with_reaper(8, Duration::from_secs(600), 2);
+    let mut harness = Harness::with_processes("pi-reuse-limit", processes);
+    let mut threads = Vec::new();
+    for prompt in ["one", "two", "three"] {
+        let reply = harness.reply(None, prompt);
+        assert_eq!(reply.phase, "complete");
+        threads.push(reply.thread);
+    }
+    let one = harness.prompt_process("one");
+    assert!(ends(&one), "the oldest idle process still runs");
+    assert!(alive(&harness.prompt_process("two")));
+    assert!(alive(&harness.prompt_process("three")));
+    assert_eq!(harness.processes.parked(), 2);
+
+    // The limit counts idle processes only: a thread's next reply takes its own.
+    assert_eq!(
+        harness.reply(Some(&threads[2]), "three again").phase,
+        "complete"
+    );
+    assert_eq!(
+        harness.prompt_process("three again"),
+        harness.prompt_process("three")
+    );
     assert_eq!(harness.spawns().len(), 3);
 }

@@ -532,6 +532,12 @@ impl RuntimeAttachState {
         self.runtime_activity.clone()
     }
 
+    /// Stops every idle Pi process, as the runtime drains or stops.
+    pub fn stop_idle_processes(&self) {
+        self.runtime
+            .stop_all(muniment_core::pi_execution::IdleStop::Shutdown);
+    }
+
     /// Returns the drain state an executable replacement sets.
     pub fn drain_state(&self) -> DrainState {
         self.drain_state.clone()

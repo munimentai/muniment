@@ -1,7 +1,7 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::{Arc, Condvar, Mutex, Once};
+use std::time::{Duration, Instant};
 
 use serde_json::json;
 
@@ -91,14 +91,117 @@ pub struct PiRuntime {
 /// thread's slot for its whole length, so runs in different threads drive
 /// different processes at once. After a run, its process idles in the slot
 /// for the thread's next read or run. The least recently used idle slots go
-/// once more than `idle` are kept.
+/// once more than `idle` are kept. A reaper stops each marked idle process
+/// when its idle window ends, and the oldest ones once more than the parked
+/// limit wait. A slot a run holds is never touched, so no turn is stopped.
 /// One thread's process slot.
 pub type PiProcessSlot = Arc<Mutex<Option<PiRuntime>>>;
 
+/// How many marked idle processes a runtime keeps at once.
+pub const PARKED_LIMIT: usize = 3;
+
+/// Why the slot manager stopped an idle process.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IdleStop {
+    /// The process waited past its idle window.
+    Idle,
+    /// Its thread or the agent that owns the thread was deleted.
+    Deleted,
+    /// More marked processes waited than the parked limit.
+    Limit,
+    /// The runtime drains or stops.
+    Shutdown,
+}
+
+impl IdleStop {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Deleted => "deleted",
+            Self::Limit => "limit",
+            Self::Shutdown => "shutdown",
+        }
+    }
+}
+
+/// Counts the moments a process may have gone idle, so each reaper looks
+/// again then.
+static IDLE_TURNS: (Mutex<u64>, Condvar) = (Mutex::new(0), Condvar::new());
+
+fn idle_turns() -> u64 {
+    *IDLE_TURNS
+        .0
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Wakes every reaper to look at its slots again.
+pub fn wake_reapers() {
+    let mut turns = IDLE_TURNS
+        .0
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *turns = turns.wrapping_add(1);
+    IDLE_TURNS.1.notify_all();
+}
+
+/// Wakes the reapers when it drops. A run holds one from before it locks
+/// its slot, so the wake comes after the slot is free again.
+pub struct ReaperWake;
+
+impl Drop for ReaperWake {
+    fn drop(&mut self) {
+        wake_reapers();
+    }
+}
+
+/// Waits until a wake after `seen`, or until `deadline`.
+fn wait_for_wake(seen: u64, deadline: Option<Instant>) {
+    let mut turns = IDLE_TURNS
+        .0
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    while *turns == seen {
+        match deadline {
+            None => {
+                turns = IDLE_TURNS
+                    .1
+                    .wait(turns)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+            }
+            Some(deadline) => {
+                let now = Instant::now();
+                if now >= deadline {
+                    return;
+                }
+                turns = IDLE_TURNS
+                    .1
+                    .wait_timeout(turns, deadline - now)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .0;
+            }
+        }
+    }
+}
+
+struct Slots {
+    list: Mutex<Vec<(String, PiProcessSlot)>>,
+    idle: usize,
+    window: Duration,
+    parked: usize,
+    reaper: Once,
+}
+
+impl Drop for Slots {
+    fn drop(&mut self) {
+        // The reaper ends once it finds the slots gone.
+        wake_reapers();
+    }
+}
+
 #[derive(Clone)]
 pub struct PiProcesses {
-    slots: Arc<Mutex<Vec<(String, PiProcessSlot)>>>,
-    idle: usize,
+    slots: Arc<Slots>,
 }
 
 impl Default for PiProcesses {
@@ -109,25 +212,41 @@ impl Default for PiProcesses {
 
 impl PiProcesses {
     pub fn with_idle_limit(idle: usize) -> Self {
+        Self::with_reaper(idle, crate::engine::REUSE_IDLE_WINDOW, PARKED_LIMIT)
+    }
+
+    /// Slots whose marked idle processes stop after `window`, and of which
+    /// at most `parked` keep a marked idle process.
+    pub fn with_reaper(idle: usize, window: Duration, parked: usize) -> Self {
         Self {
-            slots: Arc::new(Mutex::new(Vec::new())),
-            idle: idle.max(1),
+            slots: Arc::new(Slots {
+                list: Mutex::new(Vec::new()),
+                idle: idle.max(1),
+                window,
+                parked: parked.max(1),
+                reaper: Once::new(),
+            }),
         }
+    }
+
+    fn list(&self) -> std::sync::MutexGuard<'_, Vec<(String, PiProcessSlot)>> {
+        self.slots
+            .list
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// The slot of one thread's process.
     pub fn slot(&self, thread: &str) -> PiProcessSlot {
-        let mut slots = self
-            .slots
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.start_reaper();
+        let mut slots = self.list();
         let slot = match slots.iter().position(|(held, _)| held == thread) {
             Some(index) => slots.remove(index).1,
             None => Arc::new(Mutex::new(None)),
         };
         slots.push((thread.to_owned(), Arc::clone(&slot)));
         let mut index = 0;
-        while slots.len() > self.idle && index + 1 < slots.len() {
+        while slots.len() > self.slots.idle && index + 1 < slots.len() {
             // A slot a run holds stays; its process ends with the run's next start.
             let idle = slots[index]
                 .1
@@ -147,15 +266,138 @@ impl PiProcesses {
 
     /// How many thread slots are kept now.
     pub fn len(&self) -> usize {
-        self.slots
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .len()
+        self.list().len()
     }
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    /// How many marked idle processes wait now.
+    pub fn parked(&self) -> usize {
+        let slots: Vec<_> = self
+            .list()
+            .iter()
+            .map(|(_, slot)| Arc::clone(slot))
+            .collect();
+        slots
+            .iter()
+            .filter(|slot| {
+                slot.try_lock()
+                    .is_ok_and(|process| parked_at(&process).is_some())
+            })
+            .count()
+    }
+
+    /// Stops the idle process of each named thread and forgets its slot. A
+    /// slot a run holds keeps its process.
+    pub fn stop_threads<'a>(&self, threads: impl IntoIterator<Item = &'a str>, reason: IdleStop) {
+        for thread in threads {
+            let slot = {
+                let mut slots = self.list();
+                let Some(index) = slots.iter().position(|(held, _)| held == thread) else {
+                    continue;
+                };
+                let slot = Arc::clone(&slots[index].1);
+                let Ok(mut process) = slot.try_lock() else {
+                    continue;
+                };
+                let taken = process.take();
+                drop(process);
+                slots.remove(index);
+                taken
+            };
+            if let Some(process) = slot {
+                stop_idle(thread, process, reason);
+            }
+        }
+    }
+
+    /// Stops every idle process, as the runtime drains or stops. A slot a
+    /// run holds keeps its process.
+    pub fn stop_all(&self, reason: IdleStop) {
+        let threads: Vec<String> = self
+            .list()
+            .iter()
+            .map(|(thread, _)| thread.clone())
+            .collect();
+        self.stop_threads(threads.iter().map(String::as_str), reason);
+    }
+
+    fn start_reaper(&self) {
+        self.slots.reaper.call_once(|| {
+            let slots = Arc::downgrade(&self.slots);
+            let _ = std::thread::Builder::new()
+                .name("pi-reaper".into())
+                .spawn(move || reap(slots));
+        });
+    }
+}
+
+/// When the process in a slot was marked idle, if it is.
+fn parked_at(process: &Option<PiRuntime>) -> Option<Instant> {
+    process
+        .as_ref()
+        .and_then(|process| process.reuse.as_ref())
+        .map(crate::engine::PiReuse::parked_at)
+}
+
+fn stop_idle(thread: &str, mut process: PiRuntime, reason: IdleStop) {
+    let _ = process.supervisor.shutdown();
+    crate::runtime_eprintln!(
+        "muniment-runtime: pi_reuse stopped reason={} thread_id={thread}",
+        reason.as_str()
+    );
+}
+
+/// Stops each marked idle process whose window ended, then the oldest ones
+/// past the parked limit, and sleeps until the next window ends or a run
+/// frees its slot.
+fn reap(slots: std::sync::Weak<Slots>) {
+    loop {
+        let seen = idle_turns();
+        let Some(held) = slots.upgrade() else {
+            return;
+        };
+        let next = sweep(&held, Instant::now());
+        drop(held);
+        wait_for_wake(seen, next);
+    }
+}
+
+fn sweep(slots: &Slots, now: Instant) -> Option<Instant> {
+    let list: Vec<_> = slots
+        .list
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    let take_if = |slot: &PiProcessSlot, keep: &dyn Fn(Instant) -> bool| {
+        let mut process = slot.try_lock().ok()?;
+        let at = parked_at(&process)?;
+        if keep(at) {
+            return None;
+        }
+        process.take()
+    };
+    let mut parked = Vec::new();
+    for (thread, slot) in list {
+        let expired = |at: Instant| now.saturating_duration_since(at) >= slots.window;
+        if let Some(process) = take_if(&slot, &|at| !expired(at)) {
+            stop_idle(&thread, process, IdleStop::Idle);
+            continue;
+        }
+        if let Some(at) = slot.try_lock().ok().and_then(|process| parked_at(&process)) {
+            parked.push((at, thread, slot));
+        }
+    }
+    parked.sort_by_key(|(at, _, _)| *at);
+    let excess = parked.len().saturating_sub(slots.parked);
+    for (at, thread, slot) in parked.drain(..excess) {
+        if let Some(process) = take_if(&slot, &|current| current != at) {
+            stop_idle(&thread, process, IdleStop::Limit);
+        }
+    }
+    parked.iter().map(|(at, _, _)| *at + slots.window).min()
 }
 
 /// Opens a thread's saved conversation for a read, such as its context
@@ -496,6 +738,33 @@ mod tests {
         assert!(Arc::ptr_eq(&first, &processes.slot("thread-a")));
         processes.slot("thread-d");
         assert_eq!(processes.len(), 2);
+    }
+
+    #[test]
+    fn stopping_idle_processes_names_its_reason_and_leaves_held_slots() {
+        assert_eq!(
+            [
+                IdleStop::Idle,
+                IdleStop::Deleted,
+                IdleStop::Limit,
+                IdleStop::Shutdown
+            ]
+            .map(IdleStop::as_str),
+            ["idle", "deleted", "limit", "shutdown"]
+        );
+        let processes = PiProcesses::with_idle_limit(4);
+        // A thread with no slot gets none from a stop.
+        processes.stop_threads(["unknown"], IdleStop::Deleted);
+        assert!(processes.is_empty());
+        let held = processes.slot("held");
+        processes.slot("free");
+        let lock = held.lock().unwrap();
+        processes.stop_all(IdleStop::Shutdown);
+        // The slot a run holds stays, and the free one goes.
+        assert_eq!(processes.len(), 1);
+        drop(lock);
+        assert!(Arc::ptr_eq(&held, &processes.slot("held")));
+        assert_eq!(processes.parked(), 0);
     }
 
     #[test]

@@ -165,6 +165,13 @@ pub struct PiReuse {
     parked: Instant,
 }
 
+impl PiReuse {
+    /// When the process went idle.
+    pub fn parked_at(&self) -> Instant {
+        self.parked
+    }
+}
+
 /// Why an idle process did not take a reply.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReuseMiss {

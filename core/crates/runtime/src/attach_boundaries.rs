@@ -53,7 +53,7 @@ use muniment_core::memory_index::ModelMemoryCapability;
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 #[cfg(any(unix, target_os = "windows"))]
 use muniment_core::permission_gate::{ChatPermissionAnswer, PermissionMode};
-use muniment_core::pi_execution::PiProcesses;
+use muniment_core::pi_execution::{IdleStop, PiProcesses};
 use muniment_core::run_events::{ChatStorage, SharedStorage};
 use muniment_core::run_preparation::{
     append_prepared_run_persistence_failure, prepare_opened_run_with_prompt_storage,
@@ -1647,14 +1647,18 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         let mut storage = self.storage.lock().map_err(|error| {
             persistence_error("lock", error.to_string()).desktop_protocol_error()
         })?;
-        delete_thread_with_creation_now(
+        let deleted = delete_thread_with_creation_now(
             &mut storage.journal,
             &self.profile_directory,
             subject.as_deref(),
             thread_id,
             &provenance,
         )
-        .map_err(thread_mutation_protocol_error)
+        .map_err(thread_mutation_protocol_error)?;
+        drop(storage);
+        // A deleted thread's idle process has no next reply to take.
+        self.runtime.stop_threads([thread_id], IdleStop::Deleted);
+        Ok(deleted)
     }
 
     fn stream_run(
@@ -1939,9 +1943,17 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             )
             .map_err(ProtocolError::invalid_request_with_reason);
         }
+        // A deleted agent's threads keep no idle process, since it worked in
+        // the agent's folder.
+        let agent_threads = (operation == muniment_core::attach::Operation::AgentDelete)
+            .then(|| agent_thread_ids(&self.profile_directory, &body));
         let answer =
             muniment_core::agents::operation(&self.profile_directory, operation.as_str(), body)
                 .map_err(ProtocolError::invalid_request_with_reason)?;
+        if let Some(threads) = agent_threads {
+            self.runtime
+                .stop_threads(threads.iter().map(String::as_str), IdleStop::Deleted);
+        }
         // A person who asks for a run now waits for it, so the queue starts
         // it at once instead of at its next pass.
         if operation == muniment_core::attach::Operation::AgentRunNow {
@@ -2268,6 +2280,30 @@ fn thread_mutation_protocol_error(error: ThreadMutationError) -> ProtocolError {
             persistence_error("journal", error).desktop_protocol_error()
         }
     }
+}
+
+/// The threads of the agent an `agent.delete` body names: its primary
+/// thread and every thread it ran in.
+fn agent_thread_ids(profile: &std::path::Path, body: &serde_json::Value) -> Vec<String> {
+    let Some(id) = body.get("id").and_then(serde_json::Value::as_str) else {
+        return Vec::new();
+    };
+    let Ok(state) = muniment_core::agents::state(profile) else {
+        return Vec::new();
+    };
+    state
+        .primary_threads
+        .get(id)
+        .cloned()
+        .into_iter()
+        .chain(
+            state
+                .threads
+                .into_iter()
+                .filter(|(_, agent)| agent == id)
+                .map(|(thread, _)| thread),
+        )
+        .collect()
 }
 
 #[cfg(test)]
