@@ -48,6 +48,10 @@ pub(crate) struct Snapshot {
     /// The background service could not stay running, so the runtime runs as
     /// the desktop's child and stops when the desktop quits.
     foreground_only: bool,
+    /// The service that ran the runtime stopped because Login Items turned it
+    /// off, and the desktop's child takes over. The workspace stays on screen
+    /// until the child connects or its start fails.
+    reconnecting: bool,
 }
 
 #[derive(Default)]
@@ -75,6 +79,9 @@ struct Lifecycle {
     /// service takes the runtime over once the user turns it on.
     #[cfg(any(test, target_os = "macos"))]
     child_until_approval: bool,
+    /// The last status read found the service off in Login Items.
+    #[cfg(any(test, target_os = "macos"))]
+    service_off: bool,
 }
 
 /// Why a start ran the runtime as the desktop's child.
@@ -175,10 +182,16 @@ impl Lifecycle {
                 self.snapshot.last_event,
                 RuntimeEvent::Disconnected | RuntimeEvent::Exited
             )
+            || !self.start_attempt()
         {
             return false;
         }
-        self.start_attempt()
+        // The user turned the service off. The child start that follows is a
+        // reconnect behind the Login Items notice, never a blocking screen.
+        self.snapshot.visible = false;
+        self.snapshot.reconnecting = true;
+        self.snapshot.foreground_only = true;
+        true
     }
 
     /// Restores the child's state after a handover that could not stop it.
@@ -193,6 +206,7 @@ impl Lifecycle {
             self.retries = 0;
             self.retry_at = None;
         }
+        self.snapshot.reconnecting &= event == RuntimeEvent::ChildStarted;
         self.snapshot.last_event = event;
         self.snapshot.visible = visible;
         self.snapshot.cause = None;
@@ -250,7 +264,7 @@ impl Lifecycle {
         if self.awaiting_disconnect && (clients.0 || clients.1) {
             return;
         }
-        let starting = self.snapshot.last_event == RuntimeEvent::Starting;
+        let starting = start_requested(self.snapshot.last_event);
         self.observe_endpoint_with_failure(clients.0 && clients.1, now, endpoint, failure);
         if starting && self.snapshot.last_event == RuntimeEvent::StartFailed {
             if let Some(cause) = &mut self.snapshot.cause {
@@ -272,7 +286,7 @@ impl Lifecycle {
         endpoint: Option<&std::path::Path>,
         failure: Option<serde_json::Value>,
     ) {
-        let starting = self.snapshot.last_event == RuntimeEvent::Starting;
+        let starting = start_requested(self.snapshot.last_event);
         self.observe_endpoint(connected, now, endpoint);
         if starting && self.snapshot.last_event == RuntimeEvent::StartFailed {
             if let (Some(cause), Some(failure)) = (&mut self.snapshot.cause, failure) {
@@ -288,7 +302,7 @@ impl Lifecycle {
         now: Instant,
         endpoint: Option<&std::path::Path>,
     ) {
-        let starting = self.snapshot.last_event == RuntimeEvent::Starting;
+        let starting = start_requested(self.snapshot.last_event);
         let elapsed = now.saturating_duration_since(self.outage.unwrap_or(now));
         self.observe(connected, !connected, now);
         if starting && self.snapshot.last_event == RuntimeEvent::StartFailed {
@@ -325,12 +339,21 @@ impl Lifecycle {
             let since = *self.outage.get_or_insert(now);
             if self.snapshot.last_event == RuntimeEvent::Connected {
                 self.snapshot.last_event = RuntimeEvent::Disconnected;
-            } else if self.snapshot.last_event == RuntimeEvent::Starting
+                // The service stops once the user turns it off in Login
+                // Items, and the approval watch then starts the child.
+                #[cfg(any(test, target_os = "macos"))]
+                {
+                    self.snapshot.reconnecting =
+                        self.service_off && !self.snapshot.foreground_only;
+                }
+            } else if start_requested(self.snapshot.last_event)
                 && now.duration_since(since) >= Duration::from_secs(10)
             {
                 self.snapshot.last_event = RuntimeEvent::StartFailed;
+                self.snapshot.reconnecting = false;
             }
-            self.snapshot.visible = self.snapshot.last_event != RuntimeEvent::Starting
+            self.snapshot.visible = !self.snapshot.reconnecting
+                && !start_requested(self.snapshot.last_event)
                 && (self.snapshot.visible || first || now.duration_since(since) >= DWELL);
         }
         self.read_status = true;
@@ -386,7 +409,9 @@ impl Lifecycle {
         self.awaiting_disconnect = event == RuntimeEvent::Stopped;
         self.snapshot.busy = self.awaiting_disconnect;
         self.outage = None;
-        let visible = !matches!(event, RuntimeEvent::Connected | RuntimeEvent::Starting);
+        // A start that only sent its request waits for the clients, and the
+        // observer shows a failure if they never connect.
+        let visible = event != RuntimeEvent::Connected && !start_requested(event);
         self.change(event, visible);
     }
 }
@@ -406,6 +431,9 @@ impl RuntimeOwner {
     ) -> ApprovalStep {
         let waiting = self.state.lock().unwrap().child_until_approval;
         let service_off = query();
+        if let Some(off) = service_off {
+            self.state.lock().unwrap().service_off = off;
+        }
         let mut claimed = false;
         match service_off {
             // launchd starts the service as soon as the user turns it on. That
@@ -423,7 +451,14 @@ impl RuntimeOwner {
                     return ApprovalStep::Restart;
                 }
             }
-            _ => {}
+            // The service is on again before the desktop claimed a child, so
+            // the outage waits for launchd and shows as any other outage.
+            Some(false) => self.update(app, |state| {
+                if state.snapshot.last_event == RuntimeEvent::Disconnected {
+                    state.snapshot.reconnecting = false;
+                }
+            }),
+            None => {}
         }
         ApprovalStep::Wait
     }
@@ -825,6 +860,7 @@ pub(crate) fn quit<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tauri::Listener;
 
     #[test]
     fn endpoint_timeout_names_the_path_and_clears_on_recovery_or_retry() {
@@ -1128,7 +1164,7 @@ mod tests {
             state.observe_endpoint_clients((true, true), now, None, None, |_| vec![]);
         });
         let connected = runtime_state(app.state());
-        for service_off in [Some(true), Some(true), None, Some(false), Some(true)] {
+        for service_off in [Some(true), Some(true), None, Some(false), Some(true), Some(false)] {
             assert_eq!(
                 owner.poll_approval(app.handle(), || service_off, || false),
                 ApprovalStep::Wait
@@ -1234,6 +1270,119 @@ mod tests {
             owner.poll_approval(app.handle(), || Some(false), || false),
             ApprovalStep::HandOver
         );
+    }
+
+    #[test]
+    fn the_requires_approval_restart_never_shows_a_blocking_screen() {
+        let app = tauri::test::mock_app();
+        app.manage(RuntimeOwner::default());
+        let owner = app.state::<RuntimeOwner>();
+        let now = Instant::now();
+        let seen = std::sync::Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
+        let record = seen.clone();
+        app.listen_any("runtime-state-changed", move |event| {
+            record
+                .lock()
+                .unwrap()
+                .push(serde_json::from_str(event.payload()).unwrap());
+        });
+        owner.update(app.handle(), |state| {
+            state.service_started(RuntimeEvent::Starting, Child::None);
+            state.observe_endpoint_clients((true, true), now, None, None, |_| vec![]);
+        });
+        seen.lock().unwrap().clear();
+        // The switch reads off while the service still serves, then launchd stops it.
+        assert_eq!(
+            owner.poll_approval(app.handle(), || Some(true), || false),
+            ApprovalStep::Wait
+        );
+        for elapsed in [0, 500, 2400, 2800] {
+            owner.update(app.handle(), |state| {
+                state.observe_endpoint_clients(
+                    (false, false),
+                    now + Duration::from_millis(elapsed),
+                    None,
+                    None,
+                    |_| vec![],
+                );
+            });
+        }
+        let lost = runtime_state(app.state());
+        assert_eq!(lost.last_event, RuntimeEvent::Disconnected);
+        assert!(!lost.visible && lost.reconnecting);
+        assert_eq!(
+            owner.poll_approval(app.handle(), || Some(true), || false),
+            ApprovalStep::Restart
+        );
+        let claimed = runtime_state(app.state());
+        assert!(claimed.reconnecting && claimed.foreground_only && !claimed.visible);
+        let (event, child) = start_with_fallback(
+            || RuntimeEvent::RequiresApproval,
+            || RuntimeEvent::ChildStarted,
+        );
+        owner.update(app.handle(), |state| state.service_started(event, child));
+        // The child takes a few seconds to bind. The workspace stays with the
+        // Login Items notice and the reconnect state, under the start bound.
+        let child_at = now + Duration::from_secs(3);
+        for elapsed in [0, 400, 2000, 9000] {
+            owner.update(app.handle(), |state| {
+                state.observe_endpoint_clients(
+                    (false, false),
+                    child_at + Duration::from_millis(elapsed),
+                    None,
+                    None,
+                    |_| vec![],
+                );
+            });
+        }
+        let waiting = runtime_state(app.state());
+        assert_eq!(waiting.last_event, RuntimeEvent::ChildStarted);
+        assert!(waiting.reconnecting && waiting.foreground_only && !waiting.visible);
+        owner.update(app.handle(), |state| {
+            state.observe_endpoint_clients((true, true), child_at, None, None, |_| vec![]);
+        });
+        let connected = runtime_state(app.state());
+        assert_eq!(connected.last_event, RuntimeEvent::Connected);
+        assert!(!connected.reconnecting && connected.foreground_only);
+        let seen = seen.lock().unwrap();
+        assert!(seen.len() >= 4);
+        assert!(seen.iter().all(|snapshot| snapshot["visible"] == false));
+        assert!(seen
+            .iter()
+            .all(|snapshot| snapshot["lastEvent"] == "connected" || snapshot["reconnecting"] == true));
+    }
+
+    #[test]
+    fn a_reconnecting_child_that_never_binds_shows_the_failure_and_an_enabled_service_the_outage() {
+        let now = Instant::now();
+        let mut state = Lifecycle::default();
+        state.observe(true, false, now);
+        state.service_off = true;
+        state.observe(false, true, now);
+        assert!(state.claim_restart());
+        state.service_started(RuntimeEvent::ChildStarted, Child::LoginItemsOff);
+        state.observe(false, true, now);
+        state.observe(false, true, now + Duration::from_secs(9));
+        assert!(!state.snapshot.visible);
+        state.observe(false, true, now + Duration::from_secs(10));
+        assert_eq!(state.snapshot.last_event, RuntimeEvent::StartFailed);
+        assert!(state.snapshot.visible && !state.snapshot.reconnecting);
+
+        // The switch turns on again before the claim: the outage shows after its dwell.
+        let app = tauri::test::mock_app();
+        app.manage(RuntimeOwner::default());
+        let owner = app.state::<RuntimeOwner>();
+        owner.update(app.handle(), |state| state.observe(true, false, now));
+        owner.poll_approval(app.handle(), || Some(true), || false);
+        owner.update(app.handle(), |state| state.observe(false, true, now));
+        assert!(runtime_state(app.state()).reconnecting);
+        assert_eq!(
+            owner.poll_approval(app.handle(), || Some(false), || false),
+            ApprovalStep::Wait
+        );
+        owner.update(app.handle(), |state| state.observe(false, true, now + DWELL));
+        let outage = runtime_state(app.state());
+        assert!(outage.visible && !outage.reconnecting);
     }
 
     #[test]
@@ -1433,9 +1582,11 @@ mod tests {
                 |_| vec![],
             );
         });
+        // The status read found the service off, so the lost connection is
+        // the reconnect to a child, not a blocking outage.
         let disconnected = runtime_state(app.state());
         assert_eq!(disconnected.last_event, RuntimeEvent::Disconnected);
-        assert!(disconnected.visible);
+        assert!(!disconnected.visible && disconnected.reconnecting);
     }
 
     #[test]

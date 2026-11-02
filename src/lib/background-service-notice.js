@@ -8,7 +8,7 @@ const messages = {
   approved: 'The runtime registration has approval.',
   notFound: 'The runtime registration found no service.',
   registrationFailed: 'The runtime registration failed.',
-  childStarted: 'The runtime service did not start, so the desktop runs the runtime itself.',
+  childStarted: 'The desktop runs the runtime while the background service is off.',
   stopped: 'The runtime stopped.',
   stopFailed: 'The runtime stop failed.',
 }
@@ -21,15 +21,22 @@ const foregroundOnly = {
   command: 'open_login_items',
 }
 
+// A child that runs because Login Items keeps the service off speaks with the
+// Login Items notice, since the user turned the service off and nothing failed.
+// While the child replaces the stopped service, the workspace stays and shows
+// that it reconnects.
 export function runtimeNotice(state) {
   if (!state || !Object.hasOwn(messages, state.lastEvent)) return null
   const cause = state.lastEvent === 'startFailed' && typeof state.cause === 'string' ? state.cause.trim() : ''
+  const visible = state.lastEvent !== 'connected' && state.visible === true
+  const loginItems = state.lastEvent === 'requiresApproval' || (state.lastEvent === 'childStarted' && state.foregroundOnly === true)
   return {
-    visible: state.lastEvent !== 'connected' && state.visible === true,
-    text: messages[state.lastEvent] + (cause ? ` ${cause}` : ''),
-    control: state.lastEvent === 'requiresApproval' ? 'Open Login Items' : 'Start runtime',
-    command: state.lastEvent === 'requiresApproval' ? 'open_login_items' : 'runtime_start',
+    visible,
+    text: state.lastEvent === 'childStarted' && loginItems ? foregroundOnly.text : messages[state.lastEvent] + (cause ? ` ${cause}` : ''),
+    control: loginItems ? 'Open Login Items' : 'Start runtime',
+    command: loginItems ? 'open_login_items' : 'runtime_start',
     busy: state.busy === true,
+    reconnecting: !visible && state.reconnecting === true,
     foregroundOnly: state.foregroundOnly === true ? foregroundOnly : null,
   }
 }

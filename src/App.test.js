@@ -740,6 +740,30 @@ describe('workspace composer entry', () => {
     } finally { vi.useRealTimers() }
   })
 
+  it('keeps the workspace while Login Items turns the service off and a child takes over', async () => {
+    runtimeState = { revision: 1, lastEvent: 'connected', visible: false, busy: false, foregroundOnly: false }
+    render(App)
+    await findWorkspaceComposer()
+    const sequence = [
+      { lastEvent: 'disconnected', reconnecting: true, foregroundOnly: false },
+      { lastEvent: 'disconnected', reconnecting: true, foregroundOnly: true, busy: true },
+      { lastEvent: 'childStarted', reconnecting: true, foregroundOnly: true },
+    ]
+    for (const [index, step] of sequence.entries()) {
+      runtimeListener({ payload: { revision: index + 2, visible: false, busy: false, ...step } })
+      expect(await screen.findByTestId('runtime-reconnecting')).toHaveTextContent('Reconnecting…')
+      expect(screen.queryByTestId('runtime-notice')).not.toBeInTheDocument()
+      expect(screen.queryByText('The runtime service did not start, so the desktop runs the runtime itself.')).not.toBeInTheDocument()
+      expect(screen.getByLabelText('Message', { selector: '#composer-message' })).toBeInTheDocument()
+    }
+    const notice = await screen.findByTestId('foreground-only-notice')
+    expect(within(notice).getByRole('button', { name: 'Open Login Items' })).toBeVisible()
+    runtimeListener({ payload: { revision: 5, lastEvent: 'connected', visible: false, busy: false, reconnecting: false, foregroundOnly: true } })
+    await waitFor(() => expect(screen.queryByTestId('runtime-reconnecting')).not.toBeInTheDocument())
+    expect(screen.queryByTestId('runtime-notice')).not.toBeInTheDocument()
+    expect(screen.getByTestId('foreground-only-notice')).toBeInTheDocument()
+  })
+
   it('keeps the foreground-only state in Settings > General after the composer notice closes', async () => {
     runtimeState = { revision: 1, lastEvent: 'connected', visible: false, busy: false, foregroundOnly: true }
     const fallback = invoke.getMockImplementation()

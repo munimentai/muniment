@@ -4050,6 +4050,7 @@
             {/if}
 
             <span class="title-spacer" data-tauri-drag-region></span>
+            {#if runtimeNotice?.reconnecting}<span class="runtime-reconnecting" role="status" data-testid="runtime-reconnecting" data-tauri-drag-region>Reconnecting…</span>{/if}
             <span class="update-slot"><AppUpdate {tauri} busy={workspaceDirty || threadSwitching || isDictationActive(dictation) || dictationFinishing} /></span>
             {#if featureFlags.companyRecord}<RowControl kind="record-toggle" aria-controls="record-panel" aria-expanded={recordPanelOpen} aria-keyshortcuts={recordShortcut} aria-label={`${recordPanelOpen ? 'Close' : 'Open'} record panel`} onclick={toggleRecordPanel}>Record <kbd>{shortcutDisplayLabel(recordShortcut)}</kbd></RowControl>{/if}
             <WorkspaceMenu selected={browserPanel} onselect={showBrowser} onopenchange={value => toolsMenuOpen = value} />
@@ -4825,6 +4826,7 @@
   .drop-affordance { position: absolute; z-index: 4; inset: 0; display: grid; place-content: center; gap: 5px; background: color-mix(in srgb, var(--paper) 92%, transparent); border: 1px dashed var(--muted); border-radius: var(--radius-panel); color: var(--ink); text-align: center; pointer-events: none; }
   .drop-affordance span { color: var(--muted); font: var(--text-12) var(--font-mono); }
   /* The row ends where its 24px controls end, so the paper under them is the rest of the band. */
+  .runtime-reconnecting { flex: none; align-self: center; color: var(--muted); font-size: var(--text-12); white-space: nowrap; }
   .titlebar { grid-area: title; display: flex; align-items: end; gap: 8px; min-width: 0; margin: 0 calc(-1 * var(--frame-width)); padding: 0 12px; background: var(--paper); font-size: var(--text-13); user-select: none; }
   /* The title row shares the animated sidebar width so controls never cross during the panel slide. */
   @property --sidebar-column { syntax: '<length>'; inherits: true; initial-value: 195px; }
