@@ -85,6 +85,7 @@
   import { OPEN_THREAD_EVENT } from './lib/memory-source.js'
   import { OPEN_USAGE_EVENT, composerLimit, isUsageShortcut, machineRefs, readUsage, usageShortcut } from './usage/usage.js'
   import ComposerMenuButton from './composer/ComposerMenuButton.svelte'
+  import { composerPriority } from './composer/composer-priority.js'
   import ComposerNotice from './composer/ComposerNotice.svelte'
   import VoiceWave from './composer/VoiceWave.svelte'
   import ContextMeter from './lib/ContextMeter.svelte'
@@ -4506,7 +4507,7 @@
           {/if}
           {#if composerWarning}<LimitBanner limit={composerWarning} onview={() => toggleFullPage('usage')} />{/if}
           <div class="composer-row" bind:this={composerRow}>
-            <div class="composer-meta">
+            <div class="composer-meta" use:composerPriority>
             <ComposerExtensions bind:commandNames={extensionCommandNames} bind:this={composerExtensions} bind:selection={turnExtensions} {tauri} threadId={currentThreadId} active={!!active} bind:draft onmanage={() => openSettings('extend')} onfiles={chooseFiles} filesNote={remoteRuntime ? REMOTE_FILES_NOTE : ''} />
             <MachinePicker list={runtimeList} locked={threadMachine} source={machineSource} owner={currentOwner} fleet={fleetTargets} offload={offloadTarget} disabled={switchLocked || !!active || !!pendingOffload} onselect={(runtime) => { offloadTarget = null; machineLayer = 'thread'; void selectRuntime(runtime) }} onoffload={(target) => { offloadTarget = target }} onmanage={() => openSettings('runtimes')} />
             {#if threadGroup}
@@ -5152,6 +5153,11 @@
   .composer-meta { flex: 1 1 auto; display: flex; align-items: center; gap: 8px; min-width: 0; }
   .composer-meta > span { flex-basis: max-content; }
   .composer-meta > #composer-hint { min-width: 0; }
+  /* composer-priority.js collapses the lower-priority controls to their icons before the model name clips. */
+  .composer-meta[data-collapse] :global(.context-trigger > span) { display: none; }
+  .composer-meta[data-collapse="2"] :global([data-menu="mode"] .label), .composer-meta[data-collapse="2"] :global([data-menu="mode"] .chevrons) { display: none; }
+  .composer-meta[data-collapse="2"] :global([data-menu="mode"]:hover::after), .composer-meta[data-collapse="2"] :global([data-menu="mode"]:focus-visible::after) { display: block; }
+  .composer-meta[data-collapse="2"] :global([data-menu="mode"][data-open="true"]::after) { display: none; }
   .composer-actions { flex: none; display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; max-width: 100%; margin-left: auto; }
   .composer-actions button { flex-shrink: 0; white-space: nowrap; }
   .composer-icon { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; min-height: 24px; padding: 4px; line-height: 0; color: var(--muted); }

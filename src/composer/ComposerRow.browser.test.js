@@ -6,6 +6,8 @@ import '../styles/base.css'
 import appSource from '../App.svelte?raw'
 import ChatComposer from './ChatComposer.svelte'
 import ComposerMenuButton from './ComposerMenuButton.svelte'
+import ContextMeter from '../lib/ContextMeter.svelte'
+import { fitComposerMeta } from './composer-priority.js'
 
 let components = []
 afterEach(() => {
@@ -26,7 +28,7 @@ const longModel = 'GPT-5.6 Terra (unavailable)'
 
 // The composer in a thread column `column` pixels wide: Extensions, the
 // machine, model, thinking and mode chips, then Voice and the Send slot.
-function composer(column) {
+function composer(column, { model = longModel, context = false } = {}) {
   const style = document.createElement('style')
   style.textContent = bandRules
   document.head.append(style)
@@ -38,17 +40,20 @@ function composer(column) {
   flushSync()
   const meta = thread.querySelector('.composer-meta')
   components.push(mount(ComposerMenuButton, { target: meta, props: { menu: 'machine', chevrons: true, label: 'Machine: This computer. Choose a machine', text: 'This computer', icon: glyph('monitor') } }))
-  components.push(mount(ComposerMenuButton, { target: meta, props: { menu: 'model', chevrons: true, haspopup: 'dialog', label: `Model: ${longModel}`, text: longModel, icon: glyph('openai') } }))
+  components.push(mount(ComposerMenuButton, { target: meta, props: { menu: 'model', chevrons: true, haspopup: 'dialog', label: `Model: ${model}`, text: model, icon: glyph('openai') } }))
   components.push(mount(ComposerMenuButton, { target: meta, props: { menu: 'thinking', label: 'Thinking level: Medium', text: 'Medium', icon: glyph('brain') } }))
   components.push(mount(ComposerMenuButton, { target: meta, props: { menu: 'mode', chevrons: true, label: 'Permission mode: Ask before changes', text: 'Ask before changes', icon: glyph('hand') } }))
+  if (context) components.push(mount(ContextMeter, { target: meta, props: { usage: { windowKnown: true, tokens: 70000, contextWindow: 200000, percent: 35 } } }))
   flushSync()
+  fitComposerMeta(meta)
   return thread
 }
 
 // The default 1280px window with a 195px sidebar leaves the thread 1085px,
-// an open agent profile at its 320px default leaves it 765px, and one
-// widened to 445px leaves it 640px, where the model name must give way.
-for (const [state, column, clips] of [['alone', 1085, false], ['beside the agent profile', 765, false], ['beside a wider agent profile', 640, true]]) {
+// an open agent profile at its 320px default leaves it 765px, one widened to
+// 445px leaves it 640px, where the permission label gives way first, and one
+// widened to 525px leaves it 560px, where the model name must give way.
+for (const [state, column, clips] of [['alone', 1085, false], ['beside the agent profile', 765, false], ['beside a wider agent profile', 640, false], ['beside the widest agent profile', 560, true]]) {
   it(`keeps Voice on the chips' line with a long model name, ${state} at the default window width`, async () => {
     await page.viewport(1280, 800)
     const thread = composer(column)
@@ -88,3 +93,35 @@ it('shows no hover label on a model name that fits', async () => {
   expect(chip.dataset.clipped).toBeUndefined()
   expect(getComputedStyle(chip, '::after').display).toBe('none')
 })
+
+// With the context meter showing beside an open agent profile, the percent
+// and then the permission label give way before a short model name, which
+// read "GPT-6 …" in a 720px thread before.
+for (const [column, collapse] of [[1085, undefined], [720, '1'], [660, '2']]) {
+  it(`keeps a short model name readable beside the context meter in a ${column}px thread`, async () => {
+    await page.viewport(1280, 800)
+    const thread = composer(column, { model: 'GPT-6 Astra', context: true })
+    await document.fonts.ready
+    const meta = thread.querySelector('.composer-meta')
+    fitComposerMeta(meta)
+    expect(meta.dataset.collapse).toBe(collapse)
+    const label = thread.querySelector('[data-menu="model"] .label')
+    expect(label.scrollWidth).toBeLessThanOrEqual(label.clientWidth)
+    // No control runs past the meta side into the actions.
+    for (const control of meta.children) expect(control.getBoundingClientRect().right).toBeLessThanOrEqual(meta.getBoundingClientRect().right + 0.5)
+    const percent = thread.querySelector('.context-trigger > span')
+    const mode = thread.querySelector('[data-menu="mode"]')
+    expect(percent.getClientRects().length > 0).toBe(!collapse)
+    expect(mode.querySelector('.label').getClientRects().length > 0).toBe(collapse !== '2')
+    // A collapsed control keeps its name and its hover label.
+    expect(mode).toHaveAttribute('aria-label', 'Permission mode: Ask before changes')
+    if (collapse === '2') {
+      await userEvent.hover(mode)
+      await expect.poll(() => getComputedStyle(mode, '::after').display).toBe('block')
+    }
+    const voice = thread.querySelector('[aria-label="Voice"]')
+    const middle = (element) => { const box = element.getBoundingClientRect(); return box.top + box.height / 2 }
+    expect(Math.abs(middle(voice) - middle(label.closest('button')))).toBeLessThan(1)
+  })
+}
+
