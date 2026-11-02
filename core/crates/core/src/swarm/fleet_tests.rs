@@ -1245,3 +1245,55 @@ fn a_refused_fleet_key_asks_once_and_waits_for_a_retry() {
     swarm.stop();
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn what_the_keychain_refused_reads_and_retries_with_remote_access_off() {
+    use crate::model_router::credentials::CredentialRefusal;
+    use std::sync::atomic::Ordering;
+    let store = Arc::new(RefusingStore {
+        asked: Default::default(),
+        writes: Default::default(),
+        retried: Default::default(),
+        refusal: Mutex::new(Some(CredentialRefusal::Declined(
+            "User canceled the operation.".into(),
+        ))),
+    });
+    let root = std::env::temp_dir().join(format!("swarm-keychain-off-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let storage = Arc::new(Mutex::new(crate::run_events::ChatStorage {
+        journal: crate::journal::RunJournal::open(root.join("runs.sqlite3")).unwrap(),
+        cas: crate::cas::LocalCas::open(&root.join("cas")).unwrap(),
+    }));
+    let host = Arc::new(RefusingHost(Arc::clone(&store)));
+    let swarm = Swarm::open(&root, storage, host as Arc<dyn SwarmHost>).unwrap();
+    assert_eq!(swarm.runtime_id(), None);
+
+    // The members view still asks for remote access.
+    assert!(swarm
+        .operation(Operation::SwarmMembers, json!({}), None)
+        .is_err());
+    let view = swarm
+        .operation(Operation::SwarmMembers, json!({"keychain": true}), None)
+        .unwrap();
+    assert_eq!(view["members"], json!([]));
+    assert_eq!(view["fleet_key"], Value::Null);
+    assert_eq!(view["keychain"][0]["label"], "webhook secrets");
+    assert_eq!(view["keychain"][0]["state"], "declined");
+    assert_eq!(store.retried.load(Ordering::SeqCst), 0);
+
+    // Try again reaches the store, and its answer clears the notice.
+    *lock(&store.refusal) = None;
+    let view = swarm
+        .operation(
+            Operation::SwarmMembers,
+            json!({"retry_keychain": true}),
+            None,
+        )
+        .unwrap();
+    assert_eq!(store.retried.load(Ordering::SeqCst), 1);
+    assert_eq!(view["keychain"], json!([]));
+    // No fleet key is made while remote access is off.
+    assert_eq!(store.writes.load(Ordering::SeqCst), 0);
+    swarm.stop();
+    let _ = std::fs::remove_dir_all(&root);
+}

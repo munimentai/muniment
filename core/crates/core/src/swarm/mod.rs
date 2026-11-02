@@ -588,11 +588,20 @@ impl Swarm {
             Operation::SwarmLeave => link::leave(inner, body),
             Operation::SwarmMembers => {
                 // `{"retry_keychain": true}` is the person's retry of the
-                // secrets the keychain refused.
-                if body == json!({"retry_keychain": true}) {
+                // secrets the keychain refused, and `{"keychain": true}`
+                // reads them. With remote access off, both answer what the
+                // keychain refused and no members.
+                let keychain = if body == json!({"retry_keychain": true}) {
                     fleet::retry_key(inner);
+                    true
+                } else if body == json!({"keychain": true}) {
+                    true
                 } else {
                     empty(&body)?;
+                    false
+                };
+                if keychain && inner.runtime_id().is_none() {
+                    return Ok(fleet::keychain_view(inner));
                 }
                 link::members_view(inner)
             }

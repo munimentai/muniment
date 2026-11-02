@@ -392,6 +392,17 @@ pub(super) fn keychain_status(inner: &Inner) -> Value {
     Value::Array(items)
 }
 
+/// What the keychain refused this runtime, with no members, as
+/// `swarm.members` answers it while remote access is off.
+pub(super) fn keychain_view(inner: &Inner) -> Value {
+    serde_json::json!({
+        "self": null,
+        "members": [],
+        "fleet_key": key_status(inner),
+        "keychain": keychain_status(inner),
+    })
+}
+
 /// What a keychain service holds, in words.
 fn keychain_label(service: &str) -> &'static str {
     match service {
