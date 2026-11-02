@@ -217,7 +217,7 @@ it('runs the agent on its own machine, opens a run from its history and deletes 
   await fireEvent.click(screen.getByRole('checkbox', { name: 'Also delete its memory' }))
   await fireEvent.click(screen.getByRole('button', { name: 'Confirm delete' }))
   // Core's answer reaches the app, which names a kept folder.
-  await waitFor(() => expect(ondelete).toHaveBeenCalledWith({ folder_kept: '/home/me/Scout', message: "The agent's folder holds your files, so it stays." }))
+  await waitFor(() => expect(ondelete).toHaveBeenCalledWith({ folder_kept: '/home/me/Scout', message: "The agent's folder holds your files, so it stays." }, { removeThreads: false }))
   expect(requests.at(-1)).toEqual({ runtime: 'box', operation: 'agent.delete', body: { id: 'scout', remove_memory: true } })
 })
 
@@ -545,14 +545,20 @@ it('says when the agent has no runs yet and shows its activity', async () => {
 
 it('opens at its delete confirmation when a card asks to delete the agent', async () => {
   const { invoke } = machine()
-  const view = render(AgentProfile, { agent, tauri: { invoke }, onchange: vi.fn(), ondelete: vi.fn() })
+  const ondelete = vi.fn()
+  const view = render(AgentProfile, { agent, tauri: { invoke }, onchange: vi.fn(), ondelete })
   expect(screen.queryByRole('button', { name: 'Confirm delete' })).not.toBeInTheDocument()
   await view.rerender({ deleteAsked: 1 })
   expect(await screen.findByRole('button', { name: 'Confirm delete' })).toBeInTheDocument()
   expect(screen.getByRole('checkbox', { name: 'Also delete its memory' })).not.toBeChecked()
+  expect(screen.getByText('Its threads move to Archived.')).toBeInTheDocument()
+  await fireEvent.click(screen.getByRole('checkbox', { name: 'Also delete its threads' }))
   await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
   await view.rerender({ deleteAsked: 2 })
-  expect(await screen.findByRole('button', { name: 'Confirm delete' })).toBeInTheDocument()
+  expect(await screen.findByRole('checkbox', { name: 'Also delete its threads' })).not.toBeChecked()
+  await fireEvent.click(screen.getByRole('checkbox', { name: 'Also delete its threads' }))
+  await fireEvent.click(screen.getByRole('button', { name: 'Confirm delete' }))
+  await waitFor(() => expect(ondelete).toHaveBeenCalledWith(expect.anything(), { removeThreads: true }))
 })
 
 it('scrolls a card\'s delete confirmation into view and focuses its safe choice', async () => {

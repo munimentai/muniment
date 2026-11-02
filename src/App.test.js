@@ -4822,6 +4822,45 @@ describe('sidebar collapse', () => {
   })
 
   it.each([
+    ['moves its threads to Archived', false],
+    ['deletes its threads when asked, and names a folder the delete keeps', true],
+  ])('says what happens to a deleted agent\'s threads and %s', async (_, removeThreads) => {
+    const original = invoke.getMockImplementation()
+    let deleted = false
+    const folder = '/Users/me/Muniment/Threads/agent-thread'
+    const scout = { id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null }
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args) ? agentListAnswer(deleted ? [] : [scout], deleted ? {} : { 'agent-1': 'agent-thread' })
+      : command === 'agent_request' && args?.operation === 'agent.delete' ? (deleted = true, {})
+      : command === 'chat_delete_thread' ? { folder_kept: folder, message: "The thread's folder holds your files, so it stays." }
+      : command === 'chat_thread_open' ? []
+      : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
+    threadSummaryResult = [
+      { threadId: 'agent-thread', title: 'Carry out your saved agent instructions', updatedAt: '2026-01-02T00:00:00Z' },
+      { threadId: 'plain-thread', title: 'Lease renewal', updatedAt: '2026-01-01T00:00:00Z' },
+    ]
+    render(App)
+    await openSidebarPage('Agents')
+    await fireEvent.click(within(await within(await screen.findByRole('region', { name: 'Agents', exact: true })).findByRole('article', { name: 'Scout' })).getByRole('button', { name: 'Open chat' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'agent-thread', limit: 100 }))
+    const profile = await screen.findByRole('complementary', { name: 'Agent profile' })
+    await fireEvent.click(within(profile).getByRole('button', { name: 'Delete agent' }))
+    const confirm = await screen.findByRole('group', { name: 'Delete agent' })
+    expect(within(confirm).getByText('Its threads move to Archived.')).toBeInTheDocument()
+    if (removeThreads) await fireEvent.click(within(confirm).getByRole('checkbox', { name: 'Also delete its threads' }))
+    await fireEvent.click(within(confirm).getByRole('button', { name: 'Confirm delete' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'plain-thread', limit: 100 }))
+    const organization = JSON.parse(localStorage.getItem('muniment.thread-organization') || '{}')
+    if (removeThreads) {
+      expect(invoke).toHaveBeenCalledWith('chat_delete_thread', { threadId: 'agent-thread' })
+      expect(organization['agent-thread']?.archived).not.toBe(true)
+      expect(await screen.findByText(new RegExp(folder))).toBeInTheDocument()
+    } else {
+      expect(invoke.mock.calls.some(([command]) => command === 'chat_delete_thread')).toBe(false)
+      expect(organization['agent-thread']?.archived).toBe(true)
+    }
+  })
+
+  it.each([
     ['names it as the agent\'s thread', { 'agent-1': 'agent-fresh' }],
     ['does not name it yet', {}],
   ])('moves off the new thread "Open agent" started to the newest thread when the agent is deleted from its profile, while the listing %s', async (_, mapping) => {

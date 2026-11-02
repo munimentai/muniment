@@ -748,14 +748,19 @@
       action: local ? { label: revealLabel, run: () => { tauri.invoke('workspace_reveal', { path: folder }).catch(error => { submitError = String(error) }) } } : undefined,
     })
   }
-  async function agentDeleted(agent) {
+  // A deleted agent's threads move to Archived, or with `removeThreads` go
+  // through the thread delete, which names a folder it keeps. A thread whose
+  // run still goes stays archived.
+  async function agentDeleted(agent, { removeThreads = false } = {}) {
     const chats = creations.filter(item => item.kind === 'agent' && item.resultId === agent.id).map(item => item.threadId)
     const threadIds = Object.keys(agentThreadMap).filter(id => agentThreadMap[id] === agent.id)
+    const ownsView = selectedAgent === agent.id || [...threadIds, ...chats].includes(currentThreadId)
+    const deleted = new Set()
+    if (removeThreads) for (const id of threadIds) if (await chatController.deleteThread(id)) deleted.add(id)
     const next = { ...threadOrganization }
-    for (const id of threadIds) next[id] = { ...next[id], archived: true }
+    for (const id of threadIds) if (!deleted.has(id)) next[id] = { ...next[id], archived: true }
     localStorage.setItem(THREAD_ORGANIZATION_KEY, JSON.stringify(next))
     threadOrganization = next
-    const ownsView = selectedAgent === agent.id || [...threadIds, ...chats].includes(currentThreadId)
     if (selectedAgent === agent.id) selectedAgent = null
     if (profileOnlyAgent === agent.id) profileOnlyAgent = null
     agentProfileOpen = false
@@ -4641,7 +4646,7 @@
         runs={activityRuns.filter(entry => entry.agent_id === profileAgent.id && entry.runtimeId === profileAgent.runtimeId)} agents={roster} {runtimeList} {swarm} {inventory} catalog={agentCatalog} activity={profileAgent.activity} threads={agentListing.threads?.[profileAgent.id] ?? []}
         onclose={() => { agentProfileOpen = false; profileOnlyAgent = null }} onchange={refreshAgentsAndRuns} onrun={(run) => { startedRuns.add(run.id); activityRuns = applyRunUpdate(activityRuns, { runtimeId: run.runtimeId, run }) }}
         onmanagemodels={openModelSettings} onvisibility={setModelShown}
-        deleteAsked={profileDelete.agentId === profileAgent.id ? profileDelete.count : 0} ondelete={(answer) => { showKeptFolder(profileAgent, answer); void agentDeleted(profileAgent) }}
+        deleteAsked={profileDelete.agentId === profileAgent.id ? profileDelete.count : 0} ondelete={(answer, options) => { showKeptFolder(profileAgent, answer); void agentDeleted(profileAgent, options) }}
         onopen={(id) => showThread(id)} onopenrun={(run) => openRunThread(run).catch(error => { submitError = String(error) })} onopenfolder={openAgentFolder} />{/key}
     {/if}
   {#if browserPanel}<div class="artifact-divider workspace-divider" role="separator" aria-label="Workspace panel width" aria-orientation="vertical" aria-valuemin="340" aria-valuemax={workspacePanelMaximum} aria-valuenow={workspacePanelWidth} tabindex="0" onpointerdown={workspaceResize.pointerDown} onpointermove={workspaceResize.pointerMove} onpointerup={workspaceResize.pointerEnd} onpointercancel={workspaceResize.pointerEnd} onkeydown={workspaceResize.keydown}><span class="divider-grip" aria-hidden="true"><LucideIcon name="ellipsis-vertical" size={14} variant="action" /></span></div>{/if}

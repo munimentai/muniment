@@ -46,6 +46,7 @@
   let error = $state('')
   let deleting = $state(false)
   let removeMemory = $state(false)
+  let removeThreads = $state(false)
   let memoryOpen = $state(false)
   // The memory dialog shows the list, or the Add memory form in its place.
   let memoryAdding = $state(false)
@@ -129,7 +130,7 @@
   let deleteRow = $state()
   async function cancelDelete() {
     stopSettle?.(); stopSettle = null
-    deleting = false; removeMemory = false
+    deleting = false; removeMemory = false; removeThreads = false
     await tick()
     focusLikeKeys(deleteRow?.querySelector('button:not(:disabled)'))
   }
@@ -385,8 +386,10 @@
       </div>
       {#if deleting}
         <div class="confirm" role="group" aria-label="Delete agent" bind:this={confirmBox}>
+          <p class="muted">Its threads move to Archived.</p>
           <label class="check"><input type="checkbox" bind:checked={removeMemory} disabled={busy} />Also delete its memory</label>
-          <div class="actions"><Button variant="danger" disabled={busy} onclick={() => action(async () => { const answer = await agentRequest(tauri, agent.runtimeId, 'agent.delete', { id: agent.id, remove_memory: removeMemory }); ondelete(answer) })}>Confirm delete</Button><Button data-safe disabled={busy} onclick={cancelDelete}>Cancel</Button></div>
+          <label class="check"><input type="checkbox" bind:checked={removeThreads} disabled={busy} />Also delete its threads</label>
+          <div class="actions"><Button variant="danger" disabled={busy} onclick={() => action(async () => { const answer = await agentRequest(tauri, agent.runtimeId, 'agent.delete', { id: agent.id, remove_memory: removeMemory }); ondelete(answer, { removeThreads }) })}>Confirm delete</Button><Button data-safe disabled={busy} onclick={cancelDelete}>Cancel</Button></div>
         </div>
       {:else}<div class="delete-row" bind:this={deleteRow}><Button variant="danger" icon="trash-2" disabled={busy || runActive(run?.status)} onclick={() => { deleting = true; revealDelete = -1 }}>Delete agent</Button></div>{/if}
     </div>
