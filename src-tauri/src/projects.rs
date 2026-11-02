@@ -29,6 +29,16 @@ pub async fn project_create(name: String) -> Result<String, String> {
 pub async fn project_rename(project_id: String, name: String) -> Result<(), String> {
     blocking(move || projects::rename(&profile()?, &project_id, &name)).await
 }
+/// Deletes a project of this computer. Answers its folder when the folder
+/// stays because it holds the user's files.
+#[tauri::command]
+pub async fn project_delete(project_id: String) -> Result<Option<String>, String> {
+    blocking(move || {
+        Ok(projects::delete(&profile()?, &project_id)?
+            .map(|folder| folder.to_string_lossy().into_owned()))
+    })
+    .await
+}
 #[tauri::command]
 pub async fn project_settings(project_id: String) -> Result<projects::Settings, String> {
     blocking(move || projects::settings(&profile()?, &project_id)).await

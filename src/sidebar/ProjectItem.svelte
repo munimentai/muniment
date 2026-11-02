@@ -3,7 +3,7 @@
   // most urgent status of its threads in words, the triggers of its agents in
   // words, such as `every day 9:00` or `webhook`, and the pencil that starts
   // a thread in it. The menu holds Settings, Rename,
-  // Open folder and New group chat where the project has each. A thread row
+  // Open folder, New group chat and a red Delete where the project has each. A thread row
   // dropped on it moves the thread into the project.
   import { floatingMenu } from '../lib/floating-menu.js'
   import { tick } from 'svelte'
@@ -13,7 +13,7 @@
   import { statusTone } from './sidebar-model.js'
   // `owner` names the fleet member that holds a shared project's files.
   // `ondropthread` makes the row a drop target for a thread row dragged as `dragType`.
-  let { owner = null, name, triggers = '', status = 'read', statusLabel = '', expanded, disabled = false, dragType = '', ontoggle, onnew, onsettings, onrename, onopen, ongroup, ondropthread } = $props()
+  let { owner = null, name, triggers = '', status = 'read', statusLabel = '', expanded, disabled = false, dragType = '', ontoggle, onnew, onsettings, onrename, onopen, ongroup, ondelete, ondropthread } = $props()
   let open = $state(false)
   let dropping = $state(false)
   const carries = (event) => !!ondropthread && !!dragType && [...(event.dataTransfer?.types ?? [])].includes(dragType)
@@ -41,6 +41,7 @@
     onrename && { id: 'rename', label: 'Rename', icon: 'pencil', run: onrename },
     onopen && { id: 'open', label: 'Open folder', icon: 'folder-open', run: onopen },
     ongroup && { id: 'group', label: 'New group chat', icon: 'users', run: ongroup },
+    ondelete && { id: 'delete', label: 'Delete', icon: 'trash-2', run: ondelete, danger: true },
   ].filter(Boolean))
   $effect(() => {
     if (!open) return
@@ -76,7 +77,7 @@
   {#if open}
     <div class="project-menu" use:floatingMenu role="menu" tabindex="-1" aria-label={`${name} actions`} bind:this={menu} onkeydown={menuKey}>
       <button role="menuitem" {disabled} onclick={() => choose(onnew)}><LucideIcon name="square-pen" size={14} />New thread</button>
-      {#each actions as action (action.id)}<button role="menuitem" onclick={() => choose(action.run)}><LucideIcon name={action.icon} size={14} />{action.label}</button>{/each}
+      {#each actions as action (action.id)}<button role="menuitem" data-danger={action.danger || undefined} onclick={() => choose(action.run)}><LucideIcon name={action.icon} size={14} />{action.label}</button>{/each}
     </div>
   {/if}
 </div>
@@ -104,4 +105,5 @@
   .project-menu button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 5px 8px; border: 0; background: transparent; color: var(--ink); font: var(--text-13) var(--font-human); text-align: left; }
   .project-menu button:disabled { opacity: .55; cursor: default; }
   .project-menu button:hover:not(:disabled) { background: var(--faint); }
+  .project-menu button[data-danger] { color: var(--danger); }
 </style>

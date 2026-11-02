@@ -17,7 +17,7 @@
     sidebar, row, fresh = null, showFresh = false, query = '', pages = [], owners = {},
     disabled = false, expanded = new Set(), archivedOpen = $bindable(false),
     projectForm = null, projectName = $bindable(''), projectBusy = false, projectError = '',
-    onpage, ontoggleproject, onnewthread, onsettings, onrenameproject, onopenfolder, ongroup, onnewproject, onsaveproject, oncancelproject, onretryprojects, library, footer,
+    onpage, ontoggleproject, onnewthread, onsettings, onrenameproject, onopenfolder, ondeleteproject, ongroup, onnewproject, onsaveproject, oncancelproject, onretryprojects, library, footer,
     // A thread row dropped on a project of this computer moves there.
     dragType = '', onmovethread,
   } = $props()
@@ -65,6 +65,7 @@
                 ontoggle={() => ontoggleproject(project.id)} onnew={() => onnewthread(project.id)} onsettings={() => onsettings(project.id)}
                 onrename={project.kind === 'project' && !project.owner ? () => onrenameproject(project.id, project.name) : undefined}
                 onopen={project.kind === 'project' && !project.owner ? () => onopenfolder(project.id) : undefined}
+                ondelete={ondeleteproject && project.kind === 'project' && !project.owner ? () => ondeleteproject(project) : undefined}
                 ongroup={ongroup ? () => ongroup(project.id) : undefined}
                 {dragType} ondropthread={onmovethread && project.kind === 'project' && !project.owner ? (threadId) => onmovethread(threadId, project.id) : undefined} />
               {#if expanded.has(project.id) && project.threads.length}<ul class="thread-list project-threads" aria-label={`${project.name} threads`}>{#each project.threads as item (item.thread_id)}{@render row(item)}{/each}</ul>{/if}

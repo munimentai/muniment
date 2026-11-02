@@ -3268,6 +3268,36 @@ describe('thread name', () => {
     expect(within(list).getByRole('button', { name: 'Unassigned notes' })).toBeInTheDocument()
   })
 
+  it('deletes a project from its menu after a confirm that says its threads stay', async () => {
+    const catalog = { projects: { research: 'Research' }, threads: { 'thread-1': 'research' } }
+    const baseInvoke = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, payload) => {
+      if (command === 'project_list') return structuredClone(catalog)
+      if (command === 'project_delete') {
+        delete catalog.projects[payload.projectId]
+        for (const [thread, project] of Object.entries(catalog.threads)) if (project === payload.projectId) delete catalog.threads[thread]
+        return '/home/me/projects/Research-1'
+      }
+      return baseInvoke(command, payload)
+    })
+    render(App)
+    await screen.findByRole('button', { name: 'Project Research' })
+    await fireEvent.contextMenu(screen.getByRole('button', { name: 'Project Research' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete', exact: true }))
+    let dialog = await screen.findByRole('dialog', { name: 'Delete Research?' })
+    expect(dialog).toHaveTextContent('Its thread stays, in no project. Its folder is removed unless it holds your files.')
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Delete Research?' })).not.toBeInTheDocument())
+    expect(invoke).not.toHaveBeenCalledWith('project_delete', expect.anything())
+    await fireEvent.contextMenu(screen.getByRole('button', { name: 'Project Research' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete', exact: true }))
+    dialog = await screen.findByRole('dialog', { name: 'Delete Research?' })
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Delete project' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('project_delete', { projectId: 'research' }))
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Project Research' })).not.toBeInTheDocument())
+    expect(await screen.findByTestId('project-folder-kept-notice')).toHaveTextContent("The project's folder holds your files, so it stays. /home/me/projects/Research-1")
+  })
+
   it.each([false, true])('creates and renames a project with the catalog open: %s', async (catalogOpen) => {
     const catalog = { projects: { research: 'Research' }, threads: { 'thread-1': 'research' } }
     const baseInvoke = invoke.getMockImplementation()

@@ -761,6 +761,7 @@
   const KEPT_FOLDER = {
     agent: { id: 'agent-folder-kept', text: "The agent's folder holds your files, so it stays.", label: 'Agent folder kept', testid: 'agent-folder-kept-notice', dismissLabel: 'Dismiss agent folder notice' },
     thread: { id: 'thread-folder-kept', text: "The thread's folder holds your files, so it stays.", label: 'Thread folder kept', testid: 'thread-folder-kept-notice', dismissLabel: 'Dismiss thread folder notice' },
+    project: { id: 'project-folder-kept', text: "The project's folder holds your files, so it stays.", label: 'Project folder kept', testid: 'project-folder-kept-notice', dismissLabel: 'Dismiss project folder notice' },
   }
   function showKeptFolder(owner, answer, kind = 'agent') {
     const folder = answer?.folder_kept
@@ -2100,6 +2101,25 @@
       projectBusy = false
       if (creating) await selectProject(id)
     } catch (error) { projectError = String(error); projectBusy = false }
+  }
+
+  // A deleted project's threads stay, each in no project, and its folder
+  // goes unless it holds the user's files, which the notice names.
+  let deletingProject = $state(null)
+  const projectThreadCount = (projectId) => Object.values(projectCatalog.threads).filter(id => id === projectId).length
+  async function deleteProject(project) {
+    deletingProject = null
+    if (projectBusy) return
+    projectBusy = true
+    try {
+      const kept = await tauri.invoke('project_delete', { projectId: project.id })
+      showKeptFolder(null, { folder_kept: kept }, 'project')
+      if (settingsProject === project.id) settingsProject = null
+      if (catalogProject === project.id) catalogProject = null
+      expandedProjects = new Set([...expandedProjects].filter(id => id !== project.id))
+      await refreshProjects(currentThreadId)
+    } catch (error) { projectError = String(error?.message ?? error) }
+    finally { projectBusy = false }
   }
 
   async function openProjectFolder(projectId) {
@@ -4175,6 +4195,7 @@
               {projectForm} bind:projectName {projectBusy} {projectError}
               onpage={openSidebarPage} ontoggleproject={selectProject} onnewthread={newProjectThread} onsettings={showProjectSettings} dragType={THREAD_DRAG} onmovethread={(threadId, projectId) => { void moveThread(threadId, projectId) }}
               onrenameproject={(id, name) => { projectForm = id; projectName = name }} onopenfolder={openProjectFolder}
+              ondeleteproject={(project) => { deletingProject = { id: project.id, name: project.name, count: projectThreadCount(project.id) } }}
               ongroup={roster.length > 1 ? () => { groupCreateOpen = true } : undefined}
               onnewproject={() => { projectForm = 'new'; projectName = ''; projectsOpen = false }} onsaveproject={saveProject} oncancelproject={() => { projectForm = null }}
               onretryprojects={() => refreshProjects()}>
@@ -4745,6 +4766,11 @@
         <p>These threads and their messages will be deleted:</p>
         <ul class="delete-titles">{#each titles.slice(0, 5) as title, index (index)}<li>{title}</li>{/each}{#if titles.length > 5}<li>{titles.length - 5} more</li>{/if}</ul>
       {:else}<p>This thread and its messages will be deleted.</p>{/if}
+    </ConfirmDialog>
+  {/if}
+  {#if deletingProject}
+    <ConfirmDialog title={`Delete ${deletingProject.name}?`} cancelLabel="Cancel" confirmLabel="Delete project" destructive onDecision={approve => approve ? deleteProject(deletingProject) : (deletingProject = null)}>
+      <p>{deletingProject.count === 0 ? 'The project holds no threads.' : deletingProject.count === 1 ? 'Its thread stays, in no project.' : `Its ${deletingProject.count} threads stay, each in no project.`} Its folder is removed unless it holds your files.</p>
     </ConfirmDialog>
   {/if}
 {#if pairingRequests[0]}
