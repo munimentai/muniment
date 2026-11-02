@@ -632,18 +632,23 @@ pub(super) fn inventory(
     engine: &PiRpcEngine,
     force: bool,
     listed: &ListedModels,
+    key: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<ProviderInventory, String> {
     // A saved default the router stopped offering moves before the picker reads it.
     super::router::settle_default(agent, None, false);
-    let discovery_agent = agent.to_path_buf();
-    let discovery = std::thread::spawn(move || pi_models::refresh_endpoints(&discovery_agent));
     let thinking_engine = engine.clone();
     let thinking = std::thread::spawn(move || thinking_engine.list_model_thinking());
-    let mut models = engine.list_models();
-    let provider_changed = refresh_provider_models(agent, &models, force).unwrap_or(false);
-    if discovery.join().ok().and_then(Result::ok) == Some(true) || provider_changed {
-        models = engine.list_models();
-    }
+    let models = std::thread::scope(|scope| {
+        // `key` answers each endpoint's key for the list read, and never
+        // with a keychain prompt.
+        let discovery = scope.spawn(|| pi_models::refresh_endpoints_with(agent, key));
+        let mut models = engine.list_models();
+        let provider_changed = refresh_provider_models(agent, &models, force).unwrap_or(false);
+        if discovery.join().ok().and_then(Result::ok) == Some(true) || provider_changed {
+            models = engine.list_models();
+        }
+        models
+    });
     super::router::settle_default(agent, None, false);
     let thinking = thinking.join().unwrap_or_default();
     let mut inventory = provider_inventory(agent, &models, &thinking)?;

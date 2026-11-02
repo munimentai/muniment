@@ -1,4 +1,5 @@
 //! How a keychain refusal reads: a declined prompt is not a missing secret.
+//! A delete here never reads the secret, so it raises no prompt for it.
 
 use crate::model_router::credentials::CredentialRefusal;
 
@@ -30,6 +31,28 @@ pub fn keychain_status_refusal(status: i32, message: String) -> CredentialRefusa
             CredentialRefusal::Declined(message)
         }
         _ => CredentialRefusal::Failed(message),
+    }
+}
+
+/// Deletes the generic password item `service` holds for `account` without
+/// reading its secret. The keyring's own macOS delete first finds the item
+/// with its password, which asks the person for the secret, so a person who
+/// declined the key would see a prompt for its removal too. A missing item
+/// answers [`keyring::Error::NoEntry`].
+pub fn delete_without_reading(service: &str, account: &str) -> Result<(), keyring::Error> {
+    #[cfg(target_os = "macos")]
+    {
+        const ITEM_NOT_FOUND: i32 = -25300;
+        security_framework::passwords::delete_generic_password(service, account).map_err(|error| {
+            match error.code() {
+                ITEM_NOT_FOUND => keyring::Error::NoEntry,
+                _ => keyring::Error::PlatformFailure(Box::new(error)),
+            }
+        })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        keyring::Entry::new(service, account).and_then(|entry| entry.delete_credential())
     }
 }
 

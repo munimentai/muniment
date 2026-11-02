@@ -514,6 +514,17 @@ pub fn endpoints(agent: &Path) -> Result<Vec<(String, String, String)>, String> 
 /// server still serves keeps the settings the user gave it. A server that
 /// lists no chat model keeps its saved list.
 pub fn refresh_endpoints(agent: &Path) -> Result<bool, String> {
+    refresh_endpoints_with(agent, &resolve_key)
+}
+
+/// [`refresh_endpoints`], with `key_for` answering the key each server's list
+/// read sends for its `apiKey` value. A host whose keys sit behind a prompt
+/// answers only a key it already holds, since a list read is no request
+/// that needs the key.
+pub fn refresh_endpoints_with(
+    agent: &Path,
+    key_for: &(dyn Fn(&str) -> Option<String> + Sync),
+) -> Result<bool, String> {
     let models_file = models_file(agent);
     if !models_file.is_file() {
         return Ok(false);
@@ -538,7 +549,7 @@ pub fn refresh_endpoints(agent: &Path) -> Result<bool, String> {
                 .get("apiKey")
                 .and_then(Value::as_str)
                 .filter(|key| !matches!(*key, "ollama" | "local"))
-                .and_then(resolve_key);
+                .and_then(key_for);
             // A server that answers with no chat model is still loading, as
             // a local server does for a while after it starts, so the saved
             // list stays until it serves one.

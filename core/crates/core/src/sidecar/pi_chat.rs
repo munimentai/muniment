@@ -500,6 +500,11 @@ const PROVIDER_DETAIL_CHARS: usize = 300;
 /// `400: {"message": ...}`, or the text itself. It comes back on one line,
 /// with credentials removed, and at most 300 characters long.
 pub fn provider_error_detail(text: &str) -> Option<String> {
+    if let Some(provider) = refused_key_provider(text) {
+        return Some(format!(
+            "The keychain refused the key for {provider}. Answer its prompt if one is open, or choose Try again in Settings → Machines, then send the message again."
+        ));
+    }
     let body = text
         .split_once(':')
         .filter(|(status, _)| !status.is_empty() && status.bytes().all(|b| b.is_ascii_digit()))
@@ -535,6 +540,28 @@ pub fn provider_error_detail(text: &str) -> Option<String> {
     } else {
         clean.to_owned()
     })
+}
+
+/// The provider whose key Pi failed to read through the runtime's
+/// `secret get` command, from Pi's error, which names the command. The
+/// runtime answers that command from the keychain, so the failure is the
+/// keychain's refusal or a prompt still open, and the command text stays
+/// out of the reply.
+fn refused_key_provider(text: &str) -> Option<&str> {
+    let rest = text
+        .trim()
+        .strip_prefix("Failed to resolve API key for provider \"")?;
+    let (provider, command) = rest.split_once('"')?;
+    let named = command
+        .strip_prefix(" from shell command: ")?
+        .trim_end()
+        .strip_suffix(provider)?;
+    (named.ends_with(" secret get ")
+        && !provider.is_empty()
+        && provider
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')))
+    .then_some(provider)
 }
 
 /// Reads the token counts of a compaction result: `tokensBefore` and, when Pi
@@ -1880,6 +1907,27 @@ mod tests {
             "role":"assistant", "stopReason":"error",
             "errorMessage":"503: This provider has no remaining allowance. private account details"
         }]})).unwrap(), PiChatEvent::UsageLimit);
+    }
+
+    #[test]
+    fn a_refused_endpoint_key_reads_as_the_keychain_refusal_without_the_command() {
+        let error = r#"Failed to resolve API key for provider "custom-live27" from shell command: "/Applications/muniment.app/Contents/MacOS/muniment-runtime" secret get custom-live27"#;
+        let detail = provider_error_detail(error).unwrap();
+        assert_eq!(
+            detail,
+            "The keychain refused the key for custom-live27. Answer its prompt if one is open, or choose Try again in Settings → Machines, then send the message again."
+        );
+        assert!(!detail.contains("muniment-runtime") && !detail.contains("secret get"));
+        let event = parse_frame(&json!({"type": "agent_end", "messages": [
+            {"role": "assistant", "stopReason": "error", "errorMessage": error}
+        ]}))
+        .unwrap();
+        assert_eq!(event, PiChatEvent::Failed(Some(detail)));
+        // A command the user wrote keeps Pi's own sentence.
+        let own = r#"Failed to resolve API key for provider "custom-own" from shell command: op read key"#;
+        assert!(provider_error_detail(own)
+            .unwrap()
+            .starts_with("Failed to resolve API key"));
     }
 
     #[test]

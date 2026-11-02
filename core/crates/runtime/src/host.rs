@@ -304,11 +304,11 @@ pub fn platform_credentials() -> Arc<dyn CredentialStore> {
     }
 }
 
-/// The store the `secret get` command answers Pi from: the platform
-/// keychain, holding back a service the runtime or an earlier command saw
-/// the keychain decline, so a declined endpoint key raises the prompt once
-/// until the person retries or the runtime starts again. In a test run it is
-/// [`platform_credentials`]'s file store.
+/// The store the `secret get` command reads when no runtime answers it on
+/// its socket: the platform keychain, holding back a service the runtime or
+/// an earlier command saw the keychain decline, so a declined endpoint key
+/// raises the prompt once until the person retries or the runtime starts
+/// again. In a test run it is [`platform_credentials`]'s file store.
 #[cfg(feature = "keyring")]
 pub fn secret_command_credentials() -> Arc<dyn CredentialStore> {
     if muniment_core::state_root::keychain_allowed() {
@@ -392,6 +392,26 @@ impl KeyringCredentialStore {
         }
     }
 
+    /// Deletes an entry through `delete`, which never reads its secret, so
+    /// a removal raises no prompt for a key the person declined.
+    fn delete(
+        &self,
+        service: &str,
+        name: &str,
+        delete: impl FnOnce() -> Result<(), muniment_core::keyring::Error>,
+    ) -> Result<(), String> {
+        match delete() {
+            Ok(()) | Err(muniment_core::keyring::Error::NoEntry) => {
+                self.refusals.answered(service, name);
+                Ok(())
+            }
+            Err(error) => Err(format!(
+                "The keychain kept the secret: {}.",
+                error.to_string().trim_end_matches('.')
+            )),
+        }
+    }
+
     fn put(
         &self,
         service: &str,
@@ -435,13 +455,9 @@ impl CredentialStore for KeyringCredentialStore {
 
     fn remove(&self, service: &str, name: &str) -> Result<(), String> {
         muniment_core::state_root::guard_keychain(service);
-        match Entry::new(service, name).and_then(|entry| entry.delete_credential()) {
-            Ok(()) | Err(muniment_core::keyring::Error::NoEntry) => {
-                self.refusals.answered(service, name);
-                Ok(())
-            }
-            Err(error) => Err(format!("The keychain kept the secret: {error}.")),
-        }
+        self.delete(service, name, || {
+            muniment_core::keychain_refusal::delete_without_reading(service, name)
+        })
     }
 
     fn refusals(&self) -> Vec<muniment_core::model_router::credentials::RefusedEntry> {
@@ -536,6 +552,40 @@ mod keyring_store_tests {
         assert!(store.refusals().is_empty());
         assert!(store.put("ai.muniment.hooks", "hook-1", || Ok(())).is_ok());
         let _ = declined();
+    }
+
+    #[test]
+    fn a_removal_never_reads_the_secret_and_clears_a_held_decline() {
+        let store = KeyringCredentialStore::default();
+        assert!(store
+            .ask("ai.muniment.endpoints", "custom-live27", || Err(
+                user_canceled()
+            ))
+            .is_err());
+        // The delete runs with the decline held, and it reads no secret.
+        let deleted = Cell::new(false);
+        assert_eq!(
+            store.delete("ai.muniment.endpoints", "custom-live27", || {
+                deleted.set(true);
+                Ok(())
+            }),
+            Ok(())
+        );
+        assert!(deleted.get());
+        assert!(store.refusals.list().is_empty());
+        assert_eq!(
+            store.delete("ai.muniment.endpoints", "custom-gone", || {
+                Err(muniment_core::keyring::Error::NoEntry)
+            }),
+            Ok(())
+        );
+        let kept = store
+            .delete("ai.muniment.endpoints", "custom-live27", || {
+                Err(user_canceled())
+            })
+            .unwrap_err();
+        assert!(kept.starts_with("The keychain kept the secret: "), "{kept}");
+        assert!(!kept.ends_with(".."), "{kept}");
     }
 
     #[cfg(target_os = "macos")]

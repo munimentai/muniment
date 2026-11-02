@@ -62,6 +62,7 @@ pub struct ModelService {
 struct EndpointKeys {
     store: Arc<dyn CredentialStore>,
     executable: PathBuf,
+    broker: Arc<endpoint_secrets::KeyBroker>,
 }
 
 /// One mutating answer, by its idempotency key and its request's digest.
@@ -100,13 +101,29 @@ impl ModelService {
     }
 
     /// Keeps endpoint keys in `store`, which `executable` answers Pi from,
-    /// and moves the keys `models.json` holds there now.
+    /// and moves the keys `models.json` holds there now. The service answers
+    /// the executable's `secret get` on its socket under the state root, so
+    /// a keychain prompt runs in the runtime and never under Pi's timeout.
     pub fn with_endpoint_keys(
         mut self,
         store: Arc<dyn CredentialStore>,
         executable: PathBuf,
     ) -> Self {
-        self.endpoint_keys = Some(EndpointKeys { store, executable });
+        let broker = endpoint_secrets::KeyBroker::new(Arc::clone(&store));
+        #[cfg(unix)]
+        if let Err(error) = endpoint_secrets::serve(
+            Arc::clone(&broker),
+            &endpoint_secrets::socket_path(&self.state_directory),
+        ) {
+            muniment_core::runtime_eprintln!(
+                "muniment-runtime: endpoint_keys socket=failed error={error}"
+            );
+        }
+        self.endpoint_keys = Some(EndpointKeys {
+            store,
+            executable,
+            broker,
+        });
         self.seal_endpoint_keys();
         self
     }
@@ -116,12 +133,29 @@ impl ModelService {
         let Some(keys) = &self.endpoint_keys else {
             return;
         };
-        if let Err(error) =
-            endpoint_secrets::seal(&self.agent, keys.store.as_ref(), &keys.executable)
-        {
+        if let Err(error) = endpoint_secrets::seal_with(
+            &self.agent,
+            keys.store.as_ref(),
+            &keys.executable,
+            &mut |provider| keys.broker.forget(provider),
+        ) {
             muniment_core::runtime_eprintln!(
                 "muniment-runtime: endpoint_keys outcome=failed error={error}"
             );
+        }
+    }
+
+    /// The key a model list read sends for an `apiKey` value: a key the
+    /// runtime already holds for a reference this service wrote, and never a
+    /// keychain prompt, since no request needs the key yet. Any other value
+    /// resolves as Pi reads it.
+    fn discovery_key(&self, value: &str) -> Option<String> {
+        match (
+            &self.endpoint_keys,
+            endpoint_secrets::referenced_provider(value),
+        ) {
+            (Some(keys), Some(provider)) => keys.broker.held(provider),
+            _ => muniment_core::models::pi_models::resolve_key(value),
         }
     }
 
@@ -274,6 +308,7 @@ impl ModelService {
                         &self.engine,
                         data.force.unwrap_or(false),
                         &self.listed,
+                        &|value| self.discovery_key(value),
                     ))
                 }
             }
@@ -306,7 +341,9 @@ impl ModelService {
             ModelAction::DisconnectProvider => {
                 let data: Provider = parse(data)?;
                 let result = providers::disconnect_provider(agent, &data.provider);
+                let mut disconnected = Disconnected::default();
                 if let (Ok(()), Some(keys)) = (&result, &self.endpoint_keys) {
+                    keys.broker.forget(&data.provider);
                     if let Err(error) =
                         endpoint_secrets::forget(keys.store.as_ref(), &data.provider)
                     {
@@ -314,9 +351,11 @@ impl ModelService {
                             "muniment-runtime: endpoint_key provider={} outcome=kept error={error}",
                             data.provider
                         );
+                        disconnected.key_kept =
+                            Some(endpoint_secrets::kept_key_notice(&data.provider));
                     }
                 }
-                answer(result)
+                answer(result.map(|()| disconnected))
             }
             ModelAction::StoreEndpoint => {
                 let data: Endpoint = parse(data)?;
@@ -587,6 +626,14 @@ fn parse<T: DeserializeOwned>(data: Value) -> Result<T, ProtocolError> {
     serde_json::from_value(data).map_err(|_| ProtocolError::invalid_request())
 }
 
+/// What a disconnect answers: the sentence that says how to remove an
+/// endpoint key the store kept.
+#[derive(Default, Serialize)]
+struct Disconnected {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    key_kept: Option<String>,
+}
+
 fn answer<T: Serialize>(result: Result<T, String>) -> Result<Value, String> {
     result.and_then(|value| {
         serde_json::to_value(value).map_err(|_| providers::READ_SETTINGS_ERROR.to_string())
@@ -846,7 +893,7 @@ mod tests {
             Some("sk-new")
         );
 
-        service
+        let disconnected = service
             .request(
                 request(
                     ModelAction::DisconnectProvider,
@@ -855,7 +902,111 @@ mod tests {
                 None,
             )
             .unwrap();
+        assert_eq!(disconnected, serde_json::json!({}));
         assert_eq!(store.read(endpoint_secrets::SERVICE, "custom-proxy"), None);
+        std::fs::remove_dir_all(profile).unwrap();
+    }
+
+    /// A store that counts its reads and keeps every key it holds when
+    /// asked to remove it, as a keychain whose removal failed does.
+    struct KeepingStore {
+        inner: crate::host::FileCredentialStore,
+        lookups: std::sync::atomic::AtomicUsize,
+    }
+
+    impl CredentialStore for KeepingStore {
+        fn read(&self, service: &str, name: &str) -> Option<String> {
+            self.lookup(service, name).ok().flatten()
+        }
+
+        fn lookup(
+            &self,
+            service: &str,
+            name: &str,
+        ) -> Result<Option<String>, crate::host::CredentialRefusal> {
+            self.lookups
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(self.inner.read(service, name))
+        }
+
+        fn write(&self, service: &str, name: &str, secret: &str) -> Result<(), String> {
+            self.inner.write(service, name, secret)
+        }
+
+        fn remove(&self, _: &str, _: &str) -> Result<(), String> {
+            Err("The keychain kept the secret: User canceled the operation.".into())
+        }
+    }
+
+    #[test]
+    fn a_model_list_read_never_asks_for_an_endpoint_key_and_a_kept_key_is_named() {
+        let profile =
+            std::env::temp_dir().join(format!("muniment-model-service-{}", uuid::Uuid::now_v7()));
+        let agent = muniment_core::state_root::agent_directory(&profile);
+        std::fs::create_dir_all(&agent).unwrap();
+        // The endpoint's server does not answer, so a list read keeps its models.
+        std::fs::write(
+            agent.join("models.json"),
+            r#"{"providers":{"custom-live27":{"baseUrl":"http://127.0.0.1:9/v1","apiKey":"sk-live","models":[{"id":"m"}]}}}"#,
+        )
+        .unwrap();
+        let store = Arc::new(KeepingStore {
+            inner: crate::host::FileCredentialStore::new(profile.join("credentials")),
+            lookups: Default::default(),
+        });
+        let page: Arc<SignInPage> = Arc::new(crate::host::plain_sign_in_page);
+        let service = Arc::new(ModelService::new(&profile, page).with_endpoint_keys(
+            Arc::clone(&store) as Arc<dyn CredentialStore>,
+            PathBuf::from("/opt/muniment/muniment-runtime"),
+        ));
+        let lookups = || store.lookups.load(std::sync::atomic::Ordering::SeqCst);
+        let reference = endpoint_secrets::reference(
+            Path::new("/opt/muniment/muniment-runtime"),
+            "custom-live27",
+        )
+        .unwrap();
+        let models: Value =
+            serde_json::from_slice(&std::fs::read(agent.join("models.json")).unwrap()).unwrap();
+        assert_eq!(models["providers"]["custom-live27"]["apiKey"], reference);
+
+        // The runtime's start and a model list read ask the store nothing.
+        assert_eq!(service.discovery_key(&reference), None);
+        muniment_core::models::pi_models::refresh_endpoints_with(&agent, &|value| {
+            service.discovery_key(value)
+        })
+        .unwrap();
+        assert_eq!(lookups(), 0);
+        // A request that uses the endpoint asks once, and a later list read
+        // sends the key the runtime holds.
+        let keys = service.endpoint_keys.as_ref().unwrap();
+        assert_eq!(
+            keys.broker.answer("custom-live27"),
+            endpoint_secrets::KeyAnswer::Key("sk-live".into())
+        );
+        assert_eq!(
+            service.discovery_key(&reference).as_deref(),
+            Some("sk-live")
+        );
+        assert_eq!(lookups(), 1);
+        assert_eq!(
+            service.discovery_key("sk-plain").as_deref(),
+            Some("sk-plain")
+        );
+
+        // A disconnect whose key the store kept says so and how to remove it.
+        let answer = service
+            .request(
+                request(
+                    ModelAction::DisconnectProvider,
+                    serde_json::json!({"provider": "custom-live27"}),
+                ),
+                None,
+            )
+            .unwrap();
+        let kept = answer["key_kept"].as_str().unwrap();
+        assert!(kept.starts_with("Its key stays in the"), "{kept}");
+        assert!(kept.contains("custom-live27"), "{kept}");
+        assert_eq!(keys.broker.held("custom-live27"), None);
         std::fs::remove_dir_all(profile).unwrap();
     }
 
