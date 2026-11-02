@@ -9825,6 +9825,24 @@ describe('agent chat', () => {
     expect(screen.queryByRole('list', { name: 'Weekly recap threads' })).toBeNull()
   })
 
+  it('opens the title actions of an unsaved agent chat with the actions its sidebar row holds', async () => {
+    chatMock([])
+    render(App)
+    await screen.findByPlaceholderText('Ask anything')
+    await openSidebarPage('Agents')
+    const panel = await screen.findByRole('region', { name: 'Agents' })
+    await fireEvent.click(within(await within(panel).findByRole('region', { name: 'Give an agent a job' })).getByRole('button', { name: /^Weekly report/ }))
+    await screen.findByRole('article', { name: 'Draft: Weekly recap' })
+    const actions = screen.getByRole('button', { name: 'Thread actions' })
+    await waitFor(() => expect(actions).toBeEnabled())
+    await fireEvent.click(actions)
+    const menu = screen.getByRole('menu', { name: 'New agent actions' })
+    // The title names the agent, so Rename lives on the sidebar row alone.
+    expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Pin', 'Move to project', 'Archive', 'Delete'])
+    await fireEvent.click(within(menu).getByRole('menuitem', { name: /^Delete/ }))
+    expect(await screen.findByRole('dialog', { name: /^Delete / })).toBeInTheDocument()
+  })
+
   it('clears a stale background error and the sent text once the runtime took the message and a Save succeeds', async () => {
     const saved = []
     chatMock(saved)
