@@ -3340,9 +3340,19 @@ describe('thread name', () => {
     // The old name is selected, so the first keystroke replaces it.
     const renameField = screen.getByRole('textbox', { name: 'Project name' })
     await waitFor(() => expect([renameField.selectionStart, renameField.selectionEnd]).toEqual([0, 'Contracts'.length]))
+    // The New project tooltip sits over the name field, so it hides while the form is open.
+    const newProject = () => document.querySelector('.section-control[aria-label="New project"]')
+    expect(newProject()).toHaveClass('tipless')
     await fireEvent.input(screen.getByRole('textbox', { name: 'Project name' }), { target: { value: 'Agreements' } })
-    await fireEvent.click(screen.getByRole('button', { name: 'Save' }))
-    await screen.findByRole('button', { name: 'Project Agreements' })
+    // The form sits above the list, so Save brings the renamed project back into view.
+    const renamed = []
+    Element.prototype.scrollIntoView = function (options) { renamed.push([this.getAttribute('aria-label'), options]) }
+    try {
+      await fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+      await screen.findByRole('button', { name: 'Project Agreements' })
+      await waitFor(() => expect(renamed).toContainEqual(['Project Agreements', { block: 'nearest' }]))
+    } finally { delete Element.prototype.scrollIntoView }
+    expect(newProject()).not.toHaveClass('tipless')
     expect(invoke).toHaveBeenCalledWith('project_rename', { projectId: 'created', name: 'Agreements' })
     if (catalogOpen) await fireEvent.keyDown(document, { key: 'Escape' })
     await fireEvent.contextMenu(screen.getByRole('button', { name: 'Project Agreements' }))

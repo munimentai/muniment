@@ -2110,7 +2110,9 @@
     await openAgentChat({ projectId: project.id })
   }
 
-  // A project the sidebar's form creates is revealed in the sidebar list.
+  // A project the sidebar's form creates or renames is revealed in the
+  // sidebar list, since the form sits above the list and its field scrolls
+  // the list to the top.
   async function saveProject({ reveal = true } = {}) {
     if (remoteSelected(runtimeList)) await onThisComputer()
     if (projectBusy || !projectName.trim()) return
@@ -2124,7 +2126,8 @@
       projectName = ''
       projectError = ''
       projectBusy = false
-      if (creating) { await selectProject(id); if (reveal) revealProject = id }
+      if (creating) await selectProject(id)
+      if (reveal) revealProject = id
     } catch (error) { projectError = String(error); projectBusy = false }
   }
 
@@ -4228,7 +4231,7 @@
               onrenameproject={(id, name) => { projectForm = id; projectName = name }} onopenfolder={openProjectFolder}
               ondeleteproject={(project) => { deletingProject = { id: project.id, name: project.name, count: projectThreadCount(project.id) } }}
               ongroup={roster.length > 1 ? () => { groupCreateOpen = true } : undefined}
-              onnewproject={() => { projectForm = 'new'; projectName = ''; projectsOpen = false }} onsaveproject={saveProject} oncancelproject={() => { projectForm = null }}
+              onnewproject={() => { projectForm = 'new'; projectName = ''; projectsOpen = false }} onsaveproject={saveProject} oncancelproject={() => { if (projectForm !== 'new') revealProject = projectForm; projectForm = null }}
               onretryprojects={() => refreshProjects()}>
               {#snippet footer()}
                 {#if threadSearch.trim() && !sidebarArrangement.results.length}<p class="side-empty">{loadingOlderThreads ? 'Searching threads…' : 'No matching threads.'}</p>{/if}
