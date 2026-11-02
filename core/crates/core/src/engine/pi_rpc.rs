@@ -351,6 +351,7 @@ impl AgentEngine for PiRpcEngine {
             supervisor,
             wiring,
             reuse: None,
+            launch_files: None,
         };
         let deadline = Instant::now() + startup_timeout;
         while process.supervisor.status() == SidecarStatus::Starting && Instant::now() < deadline {

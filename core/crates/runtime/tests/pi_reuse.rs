@@ -622,8 +622,21 @@ fn a_context_reads_process_stops_when_its_window_ends() {
     let read = harness.spawns().last().unwrap().clone();
     assert_eq!(harness.spawns().len(), 2);
     assert_eq!(harness.processes.parked(), 1);
+    // The read wrote the thread's tool extension for its process, and the
+    // file goes when that process stops, though no run opened the thread.
+    let extension = harness
+        .temporary
+        .profile
+        .join("memory")
+        .join(format!("memory-search-extension-{thread}.mjs"));
+    assert!(extension.is_file());
     assert!(ends(&read), "the context read's process still runs");
     assert_eq!(harness.processes.parked(), 0);
+    let deadline = Instant::now() + CI_WAIT;
+    while extension.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(!extension.exists(), "the read's extension stayed");
 
     // Shutdown stops a read's process like any idle one.
     harness.read_context(&thread);

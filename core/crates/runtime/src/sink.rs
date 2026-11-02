@@ -619,18 +619,25 @@ impl PiLaunchBoundaries for RuntimeChatEventSink {
         Some(self.memory_runtime.agent_extension_path(&self.thread_id))
     }
 
-    fn prepare_thread_launch(&self, grant: &ChatGrant) {
+    fn prepare_thread_launch(
+        &self,
+        grant: &ChatGrant,
+    ) -> Option<muniment_core::pi_execution::LaunchFiles> {
         let written = self.memory_runtime.write_thread_extension(
             &self.thread_id,
             muniment_core::memory_index::ModelMemoryCapability {
                 minimum_cacheable_prefix_characters: grant.minimum_cacheable_prefix_characters,
             },
         );
-        if let Err(error) = written {
-            muniment_core::runtime_eprintln!(
-                "muniment-runtime: thread_extension failed thread_id={} error={error:?}",
-                self.thread_id
-            );
+        match written {
+            Ok(hold) => Some(Box::new(hold)),
+            Err(error) => {
+                muniment_core::runtime_eprintln!(
+                    "muniment-runtime: thread_extension failed thread_id={} error={error:?}",
+                    self.thread_id
+                );
+                None
+            }
         }
     }
 

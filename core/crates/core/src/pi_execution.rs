@@ -85,7 +85,13 @@ pub struct PiRuntime {
     pub wiring: PiRpcWiring,
     /// Set while this idle process may take its thread's next reply.
     pub reuse: Option<crate::engine::PiReuse>,
+    /// What keeps the files the process started with, such as the tool
+    /// extension a read wrote, until the process ends.
+    pub launch_files: Option<LaunchFiles>,
 }
+
+/// A hold on the files a process started with. Dropping it lets them go.
+pub type LaunchFiles = Box<dyn Send + Sync>;
 
 /// The engine processes of a runtime, one slot per thread. A run takes its
 /// thread's slot for its whole length, so runs in different threads drive
@@ -556,8 +562,9 @@ pub fn thread_context_usage(
             // The read starts the launch the thread's next reply starts, so
             // that reply takes this process.
             let grant = grant()?;
-            app.prepare_thread_launch(&grant);
+            let launch_files = app.prepare_thread_launch(&grant);
             let (mut process, transport, launch) = open_thread_conversation(app, &grant, &locator)?;
+            process.launch_files = launch_files;
             let usage = engine.context_usage(&transport).map(Some);
             engine.park_read(&mut process, launch);
             if process.reuse.is_some() {

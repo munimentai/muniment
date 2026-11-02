@@ -206,8 +206,14 @@ pub trait PiLaunchBoundaries {
     }
     fn memory_agent_extension_path(&self) -> Option<PathBuf>;
     /// Writes the files a reply in this thread starts Pi with, so a read
-    /// that starts Pi first starts the launch that reply starts.
-    fn prepare_thread_launch(&self, _grant: &ChatGrant) {}
+    /// that starts Pi first starts the launch that reply starts. The answer
+    /// keeps those files while the read's process runs.
+    fn prepare_thread_launch(
+        &self,
+        _grant: &ChatGrant,
+    ) -> Option<crate::pi_execution::LaunchFiles> {
+        None
+    }
     /// Names the run's thread folder after `title` once a run ends, for a
     /// thread that works in a folder of its own.
     fn name_thread_folder(&self, _title: &str) {}
