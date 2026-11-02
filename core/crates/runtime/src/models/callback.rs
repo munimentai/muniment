@@ -304,10 +304,16 @@ mod tests {
 
     #[test]
     fn the_callback_port_is_held_on_both_loopbacks_and_a_holder_is_named() {
-        let probe = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let port = probe.local_addr().unwrap().port();
-        drop(probe);
-        let listeners = bind(port).unwrap();
+        // Another program can take the port a probe frees before `bind`
+        // does, so the test moves on to another free port when that happens.
+        let (port, listeners) = (0..20)
+            .find_map(|_| {
+                let probe = TcpListener::bind(("127.0.0.1", 0)).ok()?;
+                let port = probe.local_addr().ok()?.port();
+                drop(probe);
+                bind(port).ok().map(|listeners| (port, listeners))
+            })
+            .expect("no free port bound on both loopbacks");
         let addresses: Vec<IpAddr> = listeners
             .iter()
             .map(|listener| listener.local_addr().unwrap().ip())
@@ -319,11 +325,11 @@ mod tests {
         assert!(listeners
             .iter()
             .all(|listener| listener.local_addr().unwrap().port() == port));
-        drop(listeners);
-        let holder = TcpListener::bind(("127.0.0.1", port)).unwrap();
+        // The listeners still hold the port on the loopback, so they are
+        // the holder a second bind names.
         let error = bind(port).unwrap_err();
         assert!(error.contains(&port.to_string()), "{error}");
-        drop(holder);
+        drop(listeners);
     }
 
     #[test]
@@ -369,6 +375,10 @@ mod tests {
             ]
         );
         server.stop();
-        assert!(TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_ok());
+        // Stopping closed the listener, so nothing answers on its port. Another
+        // program can take the freed port at once, so the test connects to it
+        // rather than binding it again.
+        let refused = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap_err();
+        assert_eq!(refused.kind(), std::io::ErrorKind::ConnectionRefused);
     }
 }
