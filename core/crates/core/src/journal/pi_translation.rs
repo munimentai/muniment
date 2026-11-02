@@ -7,6 +7,14 @@ pub fn model_stream_delta_payload(text: &str) -> Value {
     json!({"text": text, "content_disclosure": "released"})
 }
 
+/// The run event that records a message the user sent during the reply,
+/// where the runtime took it into the run.
+pub const RUN_STEERED: &str = "run.steered";
+
+pub fn run_steered_payload(text: &str) -> Value {
+    json!({"text": text, "content_disclosure": "released"})
+}
+
 pub fn tool_journal_entry(
     event: &PiChatEvent,
     open_effects: &mut BTreeSet<String>,

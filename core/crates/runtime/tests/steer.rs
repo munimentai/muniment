@@ -5,6 +5,7 @@ use muniment_core::active_run::ChatDelivery;
 use muniment_core::attach::{RuntimeActivityRegistry, SignedWorkspaceApproval};
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 use muniment_core::run_start::RunAttachBoundaries;
+use muniment_core::serde_json;
 use muniment_core::session_thread::SessionThread;
 use muniment_runtime_core::{
     open_companion_registry, open_profile_storage, run_prompt, RuntimeAttachBoundaries,
@@ -110,6 +111,44 @@ fn queued_message_reaches_a_live_runtime_run(
         journal_events.last().map(|event| event.event_type.as_str()),
         Some("run.completed" | "run.failed" | "run.cancelled")
     ));
+    // The journal keeps the message as the user wrote it, and the history
+    // read of the reopened profile places it inside the reply.
+    let steered: Vec<_> = journal_events
+        .iter()
+        .filter(|event| event.event_type == "run.steered")
+        .collect();
+    assert_eq!(steered.len(), 1, "{journal_events:?}");
+    let thread_id = {
+        let storage = storage.lock().unwrap();
+        storage.journal.run_thread_id(run_id).unwrap().unwrap()
+    };
+    let page = {
+        let mut storage = storage.lock().unwrap();
+        muniment_core::thread_history::chat_thread_open_page(
+            &mut storage.journal,
+            None,
+            Some("owner"),
+            &temporary_root,
+            &thread_id,
+            10,
+            None,
+        )
+        .unwrap()
+    };
+    let entry = page
+        .entries
+        .iter()
+        .find(|entry| entry.run_id == run_id)
+        .unwrap();
+    assert_eq!(entry.steers.len(), 1);
+    let steer = &entry.steers[0];
+    assert_eq!(steer.text, message);
+    assert_eq!(steer.sent_at, steered[0].recorded_at);
+    assert!(steer.text_offset <= entry.text.encode_utf16().count());
+    let wire = serde_json::to_value(entry).unwrap();
+    assert_eq!(wire["steers"][0]["text"], message);
+    assert_eq!(wire["steers"][0]["textOffset"], steer.text_offset);
+    assert_eq!(wire["steers"][0]["sentAt"], steer.sent_at.as_str());
 
     drop(journal_events);
     drop(storage);

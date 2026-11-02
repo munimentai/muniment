@@ -17,7 +17,9 @@ use crate::code_diff_journal::{load_applied_code_diffs, CodeDiffPermissionAnswer
 use crate::engine::{
     AgentEngine, CompactionOutcome, OpenError, OpenStage, PiOpen, PiRpcEngine, Submission, Thinking,
 };
-use crate::journal::pi_translation::{model_stream_delta_payload, tool_journal_entry};
+use crate::journal::pi_translation::{
+    model_stream_delta_payload, run_steered_payload, tool_journal_entry, RUN_STEERED,
+};
 use crate::journal::reducer::ChatProjector;
 use crate::journal::split_model_stream_delta;
 use crate::memory_failure::{MemoryFailure, MemoryFailureAnswer};
@@ -1584,6 +1586,41 @@ fn coordinate_work(
                 .is_err()
         {
             break 'coordinate;
+        }
+        // A message Pi took during the reply joins the run's journal after
+        // the text committed so far, which places it in the reply, and before
+        // the event in hand, so a reply that ends next still records it.
+        let steered = adapter.take_steered();
+        if !steered.is_empty() {
+            if held_deltas
+                .flush(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    subject.as_deref(),
+                )
+                .is_err()
+            {
+                break 'coordinate;
+            }
+            for message in steered {
+                if append_emit(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    RUN_STEERED,
+                    run_steered_payload(&message),
+                    subject.as_deref(),
+                )
+                .is_err()
+                {
+                    break 'coordinate;
+                }
+            }
         }
         match event {
             Ok(PiChatEvent::TextDelta(text)) => {

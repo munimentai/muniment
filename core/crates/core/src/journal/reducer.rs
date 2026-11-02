@@ -606,6 +606,20 @@ pub struct ChatProjection {
     pub attachments: Vec<ProjectedAttachment>,
     pub recalls: Vec<ProjectedRecall>,
     pub applied_diffs: Vec<ProjectedAppliedDiff>,
+    /// The messages the user sent during the reply, in the order the
+    /// runtime took them.
+    pub steers: Vec<ProjectedSteer>,
+}
+
+/// A message the user sent during the reply. `text_offset` is the reply
+/// text's length in UTF-16 code units when the runtime took it, and
+/// `sent_at` is when the journal recorded it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProjectedSteer {
+    pub text: String,
+    pub text_offset: usize,
+    pub sent_at: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -707,6 +721,11 @@ pub fn project_chat_fragment(events: &[EventEnvelope]) -> Result<ChatProjection,
             "model.stream.delta" => chat.text.push_str(&field(event, "text")?),
             "memory.recalled" => chat.recalls.push(projected_recall(event)?),
             "code.diff.applied" => chat.applied_diffs.push(projected_applied_diff(event)?),
+            super::pi_translation::RUN_STEERED => chat.steers.push(ProjectedSteer {
+                text: field(event, "text")?,
+                text_offset: chat.text.encode_utf16().count(),
+                sent_at: event.recorded_at.clone(),
+            }),
             "tool.effect.started" => chat.tool_activity.push(ToolActivity {
                 text_offset: chat.text.encode_utf16().count(),
                 parent_effect_id: parent_effect(event, &chat.tool_activity)?,
@@ -771,6 +790,7 @@ pub(crate) struct ChatCheckpoint {
     attachments_len: usize,
     recalls_len: usize,
     applied_diffs_len: usize,
+    steers_len: usize,
 }
 
 impl ChatProjector {
@@ -831,6 +851,7 @@ impl ChatProjector {
             attachments_len: self.chat.attachments.len(),
             recalls_len: self.chat.recalls.len(),
             applied_diffs_len: self.chat.applied_diffs.len(),
+            steers_len: self.chat.steers.len(),
         }
     }
 
@@ -860,6 +881,7 @@ impl ChatProjector {
         self.chat
             .applied_diffs
             .truncate(checkpoint.applied_diffs_len);
+        self.chat.steers.truncate(checkpoint.steers_len);
     }
 
     pub fn apply(&mut self, event: &EventEnvelope) -> Result<(), ReduceError> {
@@ -916,6 +938,11 @@ impl ChatProjector {
             }
             "memory.recalled" => self.chat.recalls.push(projected_recall(event)?),
             "code.diff.applied" => self.chat.applied_diffs.push(projected_applied_diff(event)?),
+            super::pi_translation::RUN_STEERED => self.chat.steers.push(ProjectedSteer {
+                text: field(event, "text")?,
+                text_offset: self.text_utf16_len,
+                sent_at: event.recorded_at.clone(),
+            }),
             crate::code_diff_journal::DIFF_EVENT_TYPE
             | crate::code_diff_journal::WRITE_PLAN_EVENT_TYPE => {
                 if let Some(effect_id) = event.correlation_id.as_deref() {

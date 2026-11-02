@@ -739,6 +739,9 @@ pub struct PiRunAdapter {
     /// A compaction outcome that waits for the session file to be known.
     compaction: Mutex<Option<crate::engine::CompactionOutcome>>,
     pending_terminal: Mutex<Option<PiChatEvent>>,
+    /// The messages the user sent during this turn that Pi took, in order,
+    /// until the run's coordinator journals them.
+    steered: Mutex<Vec<String>>,
 }
 
 impl PiRunAdapter {
@@ -805,6 +808,7 @@ impl PiRunAdapter {
             session: Mutex::new(None),
             compaction: Mutex::new(None),
             pending_terminal: Mutex::new(None),
+            steered: Mutex::new(Vec::new()),
             first_event_deadline: Mutex::new(Some(deadline)),
         };
         let response = std::thread::scope(|scope| {
@@ -899,6 +903,7 @@ impl PiRunAdapter {
             session: Mutex::new(None),
             compaction: Mutex::new(None),
             pending_terminal: Mutex::new(None),
+            steered: Mutex::new(Vec::new()),
             first_event_deadline: Mutex::new(None),
         };
         // A pre-correlated frame reaches the subscribers, so the answer
@@ -1061,6 +1066,24 @@ impl PiRunAdapter {
             .call(command.into_value(), timeout)
             .map_err(|_| QUEUE_COMMAND_FAILED.to_string())?;
         require_queue_ack(&response, "steer")
+    }
+
+    /// Keeps a message Pi took during this turn for the run's journal.
+    pub fn record_steer(&self, message: &str) {
+        self.steered
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(message.to_owned());
+    }
+
+    /// The messages Pi took since the last call, oldest first.
+    pub fn take_steered(&self) -> Vec<String> {
+        std::mem::take(
+            &mut *self
+                .steered
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
     }
 
     /// Queues a message for delivery after the active turn finishes.
@@ -1350,6 +1373,7 @@ mod tests {
             session: Mutex::new(None),
             compaction: Mutex::new(None),
             pending_terminal: Mutex::new(None),
+            steered: Mutex::new(Vec::new()),
             first_event_deadline: Mutex::new(Some(Instant::now() + Duration::from_secs(1))),
         };
         drop(sender);
@@ -1372,6 +1396,7 @@ mod tests {
                 session: Mutex::new(None),
                 compaction: Mutex::new(None),
                 pending_terminal: Mutex::new(None),
+                steered: Mutex::new(Vec::new()),
                 first_event_deadline: Mutex::new(Some(Instant::now() + timeout)),
             },
         )

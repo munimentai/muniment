@@ -14,7 +14,7 @@ use crate::chat_view::{
 use crate::code_diff_journal::{
     load_applied_code_diff, load_applied_code_diffs, load_pending_code_diff,
 };
-use crate::journal::reducer::{ChatProjector, ProjectedRecall, RunState};
+use crate::journal::reducer::{ChatProjector, ProjectedRecall, ProjectedSteer, RunState};
 use crate::journal::{EventEnvelope, RunJournal};
 use crate::thread_ownership::{subject_owns_first_run, ThreadOwnershipError};
 
@@ -41,6 +41,11 @@ pub struct HistoryEntry {
     pub attachments: Vec<ChatAttachment>,
     pub recalls: Vec<ProjectedRecall>,
     pub applied_diffs: Vec<ChatAppliedDiff>,
+    /// The messages the user sent during the reply, each with the reply
+    /// text's length when the runtime took it, so every device places them
+    /// inside the reply.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub steers: Vec<ProjectedSteer>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pending_permission: Option<ChatPendingPermission>,
     pub resumable: bool,
@@ -145,6 +150,7 @@ fn project_history_entry_without_prompt(
         attachments: chat_attachments(&projection.attachments),
         recalls: projection.recalls,
         applied_diffs,
+        steers: projection.steers,
         pending_permission: chat_pending_permission(projection.pending_permission, code_diff),
         resumable,
         run_id,

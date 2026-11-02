@@ -68,7 +68,8 @@ fn event_types_are_terminal(events: &[RunEventType]) -> bool {
             | "permission.resolved"
             | "tool.effect.started"
             | "tool.effect.completed"
-            | "tool.effect.failed" => terminal = false,
+            | "tool.effect.failed"
+            | "run.steered" => terminal = false,
             "user.prompt.submitted"
             | "route.selected"
             | "capability.used"
