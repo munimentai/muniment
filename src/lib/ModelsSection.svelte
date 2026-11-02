@@ -78,7 +78,7 @@
   // Every Disconnect asks once in the app's dialog: its title, one line on
   // what goes, and the action that runs on yes.
   let confirming = $state(null)
-  function askDisconnect(name, line, action) { confirming = { name, line, action } }
+  function askDisconnect(name, line, action, opener = null) { confirming = { name, line, action, opener } }
   async function decideDisconnect(approve) {
     const asked = confirming
     confirming = null
@@ -481,7 +481,7 @@
                 {:else if endpoint || catalogProvider(catalogId(entry.id))}
                   <button type="button" class="quiet icon-action" aria-label={`Edit ${entry.name}`} onclick={() => endpoint ? editProvider(entry) : chooseProvider(catalogId(entry.id))}><LucideIcon name="square-pen" size={16} variant="action" /></button>
                 {/if}
-                <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${entry.name}`} onclick={() => askDisconnect(entry.name, 'Muniment removes this connection. Connect it again to use it.', () => disconnect(entry))}><LucideIcon name="unplug" size={16} variant="action" /></button>
+                <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${entry.name}`} onclick={(event) => askDisconnect(entry.name, 'Muniment removes this connection. Connect it again to use it.', () => disconnect(entry), event.currentTarget)}><LucideIcon name="unplug" size={16} variant="action" /></button>
               </div>
             {/if}
             {#if entry.family && router && firstOfFamily}<ModelAccounts {tauri} {listen} {runtime} settings={router} family={entry.family} onsettings={onRouterSettings} {fleet} onheld={onHeld} />{/if}
@@ -512,7 +512,7 @@
           <Row title={connection.name} meta={connection.active ? 'Selected for routing' : router.assist?.connection === connection.id ? 'Selected for assistance' : 'Connected'}>
             {#snippet icon()}<ProviderLogo color provider={connection.catalog_id} size={16} />{/snippet}
             {#if connection.connection?.kind !== 'pooled'}<button type="button" class="quiet icon-action" aria-label={`Edit ${connection.name}`} aria-expanded={editingClassifier === connection.id} onclick={() => { editingClassifier = editingClassifier === connection.id ? '' : connection.id }}><LucideIcon name="square-pen" size={16} variant="action" /></button>{/if}
-            <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${connection.name}`} onclick={() => askDisconnect(connection.name, 'Routing and assistance stop using this decision model.', () => disconnectClassifier(connection))}><LucideIcon name="unplug" size={16} variant="action" /></button>
+            <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${connection.name}`} onclick={(event) => askDisconnect(connection.name, 'Routing and assistance stop using this decision model.', () => disconnectClassifier(connection), event.currentTarget)}><LucideIcon name="unplug" size={16} variant="action" /></button>
           </Row>
           {#if editingClassifier === connection.id}<div class="classifier-edit"><ClassifierEdit {connection} {tauri} onsaved={next => { accounts.set(next); editingClassifier = ''; status = 'Decision model saved.' }} oncancel={() => { editingClassifier = '' }} /></div>{/if}
         {/each}
@@ -594,7 +594,7 @@
           {#each signedIn as account (account.id)}
             <Row title={account.label} meta={account.plan || 'Subscription'}>
               {#snippet icon()}<LucideIcon name="credit-card" size={16} />{/snippet}
-              <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${account.label}`} onclick={() => askDisconnect(`the ${provider.name} account ${account.label}`, 'Muniment removes this sign-in. Sign in again to use it.', () => removeAccount(account))}><LucideIcon name="unplug" size={16} variant="action" /></button>
+              <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${account.label}`} onclick={(event) => askDisconnect(`the ${provider.name} account ${account.label}`, 'Muniment removes this sign-in. Sign in again to use it.', () => removeAccount(account), event.currentTarget)}><LucideIcon name="unplug" size={16} variant="action" /></button>
             </Row>
           {/each}
         </Group>
@@ -642,7 +642,7 @@
 </div>
 
 {#if confirming}
-  <ConfirmDialog title={`Disconnect ${confirming.name}?`} cancelLabel="Cancel" confirmLabel="Disconnect" destructive onDecision={decideDisconnect}>
+  <ConfirmDialog title={`Disconnect ${confirming.name}?`} cancelLabel="Cancel" confirmLabel="Disconnect" destructive opener={confirming.opener} onDecision={decideDisconnect}>
     <p>{confirming.line}</p>
   </ConfirmDialog>
 {/if}

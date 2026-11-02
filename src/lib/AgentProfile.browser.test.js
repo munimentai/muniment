@@ -6,6 +6,7 @@ import '../styles/base.css'
 import '../styles/panels.css'
 import AgentProfile from './AgentProfile.svelte'
 import { RAIL_OCCUPANTS } from './artifact-rail-state.js'
+import { trackFocusSource } from './focus-source.js'
 
 let component
 afterEach(() => {
@@ -146,4 +147,62 @@ it('returns focus to Delete agent after Cancel, by pointer or by key, on the pro
   await userEvent.keyboard('{Enter}')
   await expect.poll(() => document.activeElement).toBe(remove(aside))
   expect(aside.querySelector('[role="group"][aria-label="Delete agent"]')).toBeNull()
+})
+
+const ringed = (node) => getComputedStyle(node).outlineStyle === 'solid' && getComputedStyle(node).outlineWidth === '1px'
+
+it('shows the focus ring where code moves focus after the keys, on Cancel and back on Delete agent, and none after a click', async () => {
+  const remove = (aside) => [...aside.querySelectorAll('button')].find((button) => button.textContent.trim() === 'Delete agent')
+  const cancel = (aside) => [...aside.querySelectorAll('[role="group"][aria-label="Delete agent"] button')].find((button) => button.textContent.trim() === 'Cancel')
+  const stop = trackFocusSource(document.documentElement)
+  try {
+    // The profile's own button, pressed by key: Cancel takes focus with the ring, and Cancel by key returns it, ring and all.
+    let aside = profile()
+    remove(aside).focus()
+    await userEvent.keyboard('{Enter}')
+    await expect.poll(() => document.activeElement).toBe(cancel(aside))
+    expect(ringed(cancel(aside))).toBe(true)
+    await userEvent.keyboard('{Enter}')
+    await expect.poll(() => document.activeElement).toBe(remove(aside))
+    expect(ringed(remove(aside))).toBe(true)
+    // Escape cancels too, and focus returns with the ring.
+    await userEvent.keyboard('{Enter}')
+    await expect.poll(() => document.activeElement).toBe(cancel(aside))
+    await userEvent.keyboard('{Escape}')
+    await expect.poll(() => document.activeElement).toBe(remove(aside))
+    expect(aside.querySelector('[role="group"][aria-label="Delete agent"]')).toBeNull()
+    expect(ringed(remove(aside))).toBe(true)
+    // A click draws no ring where focus lands.
+    await userEvent.click(remove(aside))
+    await expect.poll(() => document.activeElement).toBe(cancel(aside))
+    expect(ringed(cancel(aside))).toBe(false)
+    await userEvent.click(cancel(aside))
+    await expect.poll(() => document.activeElement).toBe(remove(aside))
+    expect(ringed(remove(aside))).toBe(false)
+    // A click opens it and Enter on Cancel closes it: the key leads, so focus returns with the ring.
+    await userEvent.click(remove(aside))
+    await expect.poll(() => document.activeElement).toBe(cancel(aside))
+    expect(ringed(cancel(aside))).toBe(false)
+    await userEvent.keyboard('{Enter}')
+    await expect.poll(() => document.activeElement).toBe(remove(aside))
+    expect(ringed(remove(aside))).toBe(true)
+    unmount(component)
+    document.body.replaceChildren()
+    // A card's Delete chosen by key opens the profile at the confirmation, and Cancel shows the ring.
+    delete document.documentElement.dataset.pointer
+    aside = profile({ deleteAsked: 1 })
+    await expect.poll(() => document.activeElement).toBe(cancel(aside))
+    expect(ringed(cancel(aside))).toBe(true)
+  } finally { stop(); delete document.documentElement.dataset.pointer }
+})
+
+it('draws the ring on a control code focused while the keys lead, when the engine matches no :focus-visible', async () => {
+  const button = document.createElement('button')
+  button.textContent = 'Delete agent'
+  document.body.append(button)
+  button.setAttribute('data-key-focus', '')
+  button.focus({ focusVisible: false })
+  expect(ringed(button)).toBe(true)
+  document.documentElement.dataset.pointer = ''
+  try { expect(ringed(button)).toBe(false) } finally { delete document.documentElement.dataset.pointer }
 })

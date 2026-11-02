@@ -5,6 +5,7 @@ import '../styles/tokens.css'
 import '../styles/base.css'
 import '../styles/panels.css'
 import Settings from './Settings.svelte'
+import { trackFocusSource } from './focus-source.js'
 
 let component
 afterEach(() => {
@@ -70,6 +71,34 @@ it('closes the decision-model Disconnect dialog on Cancel and on Escape, whereve
   expect(confirm()).toBeNull()
   expect(page.closed()).toBe(0)
   expect(page.calls.some(([command]) => command === 'model_router_disconnect_classifier')).toBe(false)
+})
+
+const ringed = (node) => getComputedStyle(node).outlineStyle === 'solid' && getComputedStyle(node).outlineWidth === '1px'
+
+it('returns focus to the Disconnect button that opened the dialog, with the ring when the keys lead', async () => {
+  const stop = trackFocusSource(document.documentElement)
+  try {
+    await models()
+    const unplug = document.querySelector('[aria-label="Disconnect Jev · TypeSafe API"]')
+    // By pointer: focus returns to the button, which a click draws no ring on.
+    await userEvent.click(unplug)
+    await wait(50)
+    await userEvent.click(button('Cancel'))
+    await wait(50)
+    expect(confirm()).toBeNull()
+    expect(document.activeElement).toBe(unplug)
+    expect(ringed(unplug)).toBe(false)
+    // By keys: Cancel takes focus with the ring, and Enter on it returns focus, ring and all.
+    await userEvent.keyboard('{Enter}')
+    await wait(50)
+    expect(document.activeElement).toBe(button('Cancel'))
+    expect(ringed(button('Cancel'))).toBe(true)
+    await userEvent.keyboard('{Enter}')
+    await wait(50)
+    expect(confirm()).toBeNull()
+    expect(document.activeElement).toBe(unplug)
+    expect(ringed(unplug)).toBe(true)
+  } finally { stop(); delete document.documentElement.dataset.pointer }
 })
 
 // A real pointer reaches the dialog's own controls and backdrop wherever the

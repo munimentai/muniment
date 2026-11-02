@@ -74,6 +74,12 @@ a:hover {
 :root[data-pointer] :focus-visible:not(input, textarea, select, [contenteditable]) {
   outline: 0 !important;
 }
+/* A control that code focused while the keys lead (focus-source.js) shows the
+   same ring when the engine does not match :focus-visible after a script focus. */
+:root:not([data-pointer]) [data-key-focus]:focus:not([data-focus-frame]) {
+  outline: 1px solid var(--focus-ring) !important;
+  outline-offset: -1px !important;
+}
 :root:not([data-pointer]) :is([role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="option"]):focus-visible:not([aria-checked="true"], [aria-selected="true"]) {
   background-color: var(--faint);
 }

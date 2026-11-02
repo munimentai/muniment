@@ -64,6 +64,7 @@
 
   // Disconnect asks once in the app's dialog, which names the account.
   let removing = $state(null)
+  let removingOpener = null
   async function disconnect(approve) {
     const account = removing
     removing = null
@@ -231,7 +232,7 @@
             {#if routerHold(fleet, account.id)}<HoldSignIn {tauri} {runtime} account={routerHold(fleet, account.id)} onmoved={onheld} />
             {:else if hereLine(fleet, account)}<span class="here record">{hereLine(fleet, account)}</span>{/if}
           </span>
-          <button type="button" class="quiet icon-action disconnect" aria-label={`Disconnect ${account.label}`} disabled={pending} onclick={() => { removing = account }}><LucideIcon name="unplug" size={16} variant="action" /></button>
+          <button type="button" class="quiet icon-action disconnect" aria-label={`Disconnect ${account.label}`} disabled={pending} onclick={(event) => { removing = account; removingOpener = event.currentTarget }}><LucideIcon name="unplug" size={16} variant="action" /></button>
         </li>
       {/each}
     </ul>
@@ -258,7 +259,7 @@
               <span class="overflow">Use when subscriptions run out<Toggle checked={!!account.overflow} disabled={pending} aria-label={`Use ${account.label} when subscriptions run out`} onchange={(value) => run('model_router_update_account', { id: account.id, overflow: value }, value ? `${account.label} serves when subscriptions run out.` : `${account.label} no longer serves when subscriptions run out.`)} /></span>
             {/if}
             <button type="button" class="quiet icon-action" aria-label={`Edit ${account.label}`} disabled={pending} onclick={() => editName(account)}><LucideIcon name="square-pen" size={16} variant="action" /></button>
-            <button type="button" class="quiet icon-action disconnect" aria-label={`Disconnect ${account.label}`} disabled={pending} onclick={() => { removing = account }}><LucideIcon name="unplug" size={16} variant="action" /></button>
+            <button type="button" class="quiet icon-action disconnect" aria-label={`Disconnect ${account.label}`} disabled={pending} onclick={(event) => { removing = account; removingOpener = event.currentTarget }}><LucideIcon name="unplug" size={16} variant="action" /></button>
           {/if}
         </li>
       {/each}
@@ -320,7 +321,7 @@
 </div>
 
 {#if removing}
-  <ConfirmDialog title={`Disconnect the ${familyRow?.name ?? familyName(family)} ${removing.source === 'key' ? 'key' : 'account'} ${removing.label}?`} cancelLabel="Cancel" confirmLabel="Disconnect" destructive onDecision={disconnect}>
+  <ConfirmDialog title={`Disconnect the ${familyRow?.name ?? familyName(family)} ${removing.source === 'key' ? 'key' : 'account'} ${removing.label}?`} cancelLabel="Cancel" confirmLabel="Disconnect" destructive opener={removingOpener} onDecision={disconnect}>
     <p>{removing.source === 'key' ? 'Muniment deletes this key. Add it again to use it.' : 'Muniment removes this sign-in. Sign in again to use it.'}</p>
   </ConfirmDialog>
 {/if}

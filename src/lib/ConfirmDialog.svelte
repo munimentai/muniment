@@ -7,17 +7,20 @@
   import { dialogDismiss } from './dialog-dismiss.js'
   import PopupClose from './PopupClose.svelte'
   import { onMount, tick } from 'svelte'
+  import { focusLikeKeys } from './focus-source.js'
 
   // `destructive` marks a confirm that removes something with the danger
   // treatment, as in ui/Button. Cancel stays the focused, safe choice.
-  let { title, children, onDecision, cancelLabel = 'Deny', confirmLabel = 'Allow', destructive = false } = $props()
+  // `opener` is the control that asked. Closing returns focus to it, since a
+  // click in WebKit leaves focus on the page, not on the button it pressed.
+  let { title, children, onDecision, cancelLabel = 'Deny', confirmLabel = 'Allow', destructive = false, opener = null } = $props()
   let dialogPanel
   let denyButton
   let pending = $state(false)
 
   onMount(() => {
-    const previousFocus = document.activeElement
-    void tick().then(() => denyButton?.focus())
+    const previousFocus = opener ?? document.activeElement
+    void tick().then(() => focusLikeKeys(denyButton))
     const self = {}
     open.push(self)
 
@@ -55,7 +58,7 @@
     return () => {
       window.removeEventListener('keydown', onKeydown, true)
       open.splice(open.indexOf(self), 1)
-      previousFocus?.focus?.()
+      focusLikeKeys(previousFocus)
     }
   })
 

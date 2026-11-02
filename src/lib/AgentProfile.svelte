@@ -1,5 +1,6 @@
 <script>
   import { panelScroll } from './panel-scroll.js'
+  import { focusLikeKeys } from './focus-source.js'
   import { onMount, tick, untrack } from 'svelte'
   import LucideIcon from './LucideIcon.svelte'
   import AgentAvatar from './AgentAvatar.svelte'
@@ -121,21 +122,22 @@
     untrack(() => { revealDelete = 0; stopSettle?.(); stopSettle = settleDelete(box) })
   })
   $effect(() => () => stopSettle?.())
-  // Cancel puts Delete agent back in the confirmation's place, and focus
-  // returns to it. A card's Delete closed the card's page, so the profile's
-  // own button is the opener on that path too.
+  // Cancel or Escape puts Delete agent back in the confirmation's place, and
+  // focus returns to it, with the ring when the keys lead. A card's Delete
+  // closed the card's page, so the profile's own button is the opener on that
+  // path too.
   let deleteRow = $state()
   async function cancelDelete() {
     stopSettle?.(); stopSettle = null
     deleting = false; removeMemory = false
     await tick()
-    deleteRow?.querySelector('button:not(:disabled)')?.focus()
+    focusLikeKeys(deleteRow?.querySelector('button:not(:disabled)'))
   }
   function settleDelete(box) {
     const reveal = () => {
       if (!box.isConnected) return stop()
       box.scrollIntoView?.({ block: 'center' })
-      if (!box.contains(document.activeElement)) box.querySelector('[data-safe]')?.focus({ preventScroll: true })
+      if (!box.contains(document.activeElement)) focusLikeKeys(box.querySelector('[data-safe]'), { preventScroll: true })
     }
     let frame = 0
     const later = () => { if (!frame) frame = requestAnimationFrame(() => { frame = 0; reveal() }) }
@@ -364,7 +366,8 @@
         {#if menu === 'export'}<ChoiceMenu label="Export agent" options={[{ value: 'muniment', label: 'Muniment agent file', icon: 'download' }, { value: 'grok_bot', label: 'Grok Bot notes', icon: 'file-text' }]} onchoose={chooseExport} onclose={closeMenu} />{/if}
       </div>
       {#if deleting}
-        <div class="confirm" role="group" aria-label="Delete agent" bind:this={confirmBox}>
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+        <div class="confirm" role="group" aria-label="Delete agent" bind:this={confirmBox} onkeydown={(event) => { if (event.key === 'Escape' && !busy) { event.preventDefault(); event.stopPropagation(); void cancelDelete() } }}>
           <label class="check"><input type="checkbox" bind:checked={removeMemory} disabled={busy} />Also delete its memory</label>
           <div class="actions"><Button variant="danger" disabled={busy} onclick={() => action(async () => { const answer = await agentRequest(tauri, agent.runtimeId, 'agent.delete', { id: agent.id, remove_memory: removeMemory }); ondelete(answer) })}>Confirm delete</Button><Button data-safe disabled={busy} onclick={cancelDelete}>Cancel</Button></div>
         </div>

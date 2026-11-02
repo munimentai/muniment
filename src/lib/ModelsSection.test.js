@@ -239,9 +239,13 @@ it('closes the decision-model Disconnect dialog on Cancel and on Escape, and dis
   expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveFocus()
   await fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  // A click leaves focus on the page in WebKit, as here, and focus still returns to the button that asked.
+  expect(unplug).toHaveFocus()
+  document.activeElement.blur()
   await fireEvent.click(unplug)
   dialog = await screen.findByRole('dialog')
   await fireEvent.keyDown(document.activeElement, { key: 'Escape' })
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  expect(unplug).toHaveFocus()
   expect(tauri.invoke).not.toHaveBeenCalledWith('model_router_disconnect_classifier', expect.anything())
 })

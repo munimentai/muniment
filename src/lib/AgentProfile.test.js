@@ -604,3 +604,21 @@ it('keeps a card\'s delete confirmation in view with Cancel focused while Histor
     expect(document.activeElement).toBe(outside)
   } finally { delete Element.prototype.scrollIntoView; outside.remove() }
 })
+
+it('cancels the delete confirmation with Escape and returns focus to Delete agent, leaving the profile open', async () => {
+  const onclose = vi.fn()
+  const outer = vi.fn()
+  window.addEventListener('keydown', outer)
+  try {
+    render(AgentProfile, { agent, tauri: { invoke: vi.fn(async () => null) }, onclose })
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete agent' }))
+    const confirm = screen.getByRole('group', { name: 'Delete agent' })
+    await waitFor(() => expect(within(confirm).getByRole('button', { name: 'Cancel' })).toHaveFocus())
+    await fireEvent.keyDown(within(confirm).getByRole('button', { name: 'Cancel' }), { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('group', { name: 'Delete agent' })).not.toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'Delete agent' })).toHaveFocus()
+    // The key ends at the confirmation, so the app does not close the profile too.
+    expect(outer).not.toHaveBeenCalled()
+    expect(onclose).not.toHaveBeenCalled()
+  } finally { window.removeEventListener('keydown', outer) }
+})
