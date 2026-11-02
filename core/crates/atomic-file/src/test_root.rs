@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 /// The name every test process root starts with, followed by the process id
 /// and a random token.
-const TEST_ROOT_PREFIX: &str = "muniment-test-";
+pub const TEST_ROOT_PREFIX: &str = "muniment-test-";
 
 /// How long a root whose process seems gone stays when another host or
 /// container made it. Test processes in separate containers can share one

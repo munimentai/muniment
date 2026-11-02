@@ -504,13 +504,36 @@ pub fn note_keychain_mocked() {
     KEYCHAIN_MOCKED.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
-/// Whether this process may open the platform keychain: any process but a
-/// test run, a test run whose keyring is in memory, and a test run marked
-/// as a keychain test.
+/// Whether this process may open the platform keychain. A test run, any
+/// binary built for a test however it starts, and a process whose state
+/// directory lies in a test root never may, so a copy of a test runtime that
+/// runs with the owner's home keeps its secrets in files and never raises the
+/// keychain's prompt. A test whose keyring is in memory, and a test marked as
+/// a keychain test, may.
 pub fn keychain_allowed() -> bool {
-    !is_test_run()
+    !(is_test_build() || state_directory_is_test_root())
         || KEYCHAIN_MOCKED.load(std::sync::atomic::Ordering::SeqCst)
         || std::env::var_os(KEYCHAIN_TESTS_VARIABLE).is_some_and(|value| value == "1")
+}
+
+/// Whether the state directory this process names lies in a test process's
+/// temporary root.
+pub fn state_directory_is_test_root() -> bool {
+    state_directory_from(
+        std::env::var_os(STATE_DIRECTORY_OVERRIDE).as_deref(),
+        home_directory_value().as_deref(),
+    )
+    .is_some_and(|state| in_test_root(&state))
+}
+
+/// Whether `path` lies in a test process's temporary root.
+fn in_test_root(path: &Path) -> bool {
+    path.ancestors().any(|ancestor| {
+        ancestor
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(crate::atomic_file::test_root::TEST_ROOT_PREFIX))
+    })
 }
 
 /// Stops a test run before it opens the owner's real keychain. A test that
@@ -707,6 +730,26 @@ mod owner_data_guard_tests {
 
 #[cfg(test)]
 mod keychain_guard_tests {
+    #[test]
+    fn a_state_directory_in_a_test_root_is_a_test_root() {
+        use std::path::Path;
+        assert!(super::in_test_root(Path::new(
+            "/tmp/muniment-test-4242-0000abcd-1234abcd/state/.muniment"
+        )));
+        assert!(super::in_test_root(&super::test_state_directory()));
+        assert!(!super::in_test_root(Path::new("/Users/owner/.muniment")));
+        assert!(!super::in_test_root(Path::new("/tmp/claude-502/mo/state")));
+    }
+
+    #[test]
+    fn a_test_build_never_reaches_the_keychain() {
+        // Every crate that tests against the core builds it with `test-build`,
+        // so a runtime binary a test builds refuses the keychain however it
+        // starts, as a copy outside `deps` with the owner's home does.
+        const { assert!(super::TEST_BUILD) };
+        assert!(super::is_test_build());
+    }
+
     #[test]
     fn a_test_run_never_reaches_the_keychain() {
         assert!(super::is_test_run());
