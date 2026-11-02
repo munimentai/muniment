@@ -833,9 +833,10 @@ fn core_and_the_pi_sidecar_refreshing_one_sign_in_never_spend_a_token_twice() {
     assert!(wait(|| holder.trusts(&b) && b.trusts(&holder)));
     holder.write_auth(json!({}));
     holder.share();
-    // Only the passes the test runs refresh from here on: the explicit pass
-    // counts as the worker's latest one.
-    holder.swarm().set_fleet_interval(Duration::from_secs(3600));
+    // Only the passes the test runs refresh from here on. A roster change
+    // asks the worker for a pass at any time, so the holder's worker runs
+    // none, and the explicit pass waits for one it already started.
+    holder.swarm().hold_fleet_passes();
     holder.swarm().fleet_pass().unwrap();
     let agent = holder.agent();
     let lock = agent.join("auth.json.lock");

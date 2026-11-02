@@ -463,10 +463,11 @@ impl Swarm {
         credentials::pass_now(&self.inner)
     }
 
-    /// Sets how long the worker waits between reseal passes.
+    /// Stops the worker's reseal passes, due or asked for, so only
+    /// [`Self::fleet_pass`] runs one, as a test that orders refreshes does.
     #[doc(hidden)]
-    pub fn set_fleet_interval(&self, interval: Duration) {
-        credentials::set_interval(&self.inner, interval);
+    pub fn hold_fleet_passes(&self) {
+        credentials::hold(&self.inner);
     }
 
     /// The members a secret that serves `agents` may reach.
