@@ -2,7 +2,8 @@
 //! and Windows. A test run writes that file under a temporary directory, or
 //! the one `MUNIMENT_LOG_DIR` names, never the owner's.
 
-/// The runtime logs each hold at most 256 KiB.
+/// Each runtime log file holds at most 256 KiB. A full file moves to
+/// `<name>.1`, so a log keeps its previous file as well.
 pub const RUNTIME_LOG_MAX_BYTES: u64 = 256 * 1024;
 /// Each log record starts with its UTC time to the millisecond in RFC 3339
 /// form and a space, such as `2026-01-02T03:04:05.678Z `.
@@ -234,6 +235,10 @@ mod tests {
             logs.records(),
             "muniment-runtime: run_id=test first_event text_delta\n"
         );
+        let rotated = logs.0.join("runtime-service.log.1");
+        assert_eq!(fs::metadata(&rotated).unwrap().len(), RUNTIME_LOG_MAX_BYTES);
+        assert!(without_record_times(&fs::read_to_string(rotated).unwrap())
+            .starts_with("muniment-runtime: started version=test\n"));
     }
 
     #[test]
