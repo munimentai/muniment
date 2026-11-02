@@ -99,8 +99,8 @@ pub type LaunchFiles = Box<dyn Send + Sync>;
 /// for the thread's next read or run. Once more than `idle` slots are kept,
 /// empty slots go first, then read-only processes, then reply processes. A
 /// reaper stops each marked idle process
-/// when its idle window ends, and the oldest ones once more than the parked
-/// limit wait. A slot a run holds is never touched, so no turn is stopped.
+/// when its idle window ends, and the least recently used ones once more
+/// than the parked limit wait. A slot a run holds is never touched, so no turn is stopped.
 /// One thread's process slot.
 pub type PiProcessSlot = Arc<Mutex<Option<PiRuntime>>>;
 
@@ -252,9 +252,11 @@ impl PiProcesses {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// The slot of one thread's process. Past the slot limit, the slots that
-    /// go are empty ones first, then those of processes only a read started,
-    /// then those a reply left, the longest idle of each first. The slot just
+    /// The slot of one thread's process. Each ask moves the slot to the end
+    /// of the list, so the list runs from the least recently used thread to
+    /// the one in use. Past the slot limit, the slots that go are empty ones
+    /// first, then those of processes only a read started, then those a
+    /// reply left, the least recently used of each first. The slot just
     /// asked for and a slot a run holds stay.
     pub fn slot(&self, thread: &str) -> PiProcessSlot {
         self.start_reaper();
@@ -274,12 +276,12 @@ impl PiProcesses {
                 .filter_map(|(index, (_, held))| {
                     // A slot a run holds stays; its process ends with the run's next start.
                     let process = held.try_lock().ok()?;
-                    let rank = match process.as_ref().map(|process| process.reuse.as_ref()) {
-                        None => (0, None),
-                        Some(Some(reuse)) if reuse.read_only() => (1, Some(reuse.parked_at())),
-                        Some(reuse) => (2, reuse.map(crate::engine::PiReuse::parked_at)),
+                    let class = match process.as_ref().map(|process| process.reuse.as_ref()) {
+                        None => 0,
+                        Some(Some(reuse)) if reuse.read_only() => 1,
+                        Some(_) => 2,
                     };
-                    Some((rank, index))
+                    Some((class, index))
                 })
                 .collect();
             order.sort();
@@ -409,7 +411,7 @@ pub fn log_replaced(run_id: &str) {
 }
 
 /// Stops each marked idle process whose window ended, then the ones past
-/// the parked limit, read-only ones first, and sleeps until the next window ends or a run
+/// the parked limit, read-only ones first, least recently used first, and sleeps until the next window ends or a run
 /// frees its slot.
 fn reap(slots: std::sync::Weak<Slots>) {
     loop {
@@ -438,7 +440,7 @@ fn sweep(slots: &Slots, now: Instant) -> Option<Instant> {
         process.take()
     };
     let mut parked = Vec::new();
-    for (thread, slot) in list {
+    for (used, (thread, slot)) in list.into_iter().enumerate() {
         let expired = |at: Instant| now.saturating_duration_since(at) >= slots.window;
         if let Some(process) = take_if(&slot, &|at| !expired(at)) {
             stop_idle(&thread, process, IdleStop::Idle);
@@ -448,18 +450,18 @@ fn sweep(slots: &Slots, now: Instant) -> Option<Instant> {
             let reuse = process.as_ref()?.reuse.as_ref()?;
             Some((reuse.parked_at(), reuse.read_only()))
         }) {
-            parked.push((at, read, thread, slot));
+            parked.push((used, at, read, thread, slot));
         }
     }
-    let next = parked.iter().map(|(at, ..)| *at + slots.window).min();
-    // The newest process stays: its thread is the one in use. Of the
+    let next = parked.iter().map(|(_, at, ..)| *at + slots.window).min();
+    // The list runs from the least recently used thread to the one in use,
+    // so the last process stays: its thread is the one in use. Of the
     // others, a process only a read used stops before one a reply left,
-    // and the oldest of each first.
-    parked.sort_by_key(|(at, ..)| *at);
-    let newest = parked.pop();
-    parked.sort_by_key(|(at, read, ..)| (!*read, *at));
-    let excess = (parked.len() + usize::from(newest.is_some())).saturating_sub(slots.parked);
-    for (at, _, thread, slot) in parked.drain(..excess) {
+    // and the least recently used of each first.
+    let in_use = parked.pop();
+    parked.sort_by_key(|(used, _, read, ..)| (!*read, *used));
+    let excess = (parked.len() + usize::from(in_use.is_some())).saturating_sub(slots.parked);
+    for (_, at, _, thread, slot) in parked.drain(..excess) {
         if let Some(process) = take_if(&slot, &|current| current != at) {
             stop_idle(&thread, process, IdleStop::Limit);
         }

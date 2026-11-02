@@ -517,6 +517,55 @@ fn the_oldest_idle_process_stops_past_the_parked_limit() {
     assert_eq!(harness.spawns().len(), 3);
 }
 
+#[test]
+fn past_the_limits_the_least_recently_used_read_only_process_stops_first() {
+    let _environment = ENVIRONMENT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // Two parked processes at most.
+    let processes = PiProcesses::with_reaper(8, Duration::from_secs(600), 2);
+    let mut harness = Harness::with_processes("pi-reuse-recent", processes);
+    let first = thread_without_process(&mut harness);
+    let second = thread_without_process(&mut harness);
+    let third = thread_without_process(&mut harness);
+
+    // The user opens the first thread, then the second, then returns to
+    // the first, whose process answers again.
+    harness.read_context(&first);
+    let first_process = harness.spawns().last().unwrap().clone();
+    harness.read_context(&second);
+    let second_process = harness.spawns().last().unwrap().clone();
+    harness.read_context(&first);
+    let spawned = harness.spawns().len();
+
+    // Opening a third thread stops the second thread's process, which the
+    // user left longest ago, though the first thread's process is older.
+    harness.read_context(&third);
+    assert_eq!(harness.spawns().len(), spawned + 1);
+    let third_process = harness.spawns().last().unwrap().clone();
+    assert!(
+        ends(&second_process),
+        "the least recently used process still runs"
+    );
+    assert!(alive(&first_process) && alive(&third_process));
+    assert_eq!(harness.processes.parked(), 2);
+
+    // Past the slot limit the same order holds: back to the third thread,
+    // then the second, whose new slot pushes out the first thread's.
+    let processes = PiProcesses::with_reaper(2, Duration::from_secs(600), 8);
+    harness.processes.stop_all(IdleStop::Shutdown);
+    harness.processes = processes;
+    harness.read_context(&first);
+    let first_process = harness.spawns().last().unwrap().clone();
+    harness.read_context(&third);
+    let third_process = harness.spawns().last().unwrap().clone();
+    harness.read_context(&first);
+    harness.read_context(&second);
+    assert!(ends(&third_process), "the least recently used slot stayed");
+    assert!(alive(&first_process));
+    assert_eq!(harness.processes.len(), 2);
+}
+
 /// A thread with a saved conversation and no process: its first reply ran,
 /// and its process stopped since.
 fn thread_without_process(harness: &mut Harness) -> String {
