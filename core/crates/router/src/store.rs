@@ -587,31 +587,16 @@ impl FileSecrets {
     }
 }
 
-/// Holds the cross-process lock on the router record while a refreshed
-/// credential is merged into it.
-struct RecordLock(PathBuf);
-
-impl Drop for RecordLock {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir(&self.0);
-    }
-}
-
-fn record_lock(agent: &Path) -> Result<RecordLock, String> {
-    let path = agent.join(format!("{}.lock", config::CONFIG_FILE));
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        match std::fs::create_dir(&path) {
-            Ok(()) => return Ok(RecordLock(path)),
-            Err(error)
-                if error.kind() == io::ErrorKind::AlreadyExists
-                    && std::time::Instant::now() < deadline =>
-            {
-                std::thread::sleep(Duration::from_millis(20))
-            }
-            Err(_) => return Err("Cannot lock account settings for token refresh.".into()),
-        }
-    }
+/// Takes the cross-process lock on the router record while a refreshed
+/// credential is merged into it. A lock its holder left as it died is broken.
+fn record_lock(agent: &Path) -> Result<muniment_models::pi_models::FileLock, String> {
+    use muniment_models::pi_models;
+    pi_models::lock_with(
+        &config::config_path(agent),
+        Duration::from_secs(5),
+        pi_models::LOCK_STALE,
+    )
+    .map_err(|_| "Cannot lock account settings for token refresh.".into())
 }
 
 impl SecretSource for FileSecrets {

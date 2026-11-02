@@ -215,14 +215,28 @@ fn read_json_file(
             Err(_) => return Err(READ_SETTINGS_ERROR.into()),
         }
     }
-    let _lock = locked
-        .then(|| lock_pi_auth_file(path))
-        .transpose()
-        .map_err(|_| READ_SETTINGS_ERROR.to_string())?;
-    let bytes = match fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(_) => return Err(READ_SETTINGS_ERROR.into()),
+    let read = || -> Result<Option<Vec<u8>>, String> {
+        match fs::read(path) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(_) => Err(READ_SETTINGS_ERROR.into()),
+        }
+    };
+    // A read takes no lock while the file parses, so a writer that holds the
+    // lock never stalls it. Only a file a writer has half written waits for
+    // the writer's lock and reads again.
+    let Some(bytes) = read()? else {
+        return Ok(None);
+    };
+    if let Ok(root) = serde_json::from_slice(&bytes) {
+        return Ok(Some(root));
+    }
+    if !locked {
+        return Err(READ_SETTINGS_ERROR.into());
+    }
+    let _lock = lock_pi_auth_file(path).map_err(|_| READ_SETTINGS_ERROR.to_string())?;
+    let Some(bytes) = read()? else {
+        return Ok(None);
     };
     serde_json::from_slice(&bytes)
         .map(Some)
@@ -1529,6 +1543,25 @@ llama     qwen3              32K      16.4K    yes       no\n";
         // It never adopts a default from rows a full read has not confirmed.
         assert_eq!(cached.default_provider, None);
         drop((_models, _auth));
+        fs::remove_dir_all(agent).unwrap();
+    }
+
+    #[test]
+    fn reads_provider_settings_at_once_while_a_lock_is_held_or_abandoned() {
+        let agent = temporary_directory();
+        fs::write(agent.join("models.json"), serde_json::json!({
+            "providers": {"ollama": {"baseUrl": "http://localhost:11434/v1", "models": [{"id": "local-model"}]}}
+        }).to_string()).unwrap();
+        fs::write(pi_auth_file(&agent), "{}").unwrap();
+        // A runtime killed during a write leaves both lock directories.
+        fs::create_dir(pi_models::lock_path(&pi_models_file(&agent))).unwrap();
+        fs::create_dir(pi_models::lock_path(&pi_auth_file(&agent))).unwrap();
+        let started = std::time::Instant::now();
+        let status = provider_status(&agent).unwrap();
+        let inventory = provider_inventory(&agent, &[], &[]).unwrap();
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(status.iter().any(|provider| provider.configured));
+        assert_eq!(inventory.providers[0].models[0].id, "local-model");
         fs::remove_dir_all(agent).unwrap();
     }
 

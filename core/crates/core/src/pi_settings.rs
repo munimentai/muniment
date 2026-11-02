@@ -2,8 +2,7 @@ use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::Duration;
 
 use serde_json::{json, Map, Value};
 use uuid::Uuid;
@@ -231,53 +230,14 @@ pub fn store_mcp_server(agent_directory: &Path, cli_executable: &Path) -> io::Re
     replaced
 }
 
-// proper-lockfile defaults to a 10-second stale threshold and a 5-second heartbeat.
+// proper-lockfile defaults to a 10-second stale threshold.
 const LOCK_STALE: Duration = Duration::from_secs(10);
-const LOCK_UPDATE: Duration = Duration::from_secs(5);
 /// Pi locks `auth.json` with a 30-second stale threshold for a refresh, so a
 /// lock it holds while a provider answers is not broken as abandoned.
 const AUTH_LOCK_STALE: Duration = Duration::from_secs(30);
 
-pub struct SettingsLock {
-    path: PathBuf,
-    modified: Arc<Mutex<SystemTime>>,
-    stop: mpsc::Sender<()>,
-    heartbeat: Option<std::thread::JoinHandle<()>>,
-}
-
-impl SettingsLock {
-    pub fn check(&self) -> io::Result<()> {
-        let modified = self.modified.lock().unwrap();
-        if fs::metadata(&self.path)?.modified()? != *modified {
-            return Err(io::Error::other("Pi settings lock changed owners."));
-        }
-        Ok(())
-    }
-}
-
-impl Drop for SettingsLock {
-    fn drop(&mut self) {
-        let _ = self.stop.send(());
-        if let Some(heartbeat) = self.heartbeat.take() {
-            let _ = heartbeat.join();
-        }
-        if self.check().is_ok() {
-            let _ = fs::remove_dir(&self.path);
-        }
-    }
-}
-
-fn directory_handle(path: &Path) -> io::Result<fs::File> {
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        // Windows needs read/write attribute access and backup semantics to open a directory.
-        options.access_mode(0x180).custom_flags(0x02000000);
-    }
-    options.open(path)
-}
+/// Pi's directory lock on one of its files, refreshed while held.
+pub use muniment_models::pi_models::FileLock as SettingsLock;
 
 pub fn lock_settings(path: &Path) -> io::Result<SettingsLock> {
     lock_settings_with_timeout(path, Duration::from_secs(30))
@@ -300,73 +260,7 @@ fn lock_settings_with_timeout(path: &Path, timeout: Duration) -> io::Result<Sett
 }
 
 fn lock_with_stale(path: &Path, timeout: Duration, stale: Duration) -> io::Result<SettingsLock> {
-    let mut name = path.as_os_str().to_os_string();
-    name.push(".lock");
-    let path = PathBuf::from(name);
-    let deadline = Instant::now() + timeout;
-    loop {
-        match fs::create_dir(&path) {
-            Ok(()) => break,
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                match fs::metadata(&path).and_then(|metadata| metadata.modified()) {
-                    Ok(modified) if modified.elapsed().is_ok_and(|age| age > stale) => {
-                        // Recheck the heartbeat before removing an abandoned directory.
-                        if fs::metadata(&path)?.modified()? == modified {
-                            match fs::remove_dir(&path) {
-                                Ok(()) => continue,
-                                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-                                Err(error) => return Err(error),
-                            }
-                        }
-                    }
-                    Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-                    Err(error) => return Err(error),
-                    _ => {}
-                }
-                if Instant::now() >= deadline {
-                    return Err(error);
-                }
-                std::thread::sleep(Duration::from_millis(20));
-            }
-            Err(error) => return Err(error),
-        }
-    }
-    let setup = (|| {
-        let directory = directory_handle(&path)?;
-        let modified = Arc::new(Mutex::new(directory.metadata()?.modified()?));
-        let shared = modified.clone();
-        let heartbeat_path = path.clone();
-        let (stop, wait) = mpsc::channel();
-        let heartbeat = std::thread::Builder::new().spawn(move || {
-            while wait.recv_timeout(LOCK_UPDATE) == Err(mpsc::RecvTimeoutError::Timeout) {
-                let mut modified = shared.lock().unwrap();
-                if fs::metadata(&heartbeat_path)
-                    .and_then(|m| m.modified())
-                    .ok()
-                    != Some(*modified)
-                {
-                    break;
-                }
-                if directory.set_modified(SystemTime::now()).is_err() {
-                    break;
-                }
-                match directory.metadata().and_then(|m| m.modified()) {
-                    Ok(time) => *modified = time,
-                    Err(_) => break,
-                }
-            }
-        })?;
-        Ok(SettingsLock {
-            path: path.clone(),
-            modified,
-            stop,
-            heartbeat: Some(heartbeat),
-        })
-    })();
-    if setup.is_err() {
-        let _ = fs::remove_dir(&path);
-    }
-    setup
+    muniment_models::pi_models::lock_with(path, timeout, stale)
 }
 
 pub fn store_pi_settings(path: &Path, artifact: PiArtifactDescriptor) -> io::Result<()> {
@@ -451,6 +345,8 @@ pub fn merge_pi_settings(settings: &mut Map<String, Value>, _artifact: PiArtifac
 mod tests {
     use super::*;
     use crate::sidecar::pi_install::PI_ARTIFACT;
+    use muniment_models::pi_models::directory_handle;
+    use std::time::SystemTime;
 
     fn temporary_directory() -> PathBuf {
         let path = std::env::temp_dir().join(format!("muniment-pi-settings-{}", Uuid::new_v4()));
@@ -633,9 +529,9 @@ mod tests {
         let root = temporary_directory();
         let path = root.join("settings.json");
         let lock = lock_settings(&path).unwrap();
-        let initial = *lock.modified.lock().unwrap();
+        let initial = fs::metadata(lock.path()).unwrap().modified().unwrap();
         std::thread::sleep(LOCK_STALE + Duration::from_millis(100));
-        assert!(*lock.modified.lock().unwrap() > initial);
+        assert!(fs::metadata(lock.path()).unwrap().modified().unwrap() > initial);
         assert!(matches!(lock_settings_with_timeout(&path, Duration::ZERO),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists));
         drop(lock);
@@ -648,7 +544,7 @@ mod tests {
         let root = temporary_directory();
         let path = root.join("settings.json");
         let lock = lock_settings(&path).unwrap();
-        directory_handle(&lock.path)
+        directory_handle(lock.path())
             .unwrap()
             .set_modified(SystemTime::now() + Duration::from_secs(60))
             .unwrap();

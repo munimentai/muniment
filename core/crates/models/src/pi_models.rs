@@ -10,7 +10,8 @@ use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::sync::{mpsc, Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::{json, Map, Value};
 
@@ -47,7 +48,14 @@ const TOOLS_OFF: &str = "toolsOff";
 pub const KEY_REFUSED: &str = "The server refused the API key. Check the key and try again.";
 /// The sentence a save answers when the server asks for a key and none was sent.
 pub const KEY_NEEDED: &str = "The server asks for an API key. Enter its key and try again.";
-const LOCK_TIMEOUT: Duration = Duration::from_secs(30);
+/// Pi breaks a lock on `auth.json` after 30 seconds without a refresh, the
+/// longest threshold it uses, so a lock any live holder refreshes stays.
+pub const LOCK_STALE: Duration = Duration::from_secs(30);
+/// The wait outlasts the stale threshold, so a lock its holder left as it
+/// died is broken before the wait ends.
+const LOCK_TIMEOUT: Duration = Duration::from_secs(40);
+// proper-lockfile refreshes its lock every 5 seconds by default.
+const LOCK_UPDATE: Duration = Duration::from_secs(5);
 const LOCK_RETRY: Duration = Duration::from_millis(20);
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(4);
 
@@ -56,13 +64,42 @@ pub fn models_file(agent: &Path) -> PathBuf {
     agent.join("models.json")
 }
 
-/// The lock Pi and Muniment share on one of Pi's files: a directory beside
-/// it, held until drop.
-pub struct FileLock(PathBuf);
+/// The lock Pi and Muniment share on one of Pi's files: proper-lockfile's
+/// directory beside it. The holder refreshes the directory's modified time
+/// while it holds the lock, so a lock whose time stops is abandoned: its
+/// holder died without a release, and the next writer takes it.
+pub struct FileLock {
+    path: PathBuf,
+    modified: Arc<Mutex<SystemTime>>,
+    stop: mpsc::Sender<()>,
+    heartbeat: Option<std::thread::JoinHandle<()>>,
+}
+
+impl FileLock {
+    /// The lock directory.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Fails when another writer broke this lock and took the file.
+    pub fn check(&self) -> io::Result<()> {
+        let modified = self.modified.lock().unwrap();
+        if fs::metadata(&self.path)?.modified()? != *modified {
+            return Err(io::Error::other("The file lock changed owners."));
+        }
+        Ok(())
+    }
+}
 
 impl Drop for FileLock {
     fn drop(&mut self) {
-        let _ = fs::remove_dir(&self.0);
+        let _ = self.stop.send(());
+        if let Some(heartbeat) = self.heartbeat.take() {
+            let _ = heartbeat.join();
+        }
+        if self.check().is_ok() {
+            let _ = fs::remove_dir(&self.path);
+        }
     }
 }
 
@@ -72,21 +109,93 @@ pub fn lock_path(file: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
-/// Takes the lock on `file`, waiting while another writer holds it.
+/// A handle that sets a directory's modified time.
+pub fn directory_handle(path: &Path) -> io::Result<fs::File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // Windows needs read/write attribute access and backup semantics to open a directory.
+        options.access_mode(0x180).custom_flags(0x02000000);
+    }
+    options.open(path)
+}
+
+/// Takes the lock on `file`, waiting while a live writer holds it.
 pub fn lock(file: &Path) -> io::Result<FileLock> {
+    lock_with(file, LOCK_TIMEOUT, LOCK_STALE)
+}
+
+/// Takes the lock on `file`, waiting up to `timeout` while a live writer
+/// holds it, and breaks a lock whose time is older than `stale`.
+pub fn lock_with(file: &Path, timeout: Duration, stale: Duration) -> io::Result<FileLock> {
     let path = lock_path(file);
-    let deadline = Instant::now() + LOCK_TIMEOUT;
+    let deadline = Instant::now() + timeout;
     loop {
         match fs::create_dir(&path) {
-            Ok(()) => return Ok(FileLock(path)),
-            Err(error)
-                if error.kind() == io::ErrorKind::AlreadyExists && Instant::now() < deadline =>
-            {
+            Ok(()) => break,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                match fs::metadata(&path).and_then(|metadata| metadata.modified()) {
+                    Ok(modified) if modified.elapsed().is_ok_and(|age| age > stale) => {
+                        // Recheck the time before removing an abandoned directory.
+                        if fs::metadata(&path)?.modified()? == modified {
+                            match fs::remove_dir(&path) {
+                                Ok(()) => continue,
+                                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                                Err(error) => return Err(error),
+                            }
+                        }
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                    Err(error) => return Err(error),
+                    _ => {}
+                }
+                if Instant::now() >= deadline {
+                    return Err(error);
+                }
                 std::thread::sleep(LOCK_RETRY);
             }
             Err(error) => return Err(error),
         }
     }
+    let setup = (|| {
+        let directory = directory_handle(&path)?;
+        let modified = Arc::new(Mutex::new(directory.metadata()?.modified()?));
+        let shared = modified.clone();
+        let heartbeat_path = path.clone();
+        let (stop, wait) = mpsc::channel();
+        let update = (stale / 2).min(LOCK_UPDATE);
+        let heartbeat = std::thread::Builder::new().spawn(move || {
+            while wait.recv_timeout(update) == Err(mpsc::RecvTimeoutError::Timeout) {
+                let mut modified = shared.lock().unwrap();
+                if fs::metadata(&heartbeat_path)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    != Some(*modified)
+                {
+                    break;
+                }
+                if directory.set_modified(SystemTime::now()).is_err() {
+                    break;
+                }
+                match directory.metadata().and_then(|m| m.modified()) {
+                    Ok(time) => *modified = time,
+                    Err(_) => break,
+                }
+            }
+        })?;
+        Ok(FileLock {
+            path: path.clone(),
+            modified,
+            stop,
+            heartbeat: Some(heartbeat),
+        })
+    })();
+    if setup.is_err() {
+        let _ = fs::remove_dir(&path);
+    }
+    setup
 }
 
 /// A JSON object file, empty when the file does not exist.
@@ -934,6 +1043,66 @@ mod tests {
             std::env::temp_dir().join(format!("muniment-pi-models-{}", uuid::Uuid::now_v7()));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn takes_at_once_a_lock_a_dead_writer_left() {
+        let directory = temporary_directory();
+        let file = models_file(&directory);
+        let held = lock_path(&file);
+        // A writer killed before its release leaves the directory, and its
+        // time stops.
+        fs::create_dir(&held).unwrap();
+        directory_handle(&held)
+            .unwrap()
+            .set_modified(SystemTime::now() - LOCK_STALE - Duration::from_secs(1))
+            .unwrap();
+        let started = Instant::now();
+        let lock = lock(&file).unwrap();
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(lock.check().is_ok());
+        drop(lock);
+        assert!(!held.exists());
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn waits_on_a_live_writer_and_keeps_its_lock() {
+        let directory = temporary_directory();
+        let file = models_file(&directory);
+        let holder = lock(&file).unwrap();
+        let modified = fs::metadata(holder.path()).unwrap().modified().unwrap();
+        assert!(matches!(
+            lock_with(&file, Duration::from_millis(60), LOCK_STALE),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists
+        ));
+        assert_eq!(
+            fs::metadata(holder.path()).unwrap().modified().unwrap(),
+            modified
+        );
+        assert!(holder.check().is_ok());
+        drop(holder);
+        assert!(!lock_path(&file).exists());
+        lock(&file).unwrap();
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_live_writer_refreshes_its_lock_past_the_stale_threshold() {
+        let directory = temporary_directory();
+        let file = models_file(&directory);
+        let stale = Duration::from_millis(300);
+        let holder = lock_with(&file, Duration::ZERO, stale).unwrap();
+        let initial = fs::metadata(holder.path()).unwrap().modified().unwrap();
+        std::thread::sleep(stale * 2);
+        assert!(fs::metadata(holder.path()).unwrap().modified().unwrap() > initial);
+        assert!(matches!(
+            lock_with(&file, Duration::ZERO, stale),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists
+        ));
+        drop(holder);
+        assert!(!lock_path(&file).exists());
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[cfg(unix)]

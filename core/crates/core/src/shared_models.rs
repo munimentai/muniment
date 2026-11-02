@@ -709,11 +709,8 @@ pub fn lease(bundle: Bundle, providers: &BTreeSet<String>, router: bool) -> Bund
 pub fn cloud_lease(agent: &Path) -> Result<Bundle, String> {
     const READ_ERROR: &str =
         "This computer cannot read its model connections. Check folder access.";
-    let record = {
-        let record_path = agent.join(RECORD_FILE);
-        let _record_lock = pi_models::lock(&record_path).map_err(|_| READ_ERROR.to_string())?;
-        read_record(&record_path)?
-    };
+    // Every write replaces the record whole, so a read needs no lock.
+    let record = read_record(&agent.join(RECORD_FILE))?;
     let Some(share) = record.devices.get(CLOUD_DEVICE) else {
         return Ok(Bundle::default());
     };
@@ -772,11 +769,8 @@ enum Audience {
 fn collect(agent: &Path, now_ms: i64, audience: Audience) -> Result<Bundle, String> {
     const READ_ERROR: &str =
         "This computer cannot read its model connections. Check folder access.";
-    let record = {
-        let record_path = agent.join(RECORD_FILE);
-        let _record_lock = pi_models::lock(&record_path).map_err(|_| READ_ERROR.to_string())?;
-        read_record(&record_path)?
-    };
+    // Every write replaces the record whole, so a read needs no lock.
+    let record = read_record(&agent.join(RECORD_FILE))?;
     // The vault already holds what it leases this computer, so the upload
     // names those connections to keep them.
     let keep_vault = |device: &str| audience == Audience::Vault && device == CLOUD_DEVICE;
