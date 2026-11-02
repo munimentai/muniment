@@ -380,9 +380,9 @@ enum RuntimeDirectorySource {
 }
 
 fn handle_arguments() -> Result<bool, String> {
-    // Pi runs `secret get <provider>` for an endpoint key, which this binary
-    // reads from the keychain it stored the key in. A key the keychain
-    // declined stays held back for the runtime's later commands.
+    // Pi runs `secret get <provider>` for an endpoint key, which the running
+    // runtime answers on its socket, so a keychain prompt never runs under
+    // Pi's timeout. Without a runtime this binary reads the keychain itself.
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     if let Some(status) = muniment_runtime_core::models::endpoint_secrets::run_command(
         &arguments,

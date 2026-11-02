@@ -164,6 +164,21 @@ it('disconnects a provider connection only after the dialog confirms it, and Can
   await waitFor(() => expect(tauri.invoke).toHaveBeenCalledWith('local_mode_disconnect_provider', { provider: 'openai' }))
 })
 
+it('says where an endpoint key stays when the keychain keeps it after a disconnect', async () => {
+  const keyed = { providers: [{ id: 'custom-live27', name: 'Live27', source: 'endpoint', base_url: 'https://live27.example/v1', models: [{ id: 'm' }] }], hidden: [], shown: [], default_provider: null, default_model: null }
+  const kept = 'Its key stays in the keychain. To remove it, open Keychain Access, search for the endpoint service, and delete the item for custom-live27.'
+  const tauri = { invoke: vi.fn(async (command) => {
+    if (command === 'local_mode_provider_inventory') return keyed
+    if (command === 'model_router_settings') return { families: [], subscriptions: [], accounts: [] }
+    if (command === 'local_mode_disconnect_provider') return kept
+    return null
+  }) }
+  render(ModelsSection, { props: { tauri, listen: async () => () => {}, inventory: keyed } })
+  await fireEvent.click(await screen.findByRole('button', { name: 'Disconnect Live27' }))
+  await fireEvent.click(within(await screen.findByRole('dialog', { name: 'Disconnect Live27?' })).getByRole('button', { name: 'Disconnect' }))
+  expect(await screen.findByText(`Live27 is disconnected. ${kept}`)).toBeInTheDocument()
+})
+
 it('draws the stored rows core answers at once while the full read waits, then takes the full read', async () => {
   let finish
   const full = new Promise((resolve) => { finish = resolve })

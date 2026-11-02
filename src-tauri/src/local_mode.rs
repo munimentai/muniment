@@ -250,18 +250,25 @@ pub(crate) async fn local_mode_set_model_hidden(
     .map(drop)
 }
 
+/// Disconnects a provider. Answers the sentence that says where its
+/// endpoint key stays and how to remove it when the keychain kept the key.
 #[tauri::command]
 pub(crate) async fn local_mode_disconnect_provider(
     app: tauri::AppHandle,
     provider: String,
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
     model_service::request(
         &app,
         ModelAction::DisconnectProvider,
         data([("provider", json!(provider))]),
     )
     .await
-    .map(drop)
+    .map(|answer| {
+        answer
+            .get("key_kept")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    })
 }
 
 #[tauri::command]
