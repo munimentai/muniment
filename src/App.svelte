@@ -1196,6 +1196,8 @@
   // draft, such as a new agent's chat, is no thread yet. A new agent's chat
   // lists once it holds a draft, while its runtime thread is still fresh.
   const listedThreadId = $derived(freshThread && !agentChat?.record ? null : currentThreadId)
+  // Why the title's thread actions wait on an empty new thread.
+  const THREAD_ACTIONS_REASON = 'Send a message to use thread actions.'
   // The listed thread whose transcript the user can see: no page, catalog or
   // Settings covers it and the window is not hidden. Only this thread reads.
   let windowShown = $state(typeof document === 'undefined' || !document.hidden)
@@ -4139,8 +4141,10 @@
               <h1 class="thread-title-heading" aria-label={threadsLoading ? 'Loading threads…' : currentThreadTitle} aria-busy={threadsLoading} data-tauri-drag-region><RowControl kind="thread-title" data-accent-edge aria-label="Rename thread" disabled={threadsLoading || !currentThreadId || freshThread || !!active || !!agentChat} bind:element={threadTitleButton} onclick={() => editThreadTitle(currentThreadTitle)} onkeydown={threadTitleButtonKeydown}>{threadsLoading ? '' : currentThreadTitle}</RowControl></h1>
               {#if threadMachine && threadMachine !== LOCAL_RUNTIME_ID}{@render machineBadge({ runtimeId: threadMachine })}{/if}
             {/if}
-            <!-- The title's actions act on the listed thread, a new agent's chat with a draft too. -->
-            <button type="button" class="quiet title-thread-actions" aria-label="Thread actions" aria-haspopup="menu" aria-expanded={!!threadMenu?.fromTitle} disabled={!listedThreadId || threadSwitching} bind:this={titleActionsButton} onclick={(event) => openThreadMenu(event, currentThreadId, true)}><LucideIcon name="ellipsis-vertical" variant="action" size={14} /></button>
+            <!-- The title's actions act on the listed thread, a new agent's chat with a draft too. An empty
+                 new thread holds none, so the button stays in place, muted, and names why. -->
+            <button type="button" class="quiet title-thread-actions" aria-label="Thread actions" aria-haspopup="menu" aria-expanded={!!threadMenu?.fromTitle} aria-disabled={listedThreadId ? undefined : 'true'} aria-describedby={listedThreadId ? undefined : 'title-thread-actions-reason'} data-tooltip={listedThreadId ? undefined : THREAD_ACTIONS_REASON} disabled={threadSwitching} bind:this={titleActionsButton} onclick={(event) => { if (listedThreadId) openThreadMenu(event, currentThreadId, true) }}><LucideIcon name="ellipsis-vertical" variant="action" size={14} /></button>
+            {#if !listedThreadId}<span id="title-thread-actions-reason" class="visually-hidden">{THREAD_ACTIONS_REASON}</span>{/if}
             {/if}
             {/if}
 
@@ -5056,6 +5060,9 @@
   .thread-row-title { flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .thread-menu { position: fixed; z-index: 4; min-width: 88px; width: max-content; padding: 4px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); box-shadow: var(--shadow-overlay); }
   .title-thread-actions { flex: none; }
+  .title-thread-actions[aria-disabled="true"] { position: relative; opacity: .45; cursor: default; }
+  .title-thread-actions[data-tooltip]::after { content: attr(data-tooltip); position: absolute; left: 0; top: calc(100% + 6px); z-index: 6; padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font-size: var(--text-12); white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity 80ms ease; }
+  .title-thread-actions[data-tooltip]:hover::after, .title-thread-actions[data-tooltip]:focus-visible::after { opacity: 1; transition-delay: 350ms; }
   .thread-menu button { display: block; width: 100%; min-width: 24px; min-height: 24px; padding: 3px 8px; border-color: transparent; background: transparent; color: var(--ink); font-size: var(--text-13); text-align: left; }
   .thread-menu button:hover:not(:disabled) { border-color: transparent; background: var(--faint); }
   .thread-menu button[data-danger] { color: var(--danger); }

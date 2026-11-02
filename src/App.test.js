@@ -4373,6 +4373,17 @@ describe('window chrome', () => {
     }
   })
 
+  it('names why the title actions wait on an empty new thread and opens no menu', async () => {
+    threadSummaryResult = []
+    render(App)
+    const actions = await screen.findByRole('button', { name: 'Thread actions' })
+    await waitFor(() => expect(actions).toHaveAttribute('aria-disabled', 'true'))
+    expect(actions).toHaveAccessibleDescription('Send a message to use thread actions.')
+    expect(actions).toHaveAttribute('data-tooltip', 'Send a message to use thread actions.')
+    await fireEvent.click(actions)
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+  })
+
   it('uses the title actions with a collapsed sidebar and keeps delete confirmation visible', async () => {
     threadSummaryResult = [{ threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' }]
     render(App)
