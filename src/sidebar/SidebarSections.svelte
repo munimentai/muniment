@@ -12,6 +12,7 @@
   import LucideIcon from '../lib/LucideIcon.svelte'
   import ProjectItem from './ProjectItem.svelte'
   import { freshIndex } from './sidebar-model.js'
+  import { tick } from 'svelte'
   let {
     sidebar, row, fresh = null, showFresh = false, query = '', pages = [], owners = {},
     disabled = false, expanded = new Set(), archivedOpen = $bindable(false),
@@ -24,6 +25,9 @@
   const matchedPages = $derived(searching ? pages.filter((page) => page.label.toLowerCase().includes(query.trim().toLowerCase())) : [])
   const freshAt = $derived(showFresh ? freshIndex(sidebar) : -1)
   const kbd = (shortcut) => shortcut.replace('Meta+', '⌘ ').replace('Control+', 'Ctrl ')
+  // The name field takes focus as it opens, after a menu or the palette that
+  // opened it returns focus, so typing names the project.
+  const focusField = (node) => { void tick().then(() => node.focus()) }
 </script>
 
 <div>
@@ -43,13 +47,13 @@
         <h3>Projects</h3>
         <button type="button" class="section-control" aria-label="New project" data-tooltip="New project" disabled={disabled || projectBusy} onclick={onnewproject}><LucideIcon name="plus" size={14} /></button>
       </div>
-      {#if projectForm}
+      {#if projectForm}{#key projectForm}
         <form class="row-rename" onsubmit={(event) => { event.preventDefault(); onsaveproject() }}>
-          <input aria-label="Project name" placeholder="Project name" maxlength="80" bind:value={projectName} disabled={projectBusy} />
+          <input aria-label="Project name" placeholder="Project name" maxlength="80" use:focusField bind:value={projectName} disabled={projectBusy} />
           <button type="submit" disabled={projectBusy || !projectName.trim()}>{projectForm === 'new' ? 'Create' : 'Save'}</button>
           <button type="button" disabled={projectBusy} onclick={oncancelproject}>Cancel</button>
         </form>
-      {/if}
+      {/key}{/if}
       <ul class="thread-list" aria-label="Projects list">
         {#each sidebar.projects as project, index (project.id)}
           {#if index === freshAt}{@render fresh?.()}{/if}
