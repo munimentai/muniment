@@ -22,6 +22,23 @@ pub trait CredentialStore: Send + Sync {
 
     /// Removes a secret. Removing a secret that is not there succeeds.
     fn remove(&self, service: &str, name: &str) -> Result<(), String>;
+
+    /// The entries the store refused and holds back, each with its refusal.
+    fn refusals(&self) -> Vec<RefusedEntry> {
+        Vec::new()
+    }
+
+    /// The person asked to try again: the store forgets every refusal, so
+    /// the next read of each entry asks the system again.
+    fn retry_refused(&self) {}
+}
+
+/// One entry a store refused and holds back.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RefusedEntry {
+    pub service: String,
+    pub name: String,
+    pub refusal: CredentialRefusal,
 }
 
 /// Why a store answered no secret for an entry it may hold.
@@ -40,6 +57,131 @@ impl CredentialRefusal {
         match self {
             Self::Declined(message) | Self::Failed(message) => message,
         }
+    }
+}
+
+/// The first wait after a store failure.
+pub const FIRST_REFUSAL_BACKOFF: std::time::Duration = std::time::Duration::from_secs(30);
+/// The longest wait after store failures in a row.
+pub const MAX_REFUSAL_BACKOFF: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+/// The wait after `failures` store failures in a row: 30 seconds, doubling
+/// up to half an hour.
+pub fn refusal_backoff(failures: u32) -> std::time::Duration {
+    let doublings = failures.saturating_sub(1).min(16);
+    FIRST_REFUSAL_BACKOFF
+        .saturating_mul(1 << doublings)
+        .min(MAX_REFUSAL_BACKOFF)
+}
+
+/// What a store remembers of the entries the system refused, so a refused
+/// entry never raises the system prompt in a loop and never takes a new
+/// secret over the one the store holds. A decline holds back every entry of
+/// its service until the person retries or the process ends. Any other
+/// failure holds back its entry for a backoff that doubles with each failure
+/// in a row.
+#[derive(Debug, Default)]
+pub struct RefusalMemory {
+    entries: std::sync::Mutex<std::collections::BTreeMap<(String, String), HeldRefusal>>,
+}
+
+#[derive(Clone, Debug)]
+struct HeldRefusal {
+    refusal: CredentialRefusal,
+    failures: u32,
+    retry_at: Option<std::time::Instant>,
+}
+
+impl RefusalMemory {
+    fn entries(
+        &self,
+    ) -> std::sync::MutexGuard<'_, std::collections::BTreeMap<(String, String), HeldRefusal>> {
+        self.entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The refusal that still holds for an entry at `now`, or none when the
+    /// system may hear a request for it.
+    pub fn held(
+        &self,
+        service: &str,
+        name: &str,
+        now: std::time::Instant,
+    ) -> Option<CredentialRefusal> {
+        let entries = self.entries();
+        if let Some(held) = entries
+            .get(&(service.to_owned(), name.to_owned()))
+            .filter(|held| held.retry_at.is_none_or(|at| now < at))
+        {
+            return Some(held.refusal.clone());
+        }
+        // A declined prompt holds back every entry of its service, so a
+        // service with many entries raises the prompt once, not once each.
+        entries
+            .iter()
+            .find(|((held_service, _), held)| {
+                held_service == service && matches!(held.refusal, CredentialRefusal::Declined(_))
+            })
+            .map(|(_, held)| held.refusal.clone())
+    }
+
+    /// Whether the system refused an entry and no answer came since. A
+    /// store never writes over such an entry.
+    pub fn refused(&self, service: &str, name: &str) -> bool {
+        self.entries()
+            .contains_key(&(service.to_owned(), name.to_owned()))
+    }
+
+    /// Records the system's refusal of an entry at `now`.
+    pub fn note(
+        &self,
+        service: &str,
+        name: &str,
+        refusal: &CredentialRefusal,
+        now: std::time::Instant,
+    ) {
+        let mut entries = self.entries();
+        let key = (service.to_owned(), name.to_owned());
+        let failures = entries
+            .get(&key)
+            .map_or(0, |held| held.failures)
+            .saturating_add(1);
+        let retry_at = match refusal {
+            CredentialRefusal::Declined(_) => None,
+            CredentialRefusal::Failed(_) => Some(now + refusal_backoff(failures)),
+        };
+        entries.insert(
+            key,
+            HeldRefusal {
+                refusal: refusal.clone(),
+                failures,
+                retry_at,
+            },
+        );
+    }
+
+    /// The system answered for an entry: its refusal goes.
+    pub fn answered(&self, service: &str, name: &str) {
+        self.entries()
+            .remove(&(service.to_owned(), name.to_owned()));
+    }
+
+    /// Every refusal the memory holds.
+    pub fn list(&self) -> Vec<RefusedEntry> {
+        self.entries()
+            .iter()
+            .map(|((service, name), held)| RefusedEntry {
+                service: service.clone(),
+                name: name.clone(),
+                refusal: held.refusal.clone(),
+            })
+            .collect()
+    }
+
+    /// The person asked to try again: every refusal goes.
+    pub fn clear(&self) {
+        self.entries().clear();
     }
 }
 
@@ -200,6 +342,75 @@ impl CredentialStore for FileCredentialStore {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(format!("The credential store kept the secret: {error}.")),
         }
+    }
+}
+
+#[cfg(test)]
+mod refusal_memory_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    fn declined() -> CredentialRefusal {
+        CredentialRefusal::Declined("User canceled the operation.".into())
+    }
+
+    fn failed() -> CredentialRefusal {
+        CredentialRefusal::Failed("The keychain is not available.".into())
+    }
+
+    #[test]
+    fn a_decline_holds_until_a_retry_however_long() {
+        let memory = RefusalMemory::default();
+        let now = Instant::now();
+        assert_eq!(memory.held("s", "a", now), None);
+        memory.note("s", "a", &declined(), now);
+        assert_eq!(memory.held("s", "a", now), Some(declined()));
+        assert_eq!(
+            memory.held("s", "a", now + Duration::from_secs(365 * 24 * 3600)),
+            Some(declined())
+        );
+        assert!(memory.refused("s", "a"));
+        // The decline holds back the service's other entries, which a write
+        // may still create, and no other service.
+        assert_eq!(memory.held("s", "b", now), Some(declined()));
+        assert!(!memory.refused("s", "b"));
+        assert_eq!(memory.held("t", "a", now), None);
+        assert_eq!(memory.list().len(), 1);
+        memory.clear();
+        assert_eq!(memory.held("s", "a", now), None);
+        assert!(!memory.refused("s", "a"));
+    }
+
+    #[test]
+    fn a_failure_backs_off_doubling_to_a_cap_and_an_answer_forgets_it() {
+        let memory = RefusalMemory::default();
+        let now = Instant::now();
+        memory.note("s", "a", &failed(), now);
+        assert!(memory
+            .held("s", "a", now + Duration::from_secs(29))
+            .is_some());
+        assert!(memory
+            .held("s", "a", now + Duration::from_secs(30))
+            .is_none());
+        // The wait is over, but the entry still may not be written over.
+        assert!(memory.refused("s", "a"));
+        memory.note("s", "a", &failed(), now);
+        assert!(memory
+            .held("s", "a", now + Duration::from_secs(59))
+            .is_some());
+        assert!(memory
+            .held("s", "a", now + Duration::from_secs(60))
+            .is_none());
+        for _ in 0..40 {
+            memory.note("s", "a", &failed(), now);
+        }
+        assert!(memory
+            .held("s", "a", now + MAX_REFUSAL_BACKOFF - Duration::from_secs(1))
+            .is_some());
+        assert!(memory.held("s", "a", now + MAX_REFUSAL_BACKOFF).is_none());
+        memory.answered("s", "a");
+        memory.note("s", "a", &failed(), now);
+        assert!(memory.held("s", "a", now + FIRST_REFUSAL_BACKOFF).is_none());
     }
 }
 

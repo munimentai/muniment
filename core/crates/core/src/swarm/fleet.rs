@@ -363,9 +363,53 @@ pub(super) fn key_status(inner: &Inner) -> Value {
     lock(&inner.fleet.gate).view()
 }
 
-/// Opens the fleet key's gate on the person's request and asks the store
-/// once more.
+/// The keychain entries this runtime holds back after a refusal, each named
+/// for a person, that `swarm.members` shows: its credential store's and the
+/// protected prompts'.
+pub(super) fn keychain_status(inner: &Inner) -> Value {
+    let mut refused = credential_store(inner).refusals();
+    refused.extend(crate::chat_prompt::keychain_refusals());
+    let mut items: Vec<Value> = Vec::new();
+    for entry in refused {
+        let label = keychain_label(&entry.service);
+        let state = match entry.refusal {
+            crate::model_router::credentials::CredentialRefusal::Declined(_) => "declined",
+            crate::model_router::credentials::CredentialRefusal::Failed(_) => "failed",
+        };
+        if items
+            .iter()
+            .any(|item| item["label"] == label && item["state"] == state)
+        {
+            continue;
+        }
+        items.push(serde_json::json!({
+            "service": entry.service,
+            "label": label,
+            "state": state,
+            "message": entry.refusal.message(),
+        }));
+    }
+    Value::Array(items)
+}
+
+/// What a keychain service holds, in words.
+fn keychain_label(service: &str) -> &'static str {
+    match service {
+        KEY_SERVICE => "fleet key",
+        crate::agent_hooks::SECRET_SERVICE => "webhook secrets",
+        "ai.muniment.desktop.chat" => "protected prompts",
+        "ai.muniment.reader" => "reader source secrets",
+        "ai.muniment.endpoints" => "model endpoint keys",
+        _ => "saved secrets",
+    }
+}
+
+/// The person asked to try again: the credential store, the protected
+/// prompts and the fleet key forget their refusals, and the fleet key is
+/// asked for once more.
 pub(super) fn retry_key(inner: &Inner) {
+    credential_store(inner).retry_refused();
+    crate::chat_prompt::retry_keychain();
     lock(&inner.fleet.gate).retry();
     let _ = keys(inner);
 }

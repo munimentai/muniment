@@ -277,12 +277,17 @@ impl AccountService for NoCloud {}
 
 impl ChatGrantService for NoCloud {}
 
-/// The platform keychain, or in a test run a file store in a temporary
-/// directory, so no test reaches the owner's real keychain.
+/// The platform keychain, or in a test run, a test build or a process whose
+/// state lives in a test root, a file store in a temporary directory, so no
+/// test and no copy of a test binary reaches the owner's real keychain.
 #[cfg(feature = "keyring")]
 pub fn platform_credentials() -> Arc<dyn CredentialStore> {
     if muniment_core::state_root::keychain_allowed() {
-        Arc::new(KeyringCredentialStore)
+        // One store per process, so every host shares what it remembers of
+        // the keychain's refusals.
+        static KEYCHAIN: std::sync::OnceLock<Arc<KeyringCredentialStore>> =
+            std::sync::OnceLock::new();
+        KEYCHAIN.get_or_init(Arc::default).clone()
     } else {
         Arc::new(FileCredentialStore::new(
             muniment_core::state_root::test_credentials_directory(),
@@ -292,8 +297,70 @@ pub fn platform_credentials() -> Arc<dyn CredentialStore> {
 
 /// The platform keychain through the system keyring. A test run that opens
 /// it panics unless it is marked as a keychain test.
+///
+/// The store remembers each entry the keychain refused. A declined prompt
+/// holds until the person retries or the process ends, and any other failure
+/// holds for a backoff, so a refused entry never raises the prompt in a loop.
+/// A write never replaces an entry whose read the keychain refused.
 #[cfg(feature = "keyring")]
-pub struct KeyringCredentialStore;
+#[derive(Default)]
+pub struct KeyringCredentialStore {
+    refusals: muniment_core::model_router::credentials::RefusalMemory,
+}
+
+#[cfg(feature = "keyring")]
+impl KeyringCredentialStore {
+    fn ask(
+        &self,
+        service: &str,
+        name: &str,
+        get: impl FnOnce() -> Result<String, muniment_core::keyring::Error>,
+    ) -> Result<Option<String>, CredentialRefusal> {
+        if let Some(refusal) = self.refusals.held(service, name, std::time::Instant::now()) {
+            return Err(refusal);
+        }
+        match get() {
+            Ok(secret) => {
+                self.refusals.answered(service, name);
+                Ok(Some(secret))
+            }
+            Err(muniment_core::keyring::Error::NoEntry) => {
+                self.refusals.answered(service, name);
+                Ok(None)
+            }
+            Err(error) => {
+                let refusal = muniment_core::keychain_refusal::keyring_refusal(&error);
+                muniment_core::runtime_eprintln!(
+                    "muniment-runtime: the keychain refused {service}: {}",
+                    refusal.message()
+                );
+                self.refusals
+                    .note(service, name, &refusal, std::time::Instant::now());
+                Err(refusal)
+            }
+        }
+    }
+
+    fn put(
+        &self,
+        service: &str,
+        name: &str,
+        set: impl FnOnce() -> Result<(), muniment_core::keyring::Error>,
+    ) -> Result<(), String> {
+        if self.refusals.refused(service, name) {
+            return Err(
+                "The keychain refused this secret, so it keeps the one it holds. Choose Try again in Settings → Machines."
+                    .into(),
+            );
+        }
+        set().map_err(|error| {
+            format!(
+                "The keychain refused the secret: {}.",
+                error.to_string().trim_end_matches('.')
+            )
+        })
+    }
+}
 
 #[cfg(feature = "keyring")]
 impl CredentialStore for KeyringCredentialStore {
@@ -303,58 +370,35 @@ impl CredentialStore for KeyringCredentialStore {
 
     fn lookup(&self, service: &str, name: &str) -> Result<Option<String>, CredentialRefusal> {
         muniment_core::state_root::guard_keychain(service);
-        match Entry::new(service, name).and_then(|entry| entry.get_password()) {
-            Ok(secret) => Ok(Some(secret)),
-            Err(muniment_core::keyring::Error::NoEntry) => Ok(None),
-            Err(error) => Err(keyring_refusal(&error)),
-        }
+        self.ask(service, name, || {
+            Entry::new(service, name).and_then(|entry| entry.get_password())
+        })
     }
 
     fn write(&self, service: &str, name: &str, secret: &str) -> Result<(), String> {
         muniment_core::state_root::guard_keychain(service);
-        Entry::new(service, name)
-            .and_then(|entry| entry.set_password(secret))
-            .map_err(|error| format!("The keychain refused the secret: {error}."))
+        self.put(service, name, || {
+            Entry::new(service, name).and_then(|entry| entry.set_password(secret))
+        })
     }
 
     fn remove(&self, service: &str, name: &str) -> Result<(), String> {
         muniment_core::state_root::guard_keychain(service);
         match Entry::new(service, name).and_then(|entry| entry.delete_credential()) {
-            Ok(()) | Err(muniment_core::keyring::Error::NoEntry) => Ok(()),
+            Ok(()) | Err(muniment_core::keyring::Error::NoEntry) => {
+                self.refusals.answered(service, name);
+                Ok(())
+            }
             Err(error) => Err(format!("The keychain kept the secret: {error}.")),
         }
     }
-}
 
-/// The keychain's refusal of a read. On macOS a declined prompt
-/// (`errSecUserCanceled`), a failed authentication (`errSecAuthFailed`) and a
-/// prompt the keychain may not show (`errSecInteractionNotAllowed`) are
-/// declines. Every other failure is a store failure.
-#[cfg(feature = "keyring")]
-fn keyring_refusal(error: &muniment_core::keyring::Error) -> CredentialRefusal {
-    let message = format!("The keychain refused the secret: {error}.");
-    #[cfg(target_os = "macos")]
-    if let muniment_core::keyring::Error::PlatformFailure(inner)
-    | muniment_core::keyring::Error::NoStorageAccess(inner) = error
-    {
-        if let Some(status) = inner.downcast_ref::<security_framework::base::Error>() {
-            return keychain_status_refusal(status.code(), message);
-        }
+    fn refusals(&self) -> Vec<muniment_core::model_router::credentials::RefusedEntry> {
+        self.refusals.list()
     }
-    CredentialRefusal::Failed(message)
-}
 
-/// The refusal a macOS keychain status names.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-fn keychain_status_refusal(status: i32, message: String) -> CredentialRefusal {
-    const USER_CANCELED: i32 = -128;
-    const AUTH_FAILED: i32 = -25293;
-    const INTERACTION_NOT_ALLOWED: i32 = -25308;
-    match status {
-        USER_CANCELED | AUTH_FAILED | INTERACTION_NOT_ALLOWED => {
-            CredentialRefusal::Declined(message)
-        }
-        _ => CredentialRefusal::Failed(message),
+    fn retry_refused(&self) {
+        self.refusals.clear();
     }
 }
 
@@ -368,42 +412,90 @@ pub fn state_root_credentials() -> FileCredentialStore {
     }
 }
 
-#[cfg(test)]
-mod keychain_refusal_tests {
+#[cfg(all(test, feature = "keyring"))]
+mod keyring_store_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    fn declined() -> muniment_core::keyring::Error {
+        muniment_core::keyring::Error::NoStorageAccess(Box::new(std::io::Error::other("declined")))
+    }
+
+    #[cfg(target_os = "macos")]
+    fn user_canceled() -> muniment_core::keyring::Error {
+        muniment_core::keychain_refusal::status_error(-128)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn user_canceled() -> muniment_core::keyring::Error {
+        declined()
+    }
+
+    #[test]
+    fn a_refused_entry_asks_the_keychain_once_and_is_never_written_over() {
+        let store = KeyringCredentialStore::default();
+        let asked = Cell::new(0);
+        let get = || {
+            asked.set(asked.get() + 1);
+            Err(user_canceled())
+        };
+        assert!(store.ask("ai.muniment.hooks", "hook-1", get).is_err());
+        for _ in 0..10 {
+            assert!(store
+                .ask("ai.muniment.hooks", "hook-1", || {
+                    asked.set(asked.get() + 1);
+                    Err(user_canceled())
+                })
+                .is_err());
+        }
+        assert_eq!(asked.get(), 1);
+        let wrote = Cell::new(false);
+        assert!(store
+            .put("ai.muniment.hooks", "hook-1", || {
+                wrote.set(true);
+                Ok(())
+            })
+            .is_err());
+        assert!(!wrote.get());
+        assert_eq!(store.refusals().len(), 1);
+        // The decline holds back the service's other entries, and no other
+        // service.
+        assert!(store
+            .ask("ai.muniment.hooks", "hook-2", || panic!("held back"))
+            .is_err());
+        assert_eq!(
+            store.ask("ai.muniment.reader", "source", || {
+                Err(muniment_core::keyring::Error::NoEntry)
+            }),
+            Ok(None)
+        );
+        // A retry asks once more, and an answer clears the refusal.
+        store.retry_refused();
+        assert_eq!(
+            store.ask("ai.muniment.hooks", "hook-1", || Ok("secret".into())),
+            Ok(Some("secret".into()))
+        );
+        assert!(store.refusals().is_empty());
+        assert!(store.put("ai.muniment.hooks", "hook-1", || Ok(())).is_ok());
+        let _ = declined();
+    }
+}
+
+#[cfg(all(test, feature = "keyring"))]
+mod test_build_store_tests {
     use super::*;
 
     #[test]
-    fn a_declined_prompt_reads_as_a_decline_and_other_statuses_as_failures() {
-        for status in [-128, -25293, -25308] {
-            assert!(matches!(
-                keychain_status_refusal(status, "x".into()),
-                CredentialRefusal::Declined(_)
-            ));
-        }
-        for status in [-25291, -25295, -34018, -50] {
-            assert!(matches!(
-                keychain_status_refusal(status, "x".into()),
-                CredentialRefusal::Failed(_)
-            ));
-        }
-    }
-
-    #[cfg(all(feature = "keyring", target_os = "macos"))]
-    #[test]
-    fn a_keyring_error_carries_the_keychain_status() {
-        let canceled = muniment_core::keyring::Error::PlatformFailure(Box::new(
-            security_framework::base::Error::from_code(-128),
-        ));
-        assert!(matches!(
-            keyring_refusal(&canceled),
-            CredentialRefusal::Declined(_)
-        ));
-        let missing = muniment_core::keyring::Error::NoStorageAccess(Box::new(
-            security_framework::base::Error::from_code(-25294),
-        ));
-        assert!(matches!(
-            keyring_refusal(&missing),
-            CredentialRefusal::Failed(_)
-        ));
+    fn a_test_build_keeps_secrets_in_files_and_never_in_the_keychain() {
+        assert!(muniment_core::state_root::is_test_build());
+        let store = platform_credentials();
+        let name = format!("entry-{}", uuid::Uuid::new_v4());
+        store.write("test.build", &name, "sk_test").unwrap();
+        assert_eq!(store.read("test.build", &name).as_deref(), Some("sk_test"));
+        assert!(muniment_core::state_root::test_credentials_directory()
+            .join("test.build")
+            .join(&name)
+            .is_file());
+        store.remove("test.build", &name).unwrap();
     }
 }

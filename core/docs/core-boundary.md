@@ -82,6 +82,7 @@ A module that `muniment-core` re-exports from another workspace crate keeps its 
 | module | http | It shares HTTP agent configuration and OS certificate verification. |
 | module | import_preview | It previews bounded assistant exports. |
 | module | journal | It owns the run journal and reader projections. |
+| module | keychain_refusal | It reads a keychain error as a declined prompt or a store failure. |
 | module | kokoro | It owns on-device read-aloud. |
 | module | launch_facts | It states the facts of a launch to the model: its model, earlier models, host, shell and working directory. |
 | module | local_mode | It reads the local-mode marker without an account. |

@@ -587,9 +587,9 @@ impl Swarm {
             Operation::SwarmJoin => link::join(inner, body),
             Operation::SwarmLeave => link::leave(inner, body),
             Operation::SwarmMembers => {
-                // `{"retry_fleet_key": true}` is the person's retry of a
-                // fleet key the keychain refused.
-                if body == json!({"retry_fleet_key": true}) {
+                // `{"retry_keychain": true}` is the person's retry of the
+                // secrets the keychain refused.
+                if body == json!({"retry_keychain": true}) {
                     fleet::retry_key(inner);
                 } else {
                     empty(&body)?;

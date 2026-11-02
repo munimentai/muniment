@@ -1091,6 +1091,7 @@ fn a_removed_worker_threads_stay_readable() {
 struct RefusingStore {
     asked: std::sync::atomic::AtomicUsize,
     writes: std::sync::atomic::AtomicUsize,
+    retried: std::sync::atomic::AtomicUsize,
     refusal: Mutex<Option<crate::model_router::credentials::CredentialRefusal>>,
 }
 
@@ -1119,6 +1120,23 @@ impl crate::model_router::credentials::CredentialStore for RefusingStore {
 
     fn remove(&self, _service: &str, _name: &str) -> Result<(), String> {
         Ok(())
+    }
+
+    fn refusals(&self) -> Vec<crate::model_router::credentials::RefusedEntry> {
+        lock(&self.refusal)
+            .clone()
+            .map(|refusal| crate::model_router::credentials::RefusedEntry {
+                service: "ai.muniment.webhook".into(),
+                name: "hook-1".into(),
+                refusal,
+            })
+            .into_iter()
+            .collect()
+    }
+
+    fn retry_refused(&self) {
+        self.retried
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -1156,6 +1174,7 @@ fn a_refused_fleet_key_asks_once_and_waits_for_a_retry() {
     let store = Arc::new(RefusingStore {
         asked: Default::default(),
         writes: Default::default(),
+        retried: Default::default(),
         refusal: Mutex::new(Some(CredentialRefusal::Declined(
             "User canceled the operation.".into(),
         ))),
@@ -1191,16 +1210,20 @@ fn a_refused_fleet_key_asks_once_and_waits_for_a_retry() {
     // A refused key is never replaced with a new one.
     assert_eq!(store.writes.load(Ordering::SeqCst), 0);
     assert_eq!(members["fleet_key"]["state"], "declined");
+    assert_eq!(members["keychain"][0]["label"], "webhook secrets");
+    assert_eq!(members["keychain"][0]["state"], "declined");
+    assert_eq!(store.retried.load(Ordering::SeqCst), 0);
 
     // A retry asks once more. A second decline closes the gate again.
     let members = swarm
         .operation(
             Operation::SwarmMembers,
-            json!({"retry_fleet_key": true}),
+            json!({"retry_keychain": true}),
             None,
         )
         .unwrap();
     assert_eq!(store.asked.load(Ordering::SeqCst), 2);
+    assert_eq!(store.retried.load(Ordering::SeqCst), 1);
     assert_eq!(members["fleet_key"]["state"], "declined");
 
     // A retry the store answers opens the gate and makes the key.
@@ -1208,11 +1231,12 @@ fn a_refused_fleet_key_asks_once_and_waits_for_a_retry() {
     let members = swarm
         .operation(
             Operation::SwarmMembers,
-            json!({"retry_fleet_key": true}),
+            json!({"retry_keychain": true}),
             None,
         )
         .unwrap();
     assert_eq!(members["fleet_key"], Value::Null);
+    assert_eq!(members["keychain"], json!([]));
     assert!(fleet::keys(&swarm.inner).is_ok());
     assert_eq!(store.writes.load(Ordering::SeqCst), 1);
     assert!(swarm

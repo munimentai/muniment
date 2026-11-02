@@ -15,7 +15,7 @@ edition = "2021"
 [features]
 # Desktop and runtime HTTPS use the OS certificate verifier.
 tls = ["ureq/tls", "ureq/proxy-from-env", "muniment-models/tls", "muniment-router/tls"]
-keyring = ["dep:keyring"]
+keyring = ["dep:keyring", "dep:security-framework"]
 network-tests = ["tls"]
 # Marks a build made for tests. Each crate that tests against this one turns
 # it on through its dev-dependencies, so a test binary, a copy of one, and a
@@ -78,6 +78,9 @@ libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
+# The keychain's status codes, so a declined prompt reads as a refusal and
+# not as a missing secret. The keyring's own macOS backend uses this crate.
+security-framework = { version = "3", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.62", features = ["Win32_System_Com", "Win32_System_Ole", "Win32_System_TaskScheduler", "Win32_System_Variant"] }

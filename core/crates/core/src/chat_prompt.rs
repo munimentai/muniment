@@ -117,39 +117,108 @@ fn file_failure(error: io::Error) -> PromptStoreError {
     error
 }
 
-/// The system keyring, used when no file store is selected.
+/// The system keyring, used when no file store is selected. A refusal is
+/// remembered: a declined prompt holds back every protected prompt until the
+/// person retries or the runtime starts again, so the keychain never raises
+/// its prompt once per run.
 #[cfg(feature = "keyring")]
 mod keychain {
     use super::ChatPromptError;
+    use crate::model_router::credentials::{RefusalMemory, RefusedEntry};
     use keyring::Entry;
+    use std::time::Instant;
 
-    const PROMPT_SERVICE: &str = "ai.muniment.desktop.chat";
+    pub(super) const PROMPT_SERVICE: &str = "ai.muniment.desktop.chat";
+
+    static REFUSALS: std::sync::LazyLock<RefusalMemory> =
+        std::sync::LazyLock::new(RefusalMemory::default);
 
     fn entry(user: &str) -> Result<Entry, ChatPromptError> {
         crate::state_root::guard_keychain(PROMPT_SERVICE);
         Entry::new(PROMPT_SERVICE, user).map_err(ChatPromptError::Entry)
     }
 
+    fn held(user: &str) -> Option<keyring::Error> {
+        REFUSALS
+            .held(PROMPT_SERVICE, user, Instant::now())
+            .map(|refusal| crate::keychain_refusal::refusal_error(&refusal))
+    }
+
+    fn note(user: &str, error: &keyring::Error) {
+        let refusal = crate::keychain_refusal::keyring_refusal(error);
+        REFUSALS.note(PROMPT_SERVICE, user, &refusal, Instant::now());
+    }
+
     pub(super) fn store(user: &str, prompt: &str) -> Result<(), ChatPromptError> {
-        entry(user)?
-            .set_password(prompt)
-            .map_err(ChatPromptError::Store)
+        if let Some(error) = held(user) {
+            return Err(ChatPromptError::Store(error));
+        }
+        match entry(user)?.set_password(prompt) {
+            Ok(()) => {
+                REFUSALS.answered(PROMPT_SERVICE, user);
+                Ok(())
+            }
+            Err(error) => {
+                note(user, &error);
+                Err(ChatPromptError::Store(error))
+            }
+        }
     }
 
     pub(super) fn load(user: &str) -> Result<Option<String>, ChatPromptError> {
+        if let Some(error) = held(user) {
+            return Err(ChatPromptError::Load(error));
+        }
         match entry(user)?.get_password() {
-            Ok(prompt) => Ok(Some(prompt)),
+            Ok(prompt) => {
+                REFUSALS.answered(PROMPT_SERVICE, user);
+                Ok(Some(prompt))
+            }
             Err(keyring::Error::NoEntry) => Ok(None),
-            Err(error) => Err(ChatPromptError::Load(error)),
+            Err(error) => {
+                note(user, &error);
+                Err(ChatPromptError::Load(error))
+            }
         }
     }
 
     pub(super) fn delete(user: &str) -> Result<(), ChatPromptError> {
         match entry(user)?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Ok(()) | Err(keyring::Error::NoEntry) => {
+                REFUSALS.answered(PROMPT_SERVICE, user);
+                Ok(())
+            }
             Err(error) => Err(ChatPromptError::Delete(error)),
         }
     }
+
+    pub(super) fn refusals() -> Vec<RefusedEntry> {
+        REFUSALS.list()
+    }
+
+    pub(super) fn retry() {
+        REFUSALS.clear();
+    }
+}
+
+/// The protected prompts the keychain refused and the runtime holds back.
+#[cfg(feature = "keyring")]
+pub fn keychain_refusals() -> Vec<crate::model_router::credentials::RefusedEntry> {
+    keychain::refusals()
+}
+
+/// The protected prompts the keychain refused: a build without the keychain
+/// has none.
+#[cfg(not(feature = "keyring"))]
+pub fn keychain_refusals() -> Vec<crate::model_router::credentials::RefusedEntry> {
+    Vec::new()
+}
+
+/// The person asked to try again: the next protected prompt read asks the
+/// keychain once more.
+pub fn retry_keychain() {
+    #[cfg(feature = "keyring")]
+    keychain::retry();
 }
 
 /// A build without the keyring has only the file store, so a process that
@@ -182,6 +251,7 @@ mod keychain {
 #[doc(hidden)]
 pub fn use_mock_keyring_for_tests() {
     crate::state_root::note_keychain_mocked();
+    retry_keychain();
     type Secrets = Arc<Mutex<HashMap<(String, String), Vec<u8>>>>;
 
     struct SharedCredentialBuilder(Secrets);
@@ -259,12 +329,33 @@ pub fn use_refused_keyring_for_tests(
     refuse_entry: bool,
     writes: Arc<AtomicUsize>,
 ) {
+    use_refusing_keyring(code, message, refuse_entry, false, writes);
+}
+
+/// A keyring whose writes fail with the platform's own status error for
+/// `code`, as a declined macOS prompt raises it.
+#[cfg(feature = "keyring")]
+#[doc(hidden)]
+pub fn use_declining_keyring_for_tests(code: i32, writes: Arc<AtomicUsize>) {
+    use_refusing_keyring(code, "", false, true, writes);
+}
+
+#[cfg(feature = "keyring")]
+fn use_refusing_keyring(
+    code: i32,
+    message: &'static str,
+    refuse_entry: bool,
+    native: bool,
+    writes: Arc<AtomicUsize>,
+) {
     crate::state_root::note_keychain_mocked();
+    retry_keychain();
     #[derive(Clone, Debug)]
     struct RefusedKeyring {
         code: i32,
         message: &'static str,
         refuse_entry: bool,
+        native: bool,
         writes: Arc<AtomicUsize>,
     }
 
@@ -278,6 +369,10 @@ pub fn use_refused_keyring_for_tests(
 
     impl RefusedKeyring {
         fn error(&self) -> keyring::Error {
+            #[cfg(target_os = "macos")]
+            if self.native {
+                return crate::keychain_refusal::status_error(self.code);
+            }
             keyring::Error::PlatformFailure(Box::new(self.clone()))
         }
     }
@@ -324,6 +419,7 @@ pub fn use_refused_keyring_for_tests(
         code,
         message,
         refuse_entry,
+        native,
         writes,
     }));
 }

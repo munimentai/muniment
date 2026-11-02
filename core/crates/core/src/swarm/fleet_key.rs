@@ -5,16 +5,11 @@
 //! start, and any other failure waits out a backoff that doubles up to half
 //! an hour. `swarm.members` shows the refusal with a retry action.
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use serde_json::{json, Value};
 
-use crate::model_router::credentials::CredentialRefusal;
-
-/// The first wait after a store failure.
-const FIRST_BACKOFF: Duration = Duration::from_secs(30);
-/// The longest wait after store failures.
-const MAX_BACKOFF: Duration = Duration::from_secs(30 * 60);
+use crate::model_router::credentials::{refusal_backoff, CredentialRefusal};
 
 /// The store's last refusal of the fleet key.
 #[derive(Clone, Debug)]
@@ -61,7 +56,7 @@ impl KeyGate {
             .map_or(0, |held| held.failures)
             .saturating_add(1);
         let declined = matches!(refusal, CredentialRefusal::Declined(_));
-        let retry_at = (!declined).then(|| now + backoff(failures));
+        let retry_at = (!declined).then(|| now + refusal_backoff(failures));
         self.refusal = Some(Refusal {
             declined,
             message: refusal.message().to_owned(),
@@ -93,17 +88,13 @@ impl KeyGate {
     }
 }
 
-/// The wait after `failures` store failures in a row.
-fn backoff(failures: u32) -> Duration {
-    let doublings = failures.saturating_sub(1).min(16);
-    FIRST_BACKOFF
-        .saturating_mul(1 << doublings)
-        .min(MAX_BACKOFF)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model_router::credentials::{
+        FIRST_REFUSAL_BACKOFF as FIRST_BACKOFF, MAX_REFUSAL_BACKOFF as MAX_BACKOFF,
+    };
+    use std::time::Duration;
 
     fn declined() -> CredentialRefusal {
         CredentialRefusal::Declined("User canceled the operation.".into())

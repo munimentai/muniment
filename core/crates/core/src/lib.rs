@@ -105,6 +105,8 @@ pub mod write_plan;
 pub use chrono;
 #[cfg(feature = "keyring")]
 pub use keyring;
+#[cfg(feature = "keyring")]
+pub mod keychain_refusal;
 pub use serde;
 pub use serde_json;
 pub use sha2;
