@@ -54,12 +54,12 @@ fn rename_thread_command(
 
 #[cfg(any(unix, target_os = "windows"))]
 trait ThreadDeleteClient {
-    fn delete_thread(&self, thread_id: &str) -> Result<(), ClientError>;
+    fn delete_thread(&self, thread_id: &str) -> Result<serde_json::Value, ClientError>;
 }
 
 #[cfg(any(unix, target_os = "windows"))]
 impl ThreadDeleteClient for muniment_core::attach::DesktopClientHolder {
-    fn delete_thread(&self, thread_id: &str) -> Result<(), ClientError> {
+    fn delete_thread(&self, thread_id: &str) -> Result<serde_json::Value, ClientError> {
         muniment_core::attach::DesktopClientHolder::delete_thread(self, thread_id)
     }
 }
@@ -90,15 +90,15 @@ fn delete_thread_command<C: ThreadDeleteClient>(
     session_thread: &SessionThread,
     subject: Option<&str>,
     thread_id: &str,
-) -> Result<(), String> {
+) -> Result<serde_json::Value, String> {
     match session {
         ThreadDeleteSession::NoSupervisor => Err(auth::background_service_error()),
         ThreadDeleteSession::Connected(client) => {
-            client
+            let answer = client
                 .delete_thread(thread_id)
                 .map_err(auth::desktop_client_error)?;
             session_thread.fresh_if_current(thread_id, subject);
-            Ok(())
+            Ok(answer)
         }
         ThreadDeleteSession::Disconnected => {
             Err("Muniment cannot reach its background service.".into())
@@ -557,14 +557,15 @@ pub async fn chat_delete_thread(
     state: tauri::State<'_, ChatState>,
     attach_state: tauri::State<'_, AttachCompanionState>,
     thread_id: String,
-) -> Result<(), String> {
+) -> Result<serde_json::Value, String> {
     // A delete reaches the thread's machine and leaves the selected one. A
     // runtime that holds a synced copy sends the delete on to its owner.
+    // The answer names the thread's folder when it stays with the user's files.
     let session = attach_state.thread_session_within(&thread_id, HISTORY_CONNECT_WAIT);
     #[cfg(target_os = "macos")]
     require_runtime(&session)?;
     let subject = chat_subject(&app_handle, &auth_state)?;
-    delete_thread_command(
+    let answer = delete_thread_command(
         session.into(),
         &state.session_thread,
         subject.as_deref(),
@@ -573,7 +574,7 @@ pub async fn chat_delete_thread(
     // Other machines' copies stay out of the list until the owner's delete
     // reaches them.
     attach_state.remember_deleted_threads(vec![thread_id]);
-    Ok(())
+    Ok(answer)
 }
 
 #[cfg(any(unix, target_os = "windows"))]
@@ -1002,10 +1003,34 @@ mod tests {
 
     #[cfg(any(unix, target_os = "windows"))]
     impl ThreadDeleteClient for FakeThreadDeleteClient {
-        fn delete_thread(&self, thread_id: &str) -> Result<(), ClientError> {
+        fn delete_thread(&self, thread_id: &str) -> Result<serde_json::Value, ClientError> {
             self.calls.lock().unwrap().push(thread_id.to_owned());
-            self.result
+            self.result.map(|()| {
+                if thread_id == "kept-thread" {
+                    serde_json::json!({"folder_kept": "/home/me/sessions/Kept-1", "message": "kept"})
+                } else {
+                    serde_json::json!({})
+                }
+            })
         }
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    #[test]
+    fn a_connected_delete_answers_the_folder_that_stays() {
+        let tracker = SessionThread::default();
+        let client = FakeThreadDeleteClient {
+            calls: Arc::new(Mutex::new(Vec::new())),
+            result: Ok(()),
+        };
+        let answer = delete_thread_command(
+            ThreadDeleteSession::Connected(client),
+            &tracker,
+            Some("owner"),
+            "kept-thread",
+        )
+        .unwrap();
+        assert_eq!(answer["folder_kept"], "/home/me/sessions/Kept-1");
     }
 
     #[cfg(any(unix, target_os = "windows"))]
@@ -1195,6 +1220,7 @@ mod tests {
                 Some("owner"),
                 thread_id,
             )
+            .map(drop)
         }
 
         fn invoke_summaries(

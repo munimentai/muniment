@@ -74,6 +74,9 @@ export function createChatController({
   onThreadSummaries = () => {},
   // The threads the local runtime names as deleted, from each first page.
   onDeletedThreads = () => {},
+  // A deleted thread whose folder stays because it holds the user's files:
+  // the thread's summary and core's answer, which names the folder.
+  onThreadFolderKept = () => {},
   onMoreThreads = () => {},
   onThreadListError = () => {},
   readProject = () => null,
@@ -903,9 +906,11 @@ export function createChatController({
     threadRefreshSequence += 1
     switchingThread = true
     onThreadSwitch(true)
+    const summary = readThreadSummaries().find((item) => item.threadId === threadId)
     try {
-      await invoke('chat_delete_thread', { threadId })
+      const answer = await invoke('chat_delete_thread', { threadId })
       if (destroyed) return false
+      if (answer?.folder_kept) onThreadFolderKept(summary ?? { threadId }, answer)
       onThreadSummaries(readThreadSummaries().filter((summary) => summary.threadId !== threadId))
       if (deletingCurrent) {
         onHistoryStart()

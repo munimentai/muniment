@@ -730,13 +730,20 @@
   // path shows nowhere else, so the notice stays until the user dismisses it.
   const revealLabel = /Mac/.test(navigator.platform) ? 'Reveal in Finder' : /Win/.test(navigator.platform) ? 'Reveal in File Explorer' : 'Reveal in File Manager'
   let keptFolders = 0
-  function showKeptFolder(agent, answer) {
+  // A deleted thread's folder that holds the user's files stays the same
+  // way, with the same notice under its own name.
+  const KEPT_FOLDER = {
+    agent: { id: 'agent-folder-kept', text: "The agent's folder holds your files, so it stays.", label: 'Agent folder kept', testid: 'agent-folder-kept-notice', dismissLabel: 'Dismiss agent folder notice' },
+    thread: { id: 'thread-folder-kept', text: "The thread's folder holds your files, so it stays.", label: 'Thread folder kept', testid: 'thread-folder-kept-notice', dismissLabel: 'Dismiss thread folder notice' },
+  }
+  function showKeptFolder(owner, answer, kind = 'agent') {
     const folder = answer?.folder_kept
     if (!folder) return
-    const local = (agent?.runtimeId ?? LOCAL_RUNTIME_ID) === LOCAL_RUNTIME_ID
+    const words = KEPT_FOLDER[kind]
+    const local = (owner?.runtimeId ?? LOCAL_RUNTIME_ID) === LOCAL_RUNTIME_ID
     composerNotices.show({
-      id: 'agent-folder-kept', cause: ++keptFolders, text: `${answer.message || "The agent's folder holds your files, so it stays."} ${folder}`,
-      label: 'Agent folder kept', testid: 'agent-folder-kept-notice', dismissLabel: 'Dismiss agent folder notice', persistent: true,
+      id: words.id, cause: ++keptFolders, text: `${answer.message || words.text} ${folder}`,
+      label: words.label, testid: words.testid, dismissLabel: words.dismissLabel, persistent: true,
       action: local ? { label: revealLabel, run: () => { tauri.invoke('workspace_reveal', { path: folder }).catch(error => { submitError = String(error) }) } } : undefined,
     })
   }
@@ -1907,6 +1914,7 @@
     onHistoryError: (next, action) => { historyError = next; historyErrorAction = action; if (next) { threadShown = true; threadsListed = true } },
     onThreadSummaries: (next) => { threadSummaries = dedupeThreads(next, swarm); threadsListed = true },
     onDeletedThreads: rememberDeletedThreads,
+    onThreadFolderKept: (summary, answer) => showKeptFolder(summary, answer, 'thread'),
     onMoreThreads: (next) => { moreThreads = next },
     readProject: () => selectedProject,
     readAgent: () => selectedAgent,

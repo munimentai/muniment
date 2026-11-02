@@ -769,6 +769,41 @@ describe('chat controller', () => {
     expect(context.messages()).toBe(previous)
   })
 
+  it('hands a deleted thread\'s kept folder answer to the app with the thread it belonged to', async () => {
+    const answer = { folder_kept: '/home/me/sessions/Report-1', message: "The thread's folder holds your files, so it stays." }
+    const invoke = vi.fn(async (command) => (command === 'chat_delete_thread' ? answer : undefined))
+    const kept = vi.fn()
+    const context = setup(vi.fn().mockResolvedValue(undefined))
+    let summaries = [{ threadId: 'thread-0' }, { threadId: 'thread-1' }, { threadId: 'thread-2', runtimeId: 'local' }]
+    const controller = createChatController({
+      invoke,
+      listen: vi.fn(),
+      readMessages: context.messages,
+      readActive: context.active,
+      readAnnounced: () => null,
+      readDraft: () => '',
+      readFiles: () => [],
+      readThreadId: () => 'thread-0',
+      readThreadSummaries: () => summaries,
+      onMessages: context.setMessages,
+      onActive: vi.fn(),
+      onAnnounce: vi.fn(),
+      onDraft: vi.fn(),
+      onFiles: vi.fn(),
+      onSubmitError: vi.fn(),
+      onCancelError: vi.fn(),
+      onQueueError: vi.fn(),
+      onHistoryError: vi.fn(),
+      onThreadSummaries: (next) => { summaries = next },
+      onThreadFolderKept: kept,
+    })
+    await expect(controller.deleteThread('thread-2')).resolves.toBe(true)
+    expect(kept).toHaveBeenCalledWith({ threadId: 'thread-2', runtimeId: 'local' }, answer)
+    invoke.mockResolvedValue({})
+    await expect(controller.deleteThread('thread-1')).resolves.toBe(true)
+    expect(kept).toHaveBeenCalledTimes(1)
+  })
+
   it('treats the newest thread as open when no selection is recorded and lands on a fresh thread', async () => {
     const shown = [{ role: 'user', text: 'The newest transcript' }]
     let summaries = [{ threadId: 'thread-1' }, { threadId: 'thread-2' }]

@@ -3587,6 +3587,39 @@ describe('thread name', () => {
     expect(screen.getByPlaceholderText('Ask anything')).toHaveFocus()
   })
 
+  it('names a deleted thread\'s kept folder in a notice that stays, reveals it and leaves on dismiss', async () => {
+    threadSummaryResult = [{ threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' }]
+    const folder = '/Users/me/Documents/muniment/sessions/Lease_renewal-12345678'
+    invoke.mockImplementation(async (command) => {
+      if (command === 'project_list') return { projects: {}, threads: {} }
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_thread_open') return [{ runId: 'run-1', phase: 'complete', prompt: 'Question', text: 'Answer', toolActivity: [] }]
+      // Core keeps the thread's folder that holds the user's files and says so.
+      if (command === 'chat_delete_thread') return { folder_kept: folder, message: "The thread's folder holds your files, so it stays." }
+      if (command === 'workspace_reveal') return undefined
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'chat_select_thread') return undefined
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await screen.findByText('Answer')
+    await sidebarRows()
+    await openDeleteMenu('Lease renewal')
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      await fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+      const notice = await screen.findByTestId('thread-folder-kept-notice')
+      expect(notice).toHaveTextContent(`The thread's folder holds your files, so it stays. ${folder}`)
+      await vi.advanceTimersByTimeAsync(30000)
+      expect(screen.getByTestId('thread-folder-kept-notice')).toBe(notice)
+      await fireEvent.click(within(notice).getByRole('button', { name: /^Reveal in / }))
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith('workspace_reveal', { path: folder }))
+      await fireEvent.click(within(notice).getByRole('button', { name: 'Dismiss thread folder notice' }))
+      await waitFor(() => expect(screen.queryByTestId('thread-folder-kept-notice')).not.toBeInTheDocument())
+    } finally { vi.useRealTimers() }
+  })
+
   it('opens the newest remaining thread after the open thread is deleted from its menu, and Back to threads keeps it', async () => {
     threadSummaryResult = [
       { threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' },
