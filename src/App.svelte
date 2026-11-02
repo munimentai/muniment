@@ -5060,7 +5060,9 @@
   .thread-row-title { flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .thread-menu { position: fixed; z-index: 4; min-width: 88px; width: max-content; padding: 4px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); box-shadow: var(--shadow-overlay); }
   .title-thread-actions { flex: none; }
-  .title-thread-actions[aria-disabled="true"] { position: relative; opacity: .45; cursor: default; }
+  /* The icon dims, not the button: opacity on the button would make it a stacking context, and the thread panel would paint over its tooltip. */
+  .title-thread-actions[aria-disabled="true"] { position: relative; cursor: default; }
+  .title-thread-actions[aria-disabled="true"] > :global(svg) { opacity: .45; }
   .title-thread-actions[data-tooltip]::after { content: attr(data-tooltip); position: absolute; left: 0; top: calc(100% + 6px); z-index: 6; padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font-size: var(--text-12); white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity 80ms ease; }
   .title-thread-actions[data-tooltip]:hover::after, .title-thread-actions[data-tooltip]:focus-visible::after { opacity: 1; transition-delay: 350ms; }
   .thread-menu button { display: block; width: 100%; min-width: 24px; min-height: 24px; padding: 3px 8px; border-color: transparent; background: transparent; color: var(--ink); font-size: var(--text-13); text-align: left; }

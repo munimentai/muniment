@@ -258,3 +258,37 @@ it('ends the Agents and Artifacts labels in an ellipsis when the row is narrow',
     expect(getComputedStyle(label).maskImage).toBe('none')
   }
 })
+
+// The disabled title-bar actions control names why it waits, on hover and on
+// focus, and its reason draws over the thread panel under it.
+it('draws the reason on the disabled title thread actions over the thread panel, on hover and on focus', async () => {
+  await mountWindow(false)
+  const core = window.__TAURI__.core.invoke
+  window.__TAURI__.core.invoke = async (command, payload) => command === 'chat_new_thread' ? 'fresh-1' : command === 'chat_current_thread' ? 'fresh-1' : core(command, payload)
+  await userEvent.click(document.querySelector('button[aria-label="New thread"]'))
+  await expect.poll(() => document.querySelector('.title-thread-actions[aria-disabled="true"]')).toBeTruthy()
+  const control = document.querySelector('.title-thread-actions')
+  expect(control.dataset.tooltip).toBe('Send a message to use thread actions.')
+  const tip = () => getComputedStyle(control, '::after')
+  // A hit test finds what paints on top at the reason's place, so the probe
+  // lets the reason take the pointer.
+  const probe = document.createElement('style')
+  probe.textContent = '.title-thread-actions::after { pointer-events: auto !important; }'
+  document.head.append(probe)
+  try {
+    await userEvent.hover(control)
+    await expect.poll(() => tip().opacity).toBe('1')
+    expect(getComputedStyle(control).opacity).toBe('1')
+    const box = rect(control)
+    const at = document.elementFromPoint(box.left + 12, box.bottom + 6 + parseFloat(tip().height) / 2)
+    expect(at).toBe(control)
+    await userEvent.unhover(control)
+    await expect.poll(() => tip().opacity).toBe('0')
+    control.focus({ focusVisible: true })
+    await userEvent.keyboard('{Shift>}{Tab}{/Shift}{Tab}')
+    await expect.poll(() => document.activeElement).toBe(control)
+    await expect.poll(() => tip().opacity).toBe('1')
+  } finally {
+    probe.remove()
+  }
+})
