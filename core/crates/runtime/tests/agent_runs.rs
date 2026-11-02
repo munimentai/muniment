@@ -1454,6 +1454,7 @@ fn creation_chat(profile: &Path, thread_id: &str, agent: &str) {
             output: "A saved agent".into(),
             result_id: Some(agent.to_owned()),
             turns: Vec::new(),
+            title: None,
         },
     )
     .unwrap();
@@ -1513,6 +1514,7 @@ fn the_runtime_start_deletes_the_creation_chats_deleted_agents_left() {
             output: "A saved agent".into(),
             result_id: None,
             turns: Vec::new(),
+            title: None,
         },
     )
     .unwrap();
