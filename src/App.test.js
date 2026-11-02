@@ -8422,6 +8422,22 @@ it('does not offer another-model retry in a completed reply', async () => {
     expect(await screen.findByText('Finished reply')).toBeInTheDocument()
   })
 
+  it('selects the restored retry text so the next typed message replaces it and never joins it', async () => {
+    signedIn([{ runId: 'run-failed', phase: 'failed', text: '', prompt: 'Live27 key test four', failureReason: 'No reply arrived within 30 seconds.' }], { runId: 'retry-run', attachments: [] })
+    const error = await screen.findByText('No reply arrived within 30 seconds.')
+    await fireEvent.click(within(error).getByRole('button', { name: 'Try again' }))
+    const composer = screen.getByPlaceholderText('Ask anything')
+    await waitFor(() => expect(composer).toHaveFocus())
+    expect(composer).toHaveValue('Live27 key test four')
+    expect([composer.selectionStart, composer.selectionEnd]).toEqual([0, 'Live27 key test four'.length])
+    // Typing applies to the selection, as a browser does.
+    composer.setRangeText('Live27 key test five', composer.selectionStart, composer.selectionEnd, 'end')
+    await fireEvent.input(composer)
+    expect(composer).toHaveValue('Live27 key test five')
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    expect(invoke).toHaveBeenCalledWith('chat_submit', { prompt: 'Live27 key test five', files: [] })
+  })
+
   it('keeps retry disabled when the failed run has no saved prompt', async () => {
     signedIn([{ runId: 'missing-prompt', phase: 'failed', text: '', failureReason: 'The provider refused access.' }])
     const error = await screen.findByText('The provider refused access.')

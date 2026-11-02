@@ -1095,7 +1095,8 @@
     const ranTools = !!run.toolActivity?.length || (run.receipt?.tools ?? []).some((tool) => Number(tool?.calls) > 0)
     retryReview = { threadId: currentThreadId, chooseModel, ranTools, previousProvider: chipModel?.provider, previousModel: chipModel?.model }
     if (chooseModel) openComposerPanel('model')
-    void tick().then(() => composer?.focus())
+    // The restored text is selected, so typing replaces it and never joins it.
+    void tick().then(() => { composer?.focus(); composer?.select() })
   }
 
   $effect(() => {
