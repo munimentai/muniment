@@ -337,7 +337,6 @@
   .accounts { container-type: inline-size; display: grid; gap: 8px; min-width: 0; }
   .support { margin: 0; color: var(--muted); font-size: var(--text-13); overflow-wrap: anywhere; }
   .tag, .record { color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .error { overflow-wrap: anywhere; }
   .card-label { flex: 1 1 160px; min-width: 0; font-size: var(--text-13); font-weight: 600; }
   .card-label { display: flex; align-items: center; gap: 4px; }
   .name-edit { display: flex; flex: 1; flex-wrap: wrap; gap: 4px; min-width: 0; }
@@ -363,8 +362,7 @@
   .add { display: grid; gap: 6px; }
   .actions { display: flex; gap: 6px; }
   label { color: var(--muted); font: var(--text-12) var(--font-mono); }
-  input[type="password"], input[type="url"], input[type="text"], input[type="number"], textarea { box-sizing: border-box; padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--paper); color: var(--ink); font: inherit; font-size: var(--text-13); }
-  input[type="password"], input[type="url"], input[type="text"], textarea { width: min(420px, 100%); }
-  input:focus, textarea:focus { border-color: var(--muted); outline: 0; }
-  textarea { resize: vertical; font-family: var(--font-mono); font-size: var(--text-12); }
+  input[type="password"], input[type="url"], input[type="text"] { box-sizing: border-box; padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--paper); color: var(--ink); font: inherit; font-size: var(--text-13); }
+  input[type="password"], input[type="url"], input[type="text"] { width: min(420px, 100%); }
+  input:focus { border-color: var(--muted); outline: 0; }
 </style>

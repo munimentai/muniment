@@ -233,5 +233,4 @@
   /* Settings takes the thread and rail columns under the title band. The sidebar beside it lists the sections. */
   .settings-layout { grid-row: 2; grid-column: 2 / -1; position: relative; z-index: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
   .settings-path { margin: 2px 0 0; overflow-wrap: anywhere; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .support { margin: 0; color: var(--muted); font-size: var(--text-13); }
 </style>

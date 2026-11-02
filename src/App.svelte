@@ -4809,7 +4809,7 @@
   .titlebar .quiet.agent-chat-title { flex: 0 1 auto; display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; padding-left: 6px; background: color-mix(in srgb, var(--agent-color) 20%, transparent); }
   .titlebar .quiet.agent-chat-title:hover:not(:disabled) { background: color-mix(in srgb, var(--agent-color) 32%, transparent); }
   .agent-chat-title span { overflow: hidden; white-space: nowrap; }
-  .agent-chat-title span[data-overflow="true"] { mask-image: linear-gradient(to right, currentColor calc(100% - 28px), transparent); }
+  .agent-chat-title span:global([data-overflow="true"]) { mask-image: linear-gradient(to right, currentColor calc(100% - 28px), transparent); }
   .workspace.agent-profile-open { grid-template-columns: minmax(0, var(--sidebar-column)) minmax(320px, 1fr) var(--agent-panel-width); grid-template-areas: "title title title" "side thread rail"; }
   .workspace.tools-open { grid-template-columns:minmax(0,var(--sidebar-column)) minmax(320px,1fr) var(--workspace-panel-width); grid-template-areas:"title title title" "side thread rail"; }
   @media (max-width:950px) { .workspace.tools-open { grid-template-columns:0 minmax(280px,1fr) var(--workspace-panel-width); } .workspace.tools-open .sidebar { display:none; } }
@@ -4819,11 +4819,6 @@
   .workspace.record-maximized { grid-template-columns: minmax(0, var(--sidebar-column)) minmax(0, 1fr); grid-template-areas: "title title" "side rail"; }
   .workspace.record-maximized .thread-panel { display: none; }
   .workspace.agents-open .thread-panel { display: none; }
-  .agents-side-row { position: relative; display: flex; align-items: center; }
-  .agents-side-row .side-action { flex: 1; }
-  .agent-add { position: absolute; right: 8px; opacity: 0; padding: 4px; line-height: 0; }
-  .agents-side-row:hover .agent-add, .agents-side-row:focus-within .agent-add { opacity: 1; }
-  @media (hover: none) { .agent-add { opacity: 1; } }
   .drop-affordance { position: absolute; z-index: 4; inset: 0; display: grid; place-content: center; gap: 5px; background: color-mix(in srgb, var(--paper) 92%, transparent); border: 1px dashed var(--muted); border-radius: var(--radius-panel); color: var(--ink); text-align: center; pointer-events: none; }
   .drop-affordance span { color: var(--muted); font: var(--text-12) var(--font-mono); }
   /* The row ends where its 24px controls end, so the paper under them is the rest of the band. */
@@ -4867,9 +4862,6 @@
   .title-spacer { flex: 1; align-self: stretch; min-width: 24px; }
   .sidebar { grid-area: side; min-width: 0; display: flex; flex-direction: column; padding: 0; }
   .side-scroll { flex: 1; min-height: 0; padding: 4px 6px 8px; overflow-y: auto; }
-  .project-heading { display: flex; align-items: center; justify-content: space-between; margin: 8px 8px 2px; }
-  .project-heading h3 { margin: 0; color: var(--muted); font: var(--weight-semibold) var(--text-12) var(--font-human); }
-  .project-heading button { padding: 2px; }
   .side-top { padding: 8px 6px 0; }
   .side-top kbd { flex: none; color: var(--muted); font: var(--text-12) var(--font-mono); }
   .sidebar-head { display: flex; align-items: center; gap: 4px; container-type: inline-size; }
@@ -4897,10 +4889,9 @@
   .message-actions .rewind-turn::before { content: ''; width: 14px; height: 14px; background: currentColor; -webkit-mask: var(--rewind-icon) center / 14px no-repeat; mask: var(--rewind-icon) center / 14px no-repeat; }
   .message-actions .rewind-turn { --rewind-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 14 4 9l5-5'/%3E%3Cpath d='M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11'/%3E%3C/svg%3E"); min-width: 24px; min-height: 24px; }
   .side-empty { padding: 4px 8px; color: var(--muted); font-size: var(--text-12); }
-  .side-bottom { flex: none; padding: 0 6px; }
   .side-action :global(.lucide) { flex: 0 0 18px; width: 18px; height: 18px; }
   .side-action:hover { background: var(--faint); }
-  .side-action[aria-pressed="true"], .side-action[aria-current="true"] { background: var(--selected); color: var(--on-selected); }
+  .side-action[aria-current="true"] { background: var(--selected); color: var(--on-selected); }
   /* The open page's row keeps its fill under the pointer, as the open thread's row does. */
   .side-action[aria-current="true"]:hover:not(:disabled) { background: var(--selected); }
   /* An agent's row carries its color: a wash on hover and while open, with an edge in that color. */
@@ -4946,7 +4937,7 @@
   .thread-row-title[data-unread] { font-weight: var(--weight-semibold); }
   .thread-row-meta { display: flex; align-items: center; gap: 4px; min-width: 0; color: var(--muted); font: var(--text-12) var(--font-human); line-height: 16px; white-space: nowrap; }
   .thread-row-meta :global(.lucide) { flex: none; color: var(--muted); }
-  .thread-row-meta .row-project, .thread-row-meta .row-agent { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .thread-row-meta .row-agent { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   /* The owner chip keeps its machine name whole while the project name clips first. */
   .thread-row-meta :global(.owner-chip) { flex: none; max-width: 60%; }
   .thread-row time { flex: none; color: var(--muted); font: var(--text-12) var(--font-human); white-space: nowrap; }
@@ -4969,7 +4960,6 @@
   /* A narrow sidebar shortens the first control, never its start. */
   /* Sidebar labels overrun the way thread titles do: one line that ends in an ellipsis. */
   .side-action span { flex: 1; min-width: 0; white-space: nowrap; text-overflow: ellipsis; }
-  .side-action .side-count { flex: none; min-width: 16px; padding: 0 4px; border: 1px solid var(--border); border-radius: var(--radius-chip); color: var(--ink); font: var(--text-12) var(--font-mono); line-height: 16px; text-align: center; }
   .settings-search { display: flex; align-items: center; gap: 6px; margin: 2px 6px 4px; padding: 0 8px; min-height: 28px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--muted); }
   .settings-search:focus-within { border-color: var(--muted); }
   .settings-search input { flex: 1; min-width: 0; padding: 4px 0; border: 0; outline: none; background: transparent; color: var(--ink); font: var(--text-13) var(--font-human); }
@@ -5154,10 +5144,10 @@
   .composer-meta > span { flex-basis: max-content; }
   .composer-meta > #composer-hint { min-width: 0; }
   /* composer-priority.js collapses the lower-priority controls to their icons before the model name clips. */
-  .composer-meta[data-collapse] :global(.context-trigger > span) { display: none; }
-  .composer-meta[data-collapse="2"] :global([data-menu="mode"] .label), .composer-meta[data-collapse="2"] :global([data-menu="mode"] .chevrons) { display: none; }
-  .composer-meta[data-collapse="2"] :global([data-menu="mode"]:hover::after), .composer-meta[data-collapse="2"] :global([data-menu="mode"]:focus-visible::after) { display: block; }
-  .composer-meta[data-collapse="2"] :global([data-menu="mode"][data-open="true"]::after) { display: none; }
+  .composer-meta:global([data-collapse]) :global(.context-trigger > span) { display: none; }
+  .composer-meta:global([data-collapse="2"]) :global([data-menu="mode"] .label), .composer-meta:global([data-collapse="2"]) :global([data-menu="mode"] .chevrons) { display: none; }
+  .composer-meta:global([data-collapse="2"]) :global([data-menu="mode"]:hover::after), .composer-meta:global([data-collapse="2"]) :global([data-menu="mode"]:focus-visible::after) { display: block; }
+  .composer-meta:global([data-collapse="2"]) :global([data-menu="mode"][data-open="true"]::after) { display: none; }
   .composer-actions { flex: none; display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; max-width: 100%; margin-left: auto; }
   .composer-actions button { flex-shrink: 0; white-space: nowrap; }
   .composer-icon { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; min-height: 24px; padding: 4px; line-height: 0; color: var(--muted); }

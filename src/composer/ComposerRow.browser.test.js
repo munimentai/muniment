@@ -8,6 +8,7 @@ import ChatComposer from './ChatComposer.svelte'
 import ComposerMenuButton from './ComposerMenuButton.svelte'
 import ContextMeter from '../lib/ContextMeter.svelte'
 import { fitComposerMeta } from './composer-priority.js'
+import { compile } from 'svelte/compiler'
 
 let components = []
 afterEach(() => {
@@ -16,11 +17,13 @@ afterEach(() => {
   document.body.replaceChildren()
 })
 
-// The composer band's own rules, as App.svelte writes them, applied to the
-// same class names outside the component's scope.
-const bandRules = [...appSource.match(/<style>([\s\S]*)<\/style>/)[1].replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+// The composer band's own rules, as the build compiles App.svelte, applied to
+// the same class names outside the component's scope. The compiler drops a
+// rule no markup in App.svelte can match, so a dropped rule fails here too.
+const appCss = compile(appSource, { filename: 'src/App.svelte', css: 'external', cssHash: () => 'app-scope' }).css.code
+const bandRules = [...appCss.replace(/\/\*[\s\S]*?\*\//g, '').replaceAll(/:where\(\.app-scope\)|\.app-scope/g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)]
   .filter(([, selector]) => /^\s*\.composer-(row|meta|actions|icon|action)\b/.test(selector) && !selector.includes('@'))
-  .map(([, selector, body]) => `${selector.replaceAll(/:global\(([^)]*)\)/g, '$1').trim()} {${body}}`)
+  .map(([, selector, body]) => `${selector.trim()} {${body}}`)
   .join('\n')
 
 const glyph = (name) => createRawSnippet(() => ({ render: () => `<svg class="lucide" data-icon="${name}" width="14" height="14"></svg>` }))

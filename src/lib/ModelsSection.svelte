@@ -668,27 +668,20 @@
   .icon-action { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; min-height: 28px; padding: 4px; }
   .icon-action.critical { color: var(--danger); }
   .sign-in-again { min-height: 28px; padding: 4px 10px; font-size: var(--text-12); }
-  .models-head, .connect-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .connect-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   .connect-head { justify-content: flex-start; }
-  .connect-head h4, .models-head h4 { margin: 0; }
-  .models-label { color: var(--ink); font-size: var(--text-17); font-weight: 600; }
+  .connect-head h4 { margin: 0; }
   .accounts-section { display: grid; gap: var(--page-gap); }
   .connect-head h4 { font-size: var(--text-15); font-weight: 600; }
   .support { margin: 0; color: var(--muted); font-size: var(--text-13); }
   .empty { padding: 12px 0; }
-  .connect { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 4px 10px; white-space: nowrap; }
   .back { min-width: 28px; min-height: 28px; padding: 5px; line-height: 0; }
-  .search { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius-control); color: var(--muted); }
-  .search:focus-within { border-color: var(--muted); }
-  .search input { flex: 1; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; font-size: var(--text-13); }
-  .tag, .record { color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .tag { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .model-count { flex: none; white-space: nowrap; }
   .here { flex: none; white-space: nowrap; }
   .model-count[data-tone="caution"] { color: var(--warning); }
-  .record { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .model-list, .provider-list { display: grid; margin: 0; padding: 0; list-style: none; }
+  .provider-list { display: grid; margin: 0; padding: 0; list-style: none; }
   .provider-list li + li { border-top: 1px solid var(--border); }
-  .use { min-height: 24px; padding: 2px 8px; font-size: var(--text-12); }
   /* The show switch: a hairline track and a muted knob when the model is hidden, a signal track and knob at the right when it shows. §1.2 lists the switch. */
   .provider-row { display: flex; width: calc(100% + 16px); align-items: center; gap: 10px; min-height: 44px; margin: 4px -8px; padding: 6px 8px; text-align: left; font-size: var(--text-13); }
   .provider-row .tag { margin-left: auto; text-align: right; }
