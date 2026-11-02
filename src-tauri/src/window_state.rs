@@ -292,6 +292,12 @@ mod tests {
     }
 
     #[test]
+    fn the_first_click_on_an_inactive_main_window_reaches_the_page() {
+        // Stop and Send act on the click that also activates the window.
+        assert!(config().accept_first_mouse);
+    }
+
+    #[test]
     fn clamps_a_saved_window_below_the_configured_minimum() {
         let config = config();
         assert_eq!(config.label, "main");
