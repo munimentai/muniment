@@ -966,9 +966,16 @@ impl RuntimeAttachBoundaries {
             self.pi_artifact,
         )
         .map_err(run_service_error)?;
+        // An agent run's record ends with its reply, not at the queue's
+        // next pass, so its card stops showing the run at once.
+        let kick = self
+            .swarm
+            .clone()
+            .map(|swarm| Arc::new(move || swarm.kick_runs()) as Arc<dyn Fn() + Send + Sync>);
         let launch = launch
             .with_permission_mode(permission_mode)
-            .map_err(RunStartError::Persistence)?;
+            .map_err(RunStartError::Persistence)?
+            .with_agent_run_ended(kick);
         let contexts = self.contexts.clone();
         let context_thread = accepted.thread_id.clone();
         std::thread::spawn(move || {

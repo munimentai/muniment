@@ -28,6 +28,8 @@ const ARTIFACT: PiArtifactDescriptor = PiArtifactDescriptor {
 struct Boundary(PathBuf);
 /// The titles the coordinator named a thread folder with, in order.
 static NAMED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+/// What the coordinator told the host and what the memory pass did, in order.
+static STEPS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 impl ChatEventSink for Boundary {
     fn provenance(&self) -> (&str, &str) {
         ("test", "1")
@@ -51,6 +53,10 @@ impl PiLaunchBoundaries for Boundary {
     }
     fn name_thread_folder(&self, title: &str) {
         NAMED.lock().unwrap().push(title.to_owned());
+        STEPS.lock().unwrap().push("named".into());
+    }
+    fn run_ended(&self, run_id: &str) {
+        STEPS.lock().unwrap().push(format!("ended {run_id}"));
     }
 }
 
@@ -167,6 +173,9 @@ fn only_a_completed_run_without_a_saved_fact_learns_after_it_ends() {
         ApplicationMemoryRuntime::new(config.clone(), root.join("memory-cache"))
             .with_extraction_model(Arc::new(move |_, user| {
                 seen.lock().unwrap().push(user.to_owned());
+                // A slow memory pass: the run's end never waits for it.
+                std::thread::sleep(Duration::from_millis(400));
+                STEPS.lock().unwrap().push("extracted".into());
                 Ok(muniment_core::memory_extract::Answer {
                     text: serde_json::json!({"actions": [
                         {"op": "add", "title": "Work", "content": "Works night shifts as a pediatric nurse."}
@@ -185,9 +194,18 @@ fn only_a_completed_run_without_a_saved_fact_learns_after_it_ends() {
     // A failed reply and a cancelled reply learn nothing.
     for (reason, terminal) in [("error", "run.failed"), ("aborted", "run.cancelled")] {
         std::env::set_var("PI_RESUME_STUB_STOP_REASON", reason);
-        let (_, _, last) = reply(&root, &storage, &runtime, &memory);
+        STEPS.lock().unwrap().clear();
+        let (run, _, last) = reply(&root, &storage, &runtime, &memory);
         std::env::remove_var("PI_RESUME_STUB_STOP_REASON");
         assert_eq!(last, terminal);
+        // A reply that fails or stops tells the host once that it ended.
+        let told = STEPS.lock().unwrap().clone();
+        assert_eq!(
+            told.iter().filter(|step| step.starts_with("ended")).count(),
+            1,
+            "{told:?}"
+        );
+        assert!(told.contains(&format!("ended {run}")), "{told:?}");
         assert!(memory_files::facts_in(&home).unwrap().is_empty());
     }
     assert!(prompts.lock().unwrap().is_empty());
@@ -205,8 +223,15 @@ fn only_a_completed_run_without_a_saved_fact_learns_after_it_ends() {
 
     // A completed reply writes what the model proposed as a conversation fact.
     NAMED.lock().unwrap().clear();
+    STEPS.lock().unwrap().clear();
     let (run, thread, last) = reply(&root, &storage, &runtime, &memory);
     assert_eq!(last, "run.completed");
+    // The host learns the reply ended before the folder rename and before
+    // the slow memory pass ends, and only once.
+    assert_eq!(
+        *STEPS.lock().unwrap(),
+        vec![format!("ended {run}"), "named".into(), "extracted".into()]
+    );
     // The ended run names its thread's folder with the thread's title.
     let title = storage
         .lock()

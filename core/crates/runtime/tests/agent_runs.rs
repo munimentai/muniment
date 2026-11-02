@@ -1387,3 +1387,35 @@ fn run_now_starts_the_run_without_waiting_for_the_next_schedule_pass() {
     }
     assert_ne!(setup.run(&run_id).status, RunStatus::Queued);
 }
+
+#[test]
+fn a_run_now_reply_ends_its_record_without_waiting_for_the_next_schedule_pass() {
+    let _environment = ENVIRONMENT
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let setup = Setup::new("agent-run-ended-kick", true, RuntimeHost::default());
+    setup.state.use_pi_artifact(setup.artifact);
+    setup.state.bind_swarm();
+    let events = agent_runs::subscribe(setup.profile());
+    let agent = setup.agent("Prompt");
+    // No schedule pass runs in this test, so only the end of the reply can
+    // end the run's record.
+    let answer = permission_operation(&setup, "agent.run_now", json!({"id": agent.id})).unwrap();
+    let run_id = answer["run"]["id"].as_str().unwrap().to_owned();
+    assert!(
+        wait(|| setup.run(&run_id).status == RunStatus::Completed),
+        "{:?}",
+        setup.run(&run_id)
+    );
+    let run = setup.run(&run_id);
+    assert!(run.lease_owner.is_none());
+    assert!(run.result_summary.is_some());
+    assert_eq!(
+        agents::state(setup.profile()).unwrap().runs[&agent.id].status,
+        "completed"
+    );
+    let completed = events
+        .try_iter()
+        .any(|event| event["id"] == run_id.as_str() && event["status"] == "completed");
+    assert!(completed, "the card hears the run ended");
+}

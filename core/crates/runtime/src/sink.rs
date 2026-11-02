@@ -454,6 +454,8 @@ pub struct RuntimeChatEventSink {
     /// The run this sink serves, when known. The agent run queue names the
     /// trigger of its runs by this id.
     run_id: Option<String>,
+    /// Called when an agent run this sink serves stops replying.
+    agent_run_ended: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl RuntimeChatEventSink {
@@ -507,7 +509,16 @@ impl RuntimeChatEventSink {
             earlier_models: Vec::new(),
             project_context: String::new(),
             run_id: None,
+            agent_run_ended: None,
         }
+    }
+
+    /// Calls `ended` when the run stops replying and the agent run queue
+    /// holds it as unfinished, so its record ends without waiting for the
+    /// queue's next pass.
+    pub fn with_agent_run_ended(mut self, ended: Option<Arc<dyn Fn() + Send + Sync>>) -> Self {
+        self.agent_run_ended = ended;
+        self
     }
 
     /// The run this sink serves.
@@ -626,6 +637,24 @@ impl PiLaunchBoundaries for RuntimeChatEventSink {
             instructions.push_str(&format!("\nCreation thread: {}\nGoal: {}\nSpecified output: {}\nBuild it from the user's message now. Use creation-plan to retain user-approved refinements. Continue in this dedicated thread.",plan.kind,plan.goal,plan.output));
         }
         Ok((!instructions.is_empty()).then_some(instructions))
+    }
+
+    fn run_ended(&self, run_id: &str) {
+        let Some(ended) = &self.agent_run_ended else {
+            return;
+        };
+        let sessions = self.profile.pi_session_root();
+        let Some(profile) = sessions.parent() else {
+            return;
+        };
+        let queued = muniment_core::agent_runs::RunStore::read(profile)
+            .ok()
+            .flatten()
+            .and_then(|store| store.get(run_id).ok().flatten())
+            .is_some_and(|run| run.status.is_active());
+        if queued {
+            ended();
+        }
     }
 
     fn name_thread_folder(&self, title: &str) {

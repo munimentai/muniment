@@ -73,6 +73,8 @@ pub struct PromptLaunch {
     prepared: (u64, muniment_core::journal::reducer::ChatProjector),
     /// `Some` makes the run a manual compaction with these instructions.
     compaction: Option<Option<String>>,
+    /// Called when the run stops replying while the agent run queue holds it.
+    agent_run_ended: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -420,12 +422,20 @@ fn accept_run(
         pi_artifact,
         prepared,
         compaction,
+        agent_run_ended: None,
     };
     Ok((acceptance, launch))
 }
 
 impl PromptLaunch {
     /// Runs the prompt at a thinking level. None runs the model at its default.
+    /// Calls `ended` when the run stops replying while the agent run queue
+    /// holds it, before the post-run work.
+    pub fn with_agent_run_ended(mut self, ended: Option<Arc<dyn Fn() + Send + Sync>>) -> Self {
+        self.agent_run_ended = ended;
+        self
+    }
+
     pub fn with_thinking_level(mut self, thinking_level: Option<String>) -> Self {
         self.thinking_level = thinking_level;
         self
@@ -483,7 +493,8 @@ pub fn drive_prompt(launch: PromptLaunch) {
         )
         .with_host(&launch.host)
         .with_pi_artifact(launch.pi_artifact.unwrap_or(PI_SELECTED_ARTIFACT))
-        .with_run_id(&launch.run_id),
+        .with_run_id(&launch.run_id)
+        .with_agent_run_ended(launch.agent_run_ended),
         launch.storage,
         launch.runtime,
         launch.runtime_activity,

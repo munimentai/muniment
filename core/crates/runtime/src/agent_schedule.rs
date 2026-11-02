@@ -390,7 +390,14 @@ impl RuntimeAttachState {
                             .into(),
                     );
                 }
-                JournalOutcome::Ended { .. } if live => {}
+                // A reply that ended is final at once, while its driver
+                // still does the post-run work. A run that stopped for
+                // attention waits until its driver lets it go, since the
+                // driver may still resume it.
+                JournalOutcome::Ended {
+                    status: RunStatus::Interrupted,
+                    ..
+                } if live => {}
                 JournalOutcome::Ended {
                     status,
                     text,

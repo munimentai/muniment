@@ -498,6 +498,13 @@ fn coordinate_work(
     resume_result: Option<std::sync::mpsc::Sender<Result<(), String>>>,
     prepared: Option<(u64, ChatProjector)>,
 ) {
+    // Every way out of the run tells the host it ended, so a run that fails
+    // before it replies ends its record as soon as one that replies.
+    let mut ended = RunEnd {
+        app: &app,
+        run_id: run_id.clone(),
+        told: false,
+    };
     let engine = PiRpcEngine::new(app.pi_session_root().ok());
     if let Some(token) = grant.native_access_token.take() {
         access_token = token;
@@ -1896,6 +1903,8 @@ fn coordinate_work(
             }
         }
     }
+    // The reply is over: the host learns it before the post-run work below.
+    ended.tell();
     // A reply that ended cleanly leaves its process for the thread's next one.
     if let Some(launch) = launch.filter(|_| {
         compaction.is_none()
@@ -1930,6 +1939,28 @@ fn coordinate_work(
             stored_prompt(&run_id, subject.as_deref())
         };
         memory_runtime.extract_after_run(&run_id, messages);
+    }
+}
+
+/// Tells the host once that a run ended: at the end of its reply, or when
+/// the run leaves the coordinator by any other way.
+struct RunEnd<'a, A: PiLaunchBoundaries> {
+    app: &'a A,
+    run_id: String,
+    told: bool,
+}
+
+impl<A: PiLaunchBoundaries> RunEnd<'_, A> {
+    fn tell(&mut self) {
+        if !std::mem::replace(&mut self.told, true) {
+            self.app.run_ended(&self.run_id);
+        }
+    }
+}
+
+impl<A: PiLaunchBoundaries> Drop for RunEnd<'_, A> {
+    fn drop(&mut self) {
+        self.tell();
     }
 }
 

@@ -208,6 +208,9 @@ pub trait PiLaunchBoundaries {
     /// Names the run's thread folder after `title` once a run ends, for a
     /// thread that works in a folder of its own.
     fn name_thread_folder(&self, _title: &str) {}
+    /// Tells the host that run `run_id` stopped replying, once, before the
+    /// thread folder rename, the memory pass and the other post-run work.
+    fn run_ended(&self, _run_id: &str) {}
     fn prepare_pi_settings(
         &self,
         artifact: PiArtifactDescriptor,
