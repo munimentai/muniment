@@ -54,6 +54,25 @@ describe('This computer', () => {
     expect(tauri.invoke).toHaveBeenCalledWith('local_access_save', { enabled: true, port: 9443, endpoints: ['build.example.net:9443', '192.0.2.30:9443'] })
   })
 
+  it('keeps Save off while the port and the addresses match the saved ones', async () => {
+    const tauri = bridge({ enabled: true })
+    render(ThisComputer, { tauri })
+    const port = screen.getByRole('textbox', { name: 'Port' })
+    const addresses = screen.getByRole('textbox', { name: 'Addresses in the link' })
+    const save = screen.getByRole('button', { name: 'Save' })
+    await waitFor(() => expect(port).toHaveValue('7443'))
+    expect(save).toBeDisabled()
+    await fireEvent.input(port, { target: { value: '9443' } })
+    expect(save).toBeEnabled()
+    await fireEvent.input(port, { target: { value: '7443' } })
+    expect(save).toBeDisabled()
+    await fireEvent.input(addresses, { target: { value: 'build.example.net:7443' } })
+    expect(save).toBeEnabled()
+    await fireEvent.click(save)
+    await waitFor(() => expect(tauri.invoke).toHaveBeenCalledWith('local_access_save', { enabled: true, port: 7443, endpoints: ['build.example.net:7443'] }))
+    await waitFor(() => expect(save).toBeDisabled())
+  })
+
   it('names the reason connections cannot start', async () => {
     const tauri = bridge({ enabled: true })
     tauri.invoke.mockImplementationOnce(async () => access(true, { listening: null, error: 'Address already in use' }))

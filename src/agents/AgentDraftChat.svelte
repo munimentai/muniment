@@ -29,6 +29,9 @@
   let saveError = $state('')
   let saved = $state(null)
   let testRun = $state(null)
+  // The draft a Save turned on, which a later message replaces. Save rests
+  // while the newest draft is that one.
+  let savedDraft = $state(null)
   let alive = true
 
   onMount(() => {
@@ -37,6 +40,7 @@
   })
 
   const latest = $derived(turns.length - 1)
+  const draftKey = $derived(`${latest}:${turns[latest]?.at ?? ''}`)
   const skillNames = (draft) => (draft?.skills ?? []).map((id) => catalog.skills.find((skill) => skill.id === id)?.name ?? id)
   const schedule = (draft) => (draft?.routines ?? []).map((routine) => triggerSummary(routine.trigger)).join(', ') || 'Runs when you ask.'
   // The test run as the window last heard of it.
@@ -46,6 +50,7 @@
   // A test save keeps the triggers off, then starts one run of the agent.
   async function save(test) {
     const form = draftForm($state.snapshot(turns[latest]?.reply?.draft))
+    const key = draftKey
     const problem = formProblem(form)
     if (problem) { saveError = problem; return }
     busy = true
@@ -55,6 +60,7 @@
       const previous = id ? await agentRequest(tauri, runtime, 'agent.read', { id }).then((answer) => answer?.agent ?? null).catch(() => null) : null
       const answer = await agentRequest(tauri, runtime, 'agent.save', { agent: draftAgent(form, { saved: $state.snapshot(previous), test, projectId }) })
       saved = answer.agent
+      savedDraft = test ? null : key
       if (test) {
         const started = await agentRequest(tauri, runtime, 'agent.run_now', { id: saved.id, test: true })
         testRun = started.run ?? null
@@ -92,7 +98,7 @@
         {/if}
         {#if index === latest}
           <div class="actions">
-            <Button variant="primary" disabled={busy || !!pending} onclick={() => save(false)}>{saved || agentId ? 'Save changes' : 'Save'}</Button>
+            <Button variant={savedDraft === draftKey ? 'outline' : 'primary'} disabled={busy || !!pending || savedDraft === draftKey} onclick={() => save(false)}>{saved || agentId ? 'Save changes' : 'Save'}</Button>
             <Button variant="outline" icon="play" disabled={busy || !!pending} onclick={() => save(true)}>Test run</Button>
           </div>
           {#if saveError}<p class="error" role="alert">{saveError}</p>{/if}

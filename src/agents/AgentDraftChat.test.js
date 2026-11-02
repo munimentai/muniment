@@ -108,6 +108,20 @@ it('updates the agent a reopened chat saved before and keeps its model', async (
   expect(await screen.findByRole('status')).toHaveTextContent('Saved.')
 })
 
+it('rests Save on the draft it saved until a new message drafts again', async () => {
+  const { tauri } = runtime()
+  const first = [turn('Summarize my inbox')]
+  const { rerender } = render(AgentDraftChat, { tauri, turns: first })
+  await fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+  expect(await screen.findByRole('status')).toHaveTextContent('Saved.')
+  const rest = screen.getByRole('button', { name: 'Save changes' })
+  expect(rest).toBeDisabled()
+  expect(rest).toHaveAttribute('data-variant', 'outline')
+  expect(screen.getByRole('button', { name: 'Test run' })).toBeEnabled()
+  await rerender({ turns: [...first, { ...turn('Make it 8am'), at: '2026-10-19T10:05:00Z' }] })
+  expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled()
+})
+
 it('asks core with a chat message and polls until the draft is done', async () => {
   let asks = 0
   const creation = { threadId: 'c1', kind: 'agent', turns: [turn('x')] }
