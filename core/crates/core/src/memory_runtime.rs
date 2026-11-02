@@ -996,7 +996,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn the_startup_sweep_removes_extensions_of_ended_sessions_only() {
-        let root = std::env::temp_dir().join(Uuid::new_v4().to_string());
+        let root = crate::state_root::test_root().join(Uuid::new_v4().to_string());
         fs::create_dir_all(&root).unwrap();
         let runtime = ApplicationMemoryRuntime::new(root.join("config"), root.clone());
         let day = std::time::Duration::from_secs(24 * 60 * 60);
@@ -1037,7 +1037,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn the_startup_sweep_keeps_the_file_a_running_process_names() {
-        let root = std::env::temp_dir().join(Uuid::new_v4().to_string());
+        let root = crate::state_root::test_root().join(Uuid::new_v4().to_string());
         fs::create_dir_all(&root).unwrap();
         let runtime = ApplicationMemoryRuntime::new(root.join("config"), root.clone());
         let live = runtime.agent_extension_path(&Uuid::new_v4().to_string());
@@ -1062,7 +1062,7 @@ mod tests {
 
     #[test]
     fn agent_facts_are_scoped_recoverable_and_recalled_after_reopen() {
-        let root = std::env::temp_dir().join(Uuid::new_v4().to_string());
+        let root = crate::state_root::test_root().join(Uuid::new_v4().to_string());
         fs::create_dir_all(&root).unwrap();
         let config = root.join("private");
         crate::home::confirm_home(&config, &root.join("muniment")).unwrap();
@@ -1135,7 +1135,7 @@ mod tests {
     #[test]
     fn saved_and_extracted_facts_record_the_agent_or_chat_that_wrote_them() {
         use crate::memory_origin::{describe_facts, OriginKind};
-        let root = std::env::temp_dir().join(Uuid::new_v4().to_string());
+        let root = crate::state_root::test_root().join(Uuid::new_v4().to_string());
         fs::create_dir_all(&root).unwrap();
         let config = root.join("private");
         crate::home::confirm_home(&config, &root.join("muniment")).unwrap();
@@ -1235,7 +1235,8 @@ mod tests {
 
     #[test]
     fn the_message_tools_reach_an_agent_on_the_same_runtime() {
-        let root = std::env::temp_dir().join(format!("muniment-agent-message-{}", Uuid::new_v4()));
+        let root = crate::state_root::test_root()
+            .join(format!("muniment-agent-message-{}", Uuid::new_v4()));
         let config = root.join("config");
         fs::create_dir_all(&config).unwrap();
         crate::home::confirm_home(&config, &root.join("muniment")).unwrap();
@@ -1316,7 +1317,8 @@ mod tests {
 
     #[test]
     fn routine_tools_validate_and_store_every_trigger_kind() {
-        let root = std::env::temp_dir().join(format!("muniment-routines-{}", Uuid::new_v4()));
+        let root =
+            crate::state_root::test_root().join(format!("muniment-routines-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         let config = root.join("private");
         muniment_core::home::confirm_home(&config, &root.join("muniment")).unwrap();
@@ -1441,7 +1443,8 @@ mod tests {
 
     #[test]
     fn chat_tools_and_manual_edits_share_agent_and_memory_files() {
-        let root = std::env::temp_dir().join(format!("muniment-harness-{}", Uuid::new_v4()));
+        let root =
+            crate::state_root::test_root().join(format!("muniment-harness-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         let config = root.join("private");
         let home = root.join("muniment");
@@ -1524,7 +1527,8 @@ mod tests {
 
     #[test]
     fn agent_extension_parses_as_a_module_and_contains_the_session_scoped_declaration() {
-        let root = std::env::temp_dir().join(format!("muniment-app-memory-{}", Uuid::now_v7()));
+        let root =
+            crate::state_root::test_root().join(format!("muniment-app-memory-{}", Uuid::now_v7()));
         let home = root.join("home");
         fs::create_dir_all(home.join("memory")).unwrap();
         fs::write(home.join("memory/fact.md"), "saffron belongs in the pantry").unwrap();
@@ -1986,7 +1990,8 @@ console.log(JSON.stringify([await run(['Save']), await run(["Don't save"]), awai
 
     #[test]
     fn a_timed_out_session_build_does_not_block_the_extension() {
-        let root = std::env::temp_dir().join(format!("muniment-app-memory-{}", Uuid::now_v7()));
+        let root =
+            crate::state_root::test_root().join(format!("muniment-app-memory-{}", Uuid::now_v7()));
         let home = root.join("home");
         fs::create_dir_all(home.join("memory")).unwrap();
         fs::write(home.join("memory/fact.md"), "saffron belongs in the pantry").unwrap();
@@ -2010,7 +2015,8 @@ console.log(JSON.stringify([await run(['Save']), await run(["Don't save"]), awai
 
     #[test]
     fn a_search_right_after_open_reads_the_built_index() {
-        let root = std::env::temp_dir().join(format!("muniment-app-memory-{}", Uuid::now_v7()));
+        let root =
+            crate::state_root::test_root().join(format!("muniment-app-memory-{}", Uuid::now_v7()));
         let home = root.join("home");
         fs::create_dir_all(home.join("memory")).unwrap();
         fs::write(home.join("memory/fact.md"), "saffron belongs in the pantry").unwrap();
@@ -2035,7 +2041,8 @@ console.log(JSON.stringify([await run(['Save']), await run(["Don't save"]), awai
 
     #[test]
     fn a_slow_build_in_one_session_does_not_block_another_session_search() {
-        let root = std::env::temp_dir().join(format!("muniment-app-memory-{}", Uuid::now_v7()));
+        let root =
+            crate::state_root::test_root().join(format!("muniment-app-memory-{}", Uuid::now_v7()));
         let home = root.join("home");
         fs::create_dir_all(home.join("memory")).unwrap();
         fs::write(home.join("memory/fact.md"), "saffron belongs in the pantry").unwrap();
@@ -2094,7 +2101,8 @@ console.log(JSON.stringify([await run(['Save']), await run(["Don't save"]), awai
 
     #[test]
     fn dispatch_for_a_closed_session_returns_invalid_tool_arguments() {
-        let root = std::env::temp_dir().join(format!("muniment-app-memory-{}", Uuid::now_v7()));
+        let root =
+            crate::state_root::test_root().join(format!("muniment-app-memory-{}", Uuid::now_v7()));
         fs::create_dir_all(&root).unwrap();
         let runtime = ApplicationMemoryRuntime::new(root.join("config"), root.join("cache"));
         runtime.insert_session(
@@ -2118,7 +2126,8 @@ console.log(JSON.stringify([await run(['Save']), await run(["Don't save"]), awai
 
     #[test]
     fn concurrent_agent_extension_writes_never_expose_partial_source() {
-        let root = std::env::temp_dir().join(format!("muniment-app-memory-{}", Uuid::now_v7()));
+        let root =
+            crate::state_root::test_root().join(format!("muniment-app-memory-{}", Uuid::now_v7()));
         let runtime = Arc::new(ApplicationMemoryRuntime::new(
             root.join("config"),
             root.join("cache"),

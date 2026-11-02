@@ -1878,7 +1878,7 @@ mod tests {
 
     #[test]
     fn write_failures_report_the_step_and_remove_only_the_temporary_file() {
-        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let root = crate::state_root::test_root().join(uuid::Uuid::new_v4().to_string());
         let path = root.join("private-agent.md");
         let error = write(&path, b"private instructions").unwrap_err();
         assert!(error.starts_with("The agent save failed at create_temp (OS error "));
@@ -1903,7 +1903,7 @@ mod tests {
 
         for step in ["write_temp", "sync_temp"] {
             for existing in [false, true] {
-                let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+                let root = crate::state_root::test_root().join(uuid::Uuid::new_v4().to_string());
                 fs::create_dir_all(&root).unwrap();
                 let path = root.join("agent.md");
                 if existing {
@@ -1994,7 +1994,7 @@ mod tests {
 
     #[test]
     fn write_creates_and_replaces_agent_files_without_temporary_files() {
-        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let root = crate::state_root::test_root().join(uuid::Uuid::new_v4().to_string());
         fs::create_dir_all(&root).unwrap();
         for name in [
             "agent.md",
@@ -2020,7 +2020,7 @@ mod tests {
         use std::io::Write;
         use windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION;
 
-        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let root = crate::state_root::test_root().join(uuid::Uuid::new_v4().to_string());
         fs::create_dir_all(&root).unwrap();
         let path = root.join("agent-state.json");
         fs::write(&path, b"original").unwrap();
@@ -2053,7 +2053,7 @@ mod tests {
         use std::os::windows::fs::OpenOptionsExt;
         use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
 
-        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let root = crate::state_root::test_root().join(uuid::Uuid::new_v4().to_string());
         fs::create_dir_all(&root).unwrap();
         let path = root.join("agent.md");
         write(&path, b"original").unwrap();
@@ -2118,7 +2118,7 @@ mod tests {
     #[test]
     fn a_list_writes_nothing_and_answers_when_no_write_can_land() {
         use std::os::unix::fs::PermissionsExt;
-        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let root = crate::state_root::test_root().join(uuid::Uuid::new_v4().to_string());
         fs::create_dir_all(&root).unwrap();
         let profile = root.join("private");
         crate::home::confirm_home(&profile, &root.join("muniment")).unwrap();
@@ -2187,7 +2187,7 @@ mod tests {
 
     #[test]
     fn a_rename_saves_while_another_thread_lists_the_agents() {
-        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let root = crate::state_root::test_root().join(uuid::Uuid::new_v4().to_string());
         fs::create_dir_all(&root).unwrap();
         let profile = root.join("private");
         crate::home::confirm_home(&profile, &root.join("muniment")).unwrap();
@@ -2221,7 +2221,7 @@ mod tests {
 
     #[test]
     fn primary_selection_survives_later_runs_and_project_changes() {
-        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let root = crate::state_root::test_root().join(uuid::Uuid::new_v4().to_string());
         fs::create_dir_all(&root).unwrap();
         let profile = root.join("private");
         crate::home::confirm_home(&profile, &root.join("muniment")).unwrap();
@@ -2294,7 +2294,7 @@ mod tests {
     }
     #[test]
     fn grok_profile_and_template_context_survive_save_and_enter_the_agent_chat() {
-        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let root = crate::state_root::test_root().join(uuid::Uuid::new_v4().to_string());
         fs::create_dir_all(&root).unwrap();
         let profile = root.join("private");
         crate::home::confirm_home(&profile, &root.join("muniment")).unwrap();
@@ -2321,7 +2321,7 @@ mod tests {
 
     #[test]
     fn definition_and_thread_assignment_survive_edits() {
-        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let root = crate::state_root::test_root().join(uuid::Uuid::new_v4().to_string());
         fs::create_dir_all(&root).unwrap();
         let profile = root.join("private");
         crate::home::confirm_home(&profile, &root.join("muniment")).unwrap();

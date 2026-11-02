@@ -80,7 +80,7 @@ impl TemporaryProfile {
         #[cfg(not(unix))]
         let sequence = TEMPORARY_PROFILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         #[cfg(not(unix))]
-        let root = std::env::temp_dir().join(format!(
+        let root = muniment_core::state_root::test_root().join(format!(
             "muniment-runtime-{test_name}-{}-{}-{sequence}",
             std::process::id(),
             *PROCESS_TOKEN

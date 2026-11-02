@@ -483,6 +483,19 @@ pub fn is_test_run() -> bool {
         })
 }
 
+/// Whether Cargo built this binary for a test: the `test-build` feature,
+/// which every crate that tests against the core turns on through its
+/// dev-dependencies, is compiled in. It holds however the binary starts:
+/// by Cargo, by hand, as a copy outside `deps`, or as a runtime binary a
+/// test builds and starts.
+pub const TEST_BUILD: bool = cfg!(feature = "test-build");
+
+/// Whether this process may never write the owner's runtime logs: a test
+/// run, or any binary built for a test.
+pub fn is_test_build() -> bool {
+    TEST_BUILD || is_test_run()
+}
+
 static KEYCHAIN_MOCKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Notes that a test replaced the system keyring with an in-memory one, so
@@ -589,12 +602,13 @@ pub fn guard_owner_data(path: &Path, what: &str) {
 pub const LOG_DIRECTORY_VARIABLE: &str = "MUNIMENT_LOG_DIR";
 
 /// The log directory that replaces the platform's: the one
-/// `MUNIMENT_LOG_DIR` names, else, in a test run, a temporary directory per
-/// process, so no test writes the owner's real runtime logs.
+/// `MUNIMENT_LOG_DIR` names, else, in a test run or a binary built for a
+/// test, a temporary directory per process, so no test writes the owner's
+/// real runtime logs.
 pub fn log_directory_override() -> Option<PathBuf> {
     match std::env::var_os(LOG_DIRECTORY_VARIABLE) {
         Some(directory) if !directory.is_empty() => Some(PathBuf::from(directory)),
-        _ => is_test_run().then(test_log_directory),
+        _ => is_test_build().then(test_log_directory),
     }
 }
 
@@ -603,11 +617,12 @@ pub fn test_log_directory() -> PathBuf {
     test_root().join("logs")
 }
 
-/// Stops a test run before it appends to a log under the owner's real log
-/// directory, `~/Library/Logs/Muniment` on macOS.
+/// Stops a test run, or any binary built for a test, before it appends to a
+/// log under the owner's real log directory, `~/Library/Logs/Muniment` on
+/// macOS.
 pub fn guard_log_directory(directory: &Path) {
     #[cfg(target_os = "macos")]
-    if is_test_run() {
+    if is_test_build() {
         let real = crate::user_diagnostics::effective_user_home()
             .map(|home| home.join("Library/Logs/Muniment"))
             .ok();

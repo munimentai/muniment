@@ -715,7 +715,8 @@ mod tests {
     }
 
     fn storage() -> (std::path::PathBuf, SharedStorage) {
-        let root = std::env::temp_dir().join(format!("muniment-pi-execution-{}", Uuid::now_v7()));
+        let root = crate::state_root::test_root()
+            .join(format!("muniment-pi-execution-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&root).unwrap();
         let storage = Arc::new(Mutex::new(ChatStorage {
             journal: RunJournal::open(root.join("runs.sqlite3")).unwrap(),

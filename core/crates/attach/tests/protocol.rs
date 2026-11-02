@@ -10,7 +10,7 @@ use std::{
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 fn fixture_temp_dir() -> PathBuf {
-    let path = std::env::temp_dir().join(format!(
+    let path = muniment_atomic_file::test_root::test_root().join(format!(
         "muniment-attach-fixtures-{}-{}",
         std::process::id(),
         TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)

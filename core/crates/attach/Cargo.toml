@@ -21,6 +21,10 @@ sha2 = "0.11"
 url = "2"
 uuid = "1"
 
+[dev-dependencies]
+# The tests keep their fixtures in the test process's temporary root.
+muniment-atomic-file = { path = "../atomic-file" }
+
 # Pairs with or reconnects to a runtime over the remote route, for smoke tests.
 [[example]]
 name = "remote-smoke"

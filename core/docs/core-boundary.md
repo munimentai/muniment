@@ -191,6 +191,7 @@ It rejects a path dependency of a workspace crate outside the core directory.
 It rejects a file in the core directory that names the desktop shell directory.
 It tests each port crate without default features.
 The core test enables `keyring` to include prompt and thread-history tests.
+The check allows `test-build`, which each crate's tests turn on through its dev-dependencies, so a test binary never writes the owner's runtime logs.
 CI runs this check on every push and pull request.
 
 The module scan covers all Rust source and test files in port crates, regardless of host platform.

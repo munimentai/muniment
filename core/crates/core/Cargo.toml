@@ -17,6 +17,10 @@ edition = "2021"
 tls = ["ureq/tls", "ureq/proxy-from-env", "muniment-models/tls", "muniment-router/tls"]
 keyring = ["dep:keyring"]
 network-tests = ["tls"]
+# Marks a build made for tests. Each crate that tests against this one turns
+# it on through its dev-dependencies, so a test binary, a copy of one, and a
+# runtime binary a test builds never write the owner's runtime logs.
+test-build = []
 
 [dependencies]
 base64 = "0.23"
@@ -64,6 +68,7 @@ chrono-tz = "0.10.4"
 iana-time-zone = "0.1.65"
 
 [dev-dependencies]
+muniment-core = { path = ".", features = ["test-build"] }
 # Tests need to author AES-encrypted entries to exercise the encrypted-entry
 # rejection; the library itself only ever reads and needs no crypto stack.
 zip = { version = "9", default-features = false, features = ["deflate", "aes-crypto"] }
