@@ -18,6 +18,7 @@
   import ModePicker from '../composer/ModePicker.svelte'
   import { panelScroll } from '../lib/panel-scroll.js'
   import { runActive, runLight, runStatusLabel, whenLabel } from '../lib/agent-labels.js'
+  import { minuteClock } from '../lib/relative-time.js'
   import { runFailureText } from '../lib/run-failure.js'
   import { agentRequest, saveAgentPatch } from './agent-runtime.js'
   import InlineEdit from './InlineEdit.svelte'
@@ -231,7 +232,7 @@
           <div class="fact"><dt>Job title</dt><dd><InlineEdit value={agent.label ?? ''} label="Job title" placeholder="Add a job title" disabled={readOnly} onsave={(label) => saveField({ label })} /></dd></div>
           <div class="fact"><dt>Machine</dt><dd class="record signaled"><span class="words">{machine ? machineName : ''}{#if agent.replica}<span class="synced"><LucideIcon name="refresh-cw" variant="action" size={12} />Synced copy</span>{/if}</span><span class="signal" data-light={agent.online === false ? 'red' : 'green'} role="img" aria-label={machineState} data-tooltip={machineState}><LucideIcon name={kindIcon(machine)} variant="action" size={14} /></span></dd></div>
           <div class="fact"><dt>Next run</dt><dd class="record">{nextRunLabel(agent)}</dd></div>
-          <div class="fact"><dt>Last run</dt><dd class="record signaled">{#if latestRun}{@const state = runStatusLabel(latestRun.status)}<span class="words">{whenLabel(latestRun.updated_at)}</span><span class="signal" data-light={runLight(latestRun)} role="img" aria-label={state} data-tooltip={state}><LucideIcon name={runIcon(latestRun)} variant="action" size={14} /></span>{:else}<span class="words">Never</span>{/if}</dd></div>
+          <div class="fact"><dt>Last run</dt><dd class="record signaled">{#if latestRun}{@const state = runStatusLabel(latestRun.status)}<span class="words">{whenLabel(latestRun.updated_at, minuteClock())}</span><span class="signal" data-light={runLight(latestRun)} role="img" aria-label={state} data-tooltip={state}><LucideIcon name={runIcon(latestRun)} variant="action" size={14} /></span>{:else}<span class="words">Never</span>{/if}</dd></div>
         </dl>
         {#if latestRun?.status === 'failed' && runFailureText(latestRun.error)}<p class="run-reason">{runFailureText(latestRun.error)}</p>{/if}
         {#each cutShort as routine (routine.id)}

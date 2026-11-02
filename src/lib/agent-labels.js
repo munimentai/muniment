@@ -1,6 +1,7 @@
 // The words the agent profile, the routines and Notifications show for a run and
 // a trigger. The runtime decides every state, and these only name it.
 import { executionTime } from './execution-time.js'
+import { elapsedSince } from './relative-time.js'
 import { runFailureText } from './run-failure.js'
 import { dayNumber, formatClock, formatDate, sameYear } from './time-format.svelte.js'
 
@@ -58,14 +59,14 @@ export function runNote(run) {
   return runFailureText(run?.error) || run?.result_summary || ''
 }
 
+// How long ago, rounded as the sidebar's relative time rounds it.
 export function whenLabel(value, now = Date.now()) {
   const at = Date.parse(value)
   if (!Number.isFinite(at)) return ''
-  const minutes = Math.round((now - at) / 60_000)
-  if (minutes < 1) return 'Just now'
-  if (minutes < 60) return `${minutes}m ago`
-  if (minutes < 24 * 60) return `${Math.round(minutes / 60)}h ago`
-  return formatDate(at)
+  const { unit, count } = elapsedSince(at, now)
+  if (unit === 'now') return 'Just now'
+  if (unit === 'd') return formatDate(at)
+  return `${count}${unit} ago`
 }
 
 // When a run happened or runs next, in the zone and on the clock the Time

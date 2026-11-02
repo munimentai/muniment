@@ -5,6 +5,7 @@
 // picks the runtime a request goes to.
 import { LOCAL_RUNTIME_ID, machineName } from '../runtimes/runtimes.js'
 import { agentRequest, agentRuntimes } from './agent-runtime.js'
+import { elapsedSince } from '../lib/relative-time.js'
 
 export function emptySwarm() {
   return {
@@ -247,8 +248,8 @@ export function applyApproval(approvals, update) {
 export function linkLabel(link, now = Date.now()) {
   if (!link) return 'Through another machine'
   const seen = Date.parse(link.last_seen_at ?? '')
-  const minutes = Number.isFinite(seen) ? Math.max(0, Math.round((now - seen) / 60_000)) : null
-  const ago = minutes === null ? '' : minutes < 1 ? ' · now' : minutes < 60 ? ` · ${minutes}m ago` : ` · ${Math.round(minutes / 60)}h ago`
+  const since = Number.isFinite(seen) ? elapsedSince(seen, now) : null
+  const ago = !since ? '' : since.unit === 'now' ? ' · now' : ` · ${since.count}${since.unit} ago`
   if (link.state === 'connected') return `Connected${ago}`
   if (link.state === 'revoked') return 'Access revoked. Join the machines again.'
   return `Retrying${link.last_error ? `: ${link.last_error}` : ''}`

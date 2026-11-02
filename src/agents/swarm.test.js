@@ -173,6 +173,7 @@ describe('link lines', () => {
     const now = Date.parse('2026-01-01T14:10:00Z')
     expect(linkLabel({ direction: 'outbound', state: 'connected', last_seen_at: '2026-01-01T14:00:00Z' }, now)).toBe('Connected · 10m ago')
     expect(linkLabel({ direction: 'inbound', state: 'connected', last_seen_at: '2026-01-01T14:10:00Z' }, now)).toBe('Connected · now')
+    expect(linkLabel({ direction: 'outbound', state: 'connected', last_seen_at: '2026-01-01T11:37:00Z' }, now)).toBe('Connected · 2h ago')
     expect(linkLabel({ direction: 'outbound', state: 'backoff', last_error: 'The machine did not answer.' }, now)).toBe('Retrying: The machine did not answer.')
     expect(linkLabel({ direction: 'outbound', state: 'revoked' }, now)).toBe('Access revoked. Join the machines again.')
     expect(linkLabel(null)).toBe('Through another machine')

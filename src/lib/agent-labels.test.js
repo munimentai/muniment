@@ -47,6 +47,20 @@ it('names a time by how long ago it was', () => {
   expect(whenLabel(null, now)).toBe('')
 })
 
+it('rounds a run time as the sidebar does, so a card and its thread row name one span', async () => {
+  const { relativeTime } = await import('./relative-time.js')
+  const now = Date.parse('2026-07-01T14:00:00Z')
+  // 2.55 hours, as Tauri Morning's last run read 3h on its card and 2h in the sidebar.
+  const ran = new Date(now - 2.55 * 3_600_000).toISOString()
+  expect(whenLabel(ran, now)).toBe('2h ago')
+  expect(relativeTime(ran, now)).toBe('2h')
+  for (const minutes of [0.5, 1.5, 59.6, 61, 89, 150, 23.9 * 60]) {
+    const at = new Date(now - minutes * 60_000).toISOString()
+    const short = relativeTime(at, now)
+    expect(whenLabel(at, now)).toBe(short === 'now' ? 'Just now' : `${short} ago`)
+  }
+})
+
 it('notes what an imported template brought', async () => {
   const { templateNote } = await import('./agent-labels.js')
   expect(templateNote(null)).toBe('')
