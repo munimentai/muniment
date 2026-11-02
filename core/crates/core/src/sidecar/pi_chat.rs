@@ -543,25 +543,43 @@ pub fn provider_error_detail(text: &str) -> Option<String> {
 }
 
 /// The provider whose key Pi failed to read through the runtime's
-/// `secret get` command, from Pi's error, which names the command. The
-/// runtime answers that command from the keychain, so the failure is the
-/// keychain's refusal or a prompt still open, and the command text stays
-/// out of the reply.
+/// `secret get` command, from Pi's error, which names the command. Pi wraps
+/// the sentence, as in `API key auth failed for provider <id>: Failed to
+/// resolve API key for provider "<id>" from shell command: "<runtime>"
+/// secret get <id>`, so the sentence counts wherever it stands. The runtime
+/// answers that command from the keychain, so the failure is the keychain's
+/// refusal or a prompt still open, and the command text stays out of the
+/// reply. A command the user wrote keeps Pi's own sentence.
 fn refused_key_provider(text: &str) -> Option<&str> {
-    let rest = text
-        .trim()
-        .strip_prefix("Failed to resolve API key for provider \"")?;
+    const RESOLVE: &str = "Failed to resolve API key for provider \"";
+    let (_, rest) = text.split_once(RESOLVE)?;
     let (provider, command) = rest.split_once('"')?;
-    let named = command
-        .strip_prefix(" from shell command: ")?
-        .trim_end()
-        .strip_suffix(provider)?;
-    (named.ends_with(" secret get ")
-        && !provider.is_empty()
-        && provider
+    if provider.is_empty()
+        || !provider
             .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')))
-    .then_some(provider)
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        return None;
+    }
+    let command = command.strip_prefix(" from shell command: ")?;
+    let (program, arguments) = match command.strip_prefix('"') {
+        Some(quoted) => quoted.split_once('"')?,
+        None => command.split_once(' ')?,
+    };
+    let name = program.rsplit(['/', '\\']).next()?;
+    if !matches!(name, "muniment-runtime" | "muniment-runtime.exe") {
+        return None;
+    }
+    let after = arguments
+        .trim_start()
+        .strip_prefix("secret get ")?
+        .strip_prefix(provider)?;
+    // A timeout or an exit status may follow the command, never more of the id.
+    after
+        .chars()
+        .next()
+        .is_none_or(|next| !(next.is_ascii_alphanumeric() || matches!(next, '-' | '_' | '.')))
+        .then_some(provider)
 }
 
 /// Reads the token counts of a compaction result: `tokensBefore` and, when Pi
@@ -1911,23 +1929,48 @@ mod tests {
 
     #[test]
     fn a_refused_endpoint_key_reads_as_the_keychain_refusal_without_the_command() {
-        let error = r#"Failed to resolve API key for provider "custom-live27" from shell command: "/Applications/muniment.app/Contents/MacOS/muniment-runtime" secret get custom-live27"#;
-        let detail = provider_error_detail(error).unwrap();
+        // Pi's errorMessage for a declined key and for the first send while
+        // the prompt is open: the command exits with the refused or the
+        // pending status, and Pi names the command either way.
+        let live = r#"API key auth failed for provider custom-live28: Failed to resolve API key for provider "custom-live28" from shell command: "/Applications/muniment.app/Contents/Library/LaunchServices/muniment-runtime" secret get custom-live28"#;
+        let detail = provider_error_detail(live).unwrap();
         assert_eq!(
             detail,
-            "The keychain refused the key for custom-live27. Answer its prompt if one is open, or choose Try again in Settings → Machines, then send the message again."
+            "The keychain refused the key for custom-live28. Answer its prompt if one is open, or choose Try again in Settings → Machines, then send the message again."
         );
         assert!(!detail.contains("muniment-runtime") && !detail.contains("secret get"));
         let event = parse_frame(&json!({"type": "agent_end", "messages": [
-            {"role": "assistant", "stopReason": "error", "errorMessage": error}
+            {"role": "assistant", "stopReason": "error", "errorMessage": live}
         ]}))
         .unwrap();
         assert_eq!(event, PiChatEvent::Failed(Some(detail)));
-        // A command the user wrote keeps Pi's own sentence.
-        let own = r#"Failed to resolve API key for provider "custom-own" from shell command: op read key"#;
-        assert!(provider_error_detail(own)
-            .unwrap()
-            .starts_with("Failed to resolve API key"));
+        for error in [
+            // Pi's inner sentence alone, and with a timeout after the command.
+            r#"Failed to resolve API key for provider "custom-live27" from shell command: "/Applications/muniment.app/Contents/MacOS/muniment-runtime" secret get custom-live27"#,
+            r#"API key auth failed for provider custom-live27: Failed to resolve API key for provider "custom-live27" from shell command: "/Applications/muniment.app/Contents/Library/LaunchServices/muniment-runtime" secret get custom-live27: Command timed out"#,
+            r#"API key auth failed for provider custom-live27: Failed to resolve API key for provider "custom-live27" from shell command: "C:\Program Files\Muniment\muniment-runtime.exe" secret get custom-live27"#,
+        ] {
+            let detail = provider_error_detail(error).unwrap();
+            assert!(
+                detail.starts_with("The keychain refused the key for custom-live27."),
+                "{error}"
+            );
+        }
+        // A command the user wrote, another program's `secret get`, or a key
+        // for another provider keeps Pi's own sentence.
+        for own in [
+            r#"API key auth failed for provider custom-own: Failed to resolve API key for provider "custom-own" from shell command: op read key"#,
+            r#"API key auth failed for provider custom-own: Failed to resolve API key for provider "custom-own" from shell command: "/usr/local/bin/vault" secret get custom-own"#,
+            r#"API key auth failed for provider custom-own: Failed to resolve API key for provider "custom-own" from shell command: "/opt/muniment-runtime" secret get custom-other"#,
+            r#"API key auth failed for provider custom-own: Failed to resolve API key for provider "custom-own" from shell command: "/opt/muniment-runtime" secret get custom-own-two"#,
+        ] {
+            assert!(
+                provider_error_detail(own)
+                    .unwrap()
+                    .contains("Failed to resolve API key"),
+                "{own}"
+            );
+        }
     }
 
     #[test]
