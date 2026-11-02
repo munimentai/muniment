@@ -476,9 +476,15 @@ pub fn parse_frame(frame: &Value) -> Result<PiChatEvent, &'static str> {
             let error_message = last_message
                 .and_then(|message| message.get("errorMessage"))
                 .and_then(Value::as_str);
+            let provider = last_message
+                .and_then(|message| message.get("provider"))
+                .and_then(Value::as_str);
             match stop_reason {
                 Some("error") if error_message
                     .is_some_and(|message| message.contains("This provider has no remaining allowance.")) => Ok(PiChatEvent::UsageLimit),
+                Some("error") if error_message.is_some_and(refuses_tool_calls) => Ok(PiChatEvent::Failed(Some(
+                    tool_calls_refused_detail(crate::state_root::state_directory().as_deref(), provider),
+                ))),
                 Some("error") => Ok(PiChatEvent::Failed(error_message.and_then(provider_error_detail))),
                 Some("length") => Ok(PiChatEvent::Failed(None)),
                 Some("aborted") => Ok(PiChatEvent::Cancelled),
@@ -543,13 +549,39 @@ pub fn provider_error_detail(text: &str) -> Option<String> {
     })
 }
 
-/// The sentence a run carries when the runtime's `secret get` answered no
-/// key for the endpoint `provider`, under its name when the state root at
-/// `state` names it. Pi drops the command's exit status, so the stale-key
-/// mark the runtime keeps under `state` tells a stale key from a refusal: a
-/// stale key never comes back, and the person enters it again.
-fn key_failure_detail(state: Option<&Path>, provider: &str) -> String {
-    let name = state
+/// Whether a provider's refusal says the server takes no tool calls: vLLM
+/// started without `--enable-auto-tool-choice` and `--tool-call-parser`
+/// answers 400 to any request with tools, and Ollama names a model that
+/// does not support tools.
+pub fn refuses_tool_calls(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    [
+        "--enable-auto-tool-choice",
+        "--tool-call-parser",
+        "does not support tools",
+        "does not support tool calling",
+        "tool calling is not supported",
+        "tools are not supported",
+    ]
+    .iter()
+    .any(|sign| text.contains(sign))
+}
+
+/// The sentence a run carries when the endpoint `provider` refused tool
+/// calls, under its name when the state root at `state` names it.
+fn tool_calls_refused_detail(state: Option<&Path>, provider: Option<&str>) -> String {
+    let name = provider.map_or_else(
+        || "The server".to_owned(),
+        |provider| endpoint_name(state, provider),
+    );
+    format!(
+        "{name} does not accept tool calls. Turn on tool calling on the server (for vLLM: --enable-auto-tool-choice --tool-call-parser <parser>) or turn off tools for this endpoint in Settings → Models."
+    )
+}
+
+/// The name the record at `state` gives the endpoint `provider`, else its id.
+fn endpoint_name(state: Option<&Path>, provider: &str) -> String {
+    state
         .and_then(|state| {
             crate::models::pi_models::read_record(&crate::state_root::agent_directory(state)).ok()
         })
@@ -562,7 +594,16 @@ fn key_failure_detail(state: Option<&Path>, provider: &str) -> String {
                 .filter(|name| !name.is_empty())
                 .map(str::to_owned)
         })
-        .unwrap_or_else(|| provider.to_owned());
+        .unwrap_or_else(|| provider.to_owned())
+}
+
+/// The sentence a run carries when the runtime's `secret get` answered no
+/// key for the endpoint `provider`, under its name when the state root at
+/// `state` names it. Pi drops the command's exit status, so the stale-key
+/// mark the runtime keeps under `state` tells a stale key from a refusal: a
+/// stale key never comes back, and the person enters it again.
+fn key_failure_detail(state: Option<&Path>, provider: &str) -> String {
+    let name = endpoint_name(state, provider);
     if state.is_some_and(|state| crate::state_root::endpoint_key_stale(state, provider)) {
         format!(
             "The saved key for {name} is out of date. Enter the key again in Settings → Models, then send the message again."
@@ -2039,6 +2080,51 @@ mod tests {
             .starts_with("The saved key for custom-unnamed is out of date."));
         assert!(key_failure_detail(None, "custom-live30")
             .starts_with("The keychain refused the key for custom-live30."));
+        let _ = std::fs::remove_dir_all(state);
+    }
+
+    #[test]
+    fn a_server_without_tool_calling_reads_as_a_plain_sentence_under_its_name() {
+        let state = std::env::temp_dir().join(format!(
+            "muniment-tool-calls-detail-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let agent = crate::state_root::agent_directory(&state);
+        std::fs::create_dir_all(&agent).unwrap();
+        std::fs::write(
+            agent.join(crate::models::pi_models::RECORD_FILE),
+            r#"{"names":{"custom-do-test":"DO Test"}}"#,
+        )
+        .unwrap();
+        // vLLM's two refusals, Pi's wording of them, and Ollama's.
+        for error in [
+            r#"400 "auto" tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set"#,
+            r#"400: {"object":"error","message":"\"auto\" tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set","type":"BadRequestError","param":null,"code":400}"#,
+            r#"400 tool_choice=function "x" requires --tool-call-parser to be set"#,
+            "registry.ollama.ai/library/gemma:2b does not support tools",
+        ] {
+            assert!(refuses_tool_calls(error), "{error}");
+        }
+        assert!(!refuses_tool_calls("400 model gone"));
+        assert!(!refuses_tool_calls(
+            "This model's maximum context length is 32768 tokens"
+        ));
+        assert_eq!(
+            tool_calls_refused_detail(Some(&state), Some("custom-do-test")),
+            "DO Test does not accept tool calls. Turn on tool calling on the server (for vLLM: --enable-auto-tool-choice --tool-call-parser <parser>) or turn off tools for this endpoint in Settings → Models."
+        );
+        assert!(tool_calls_refused_detail(None, None)
+            .starts_with("The server does not accept tool calls."));
+        // The run fails with the sentence, never with vLLM's own text.
+        let event = parse_frame(&json!({"type": "agent_end", "messages": [{
+            "role": "assistant", "stopReason": "error", "provider": "custom-do-test",
+            "errorMessage": r#"400 "auto" tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set"#
+        }]}))
+        .unwrap();
+        let PiChatEvent::Failed(Some(detail)) = event else {
+            panic!("{event:?}");
+        };
+        assert!(detail.contains("does not accept tool calls") && !detail.contains("\"auto\""));
         let _ = std::fs::remove_dir_all(state);
     }
 

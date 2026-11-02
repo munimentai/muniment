@@ -419,6 +419,7 @@ impl ModelService {
                     &data.base_url,
                     &data.key,
                     &data.models,
+                    data.tools_off,
                 ))
             }
             ModelAction::RouterSettings => {
@@ -766,6 +767,10 @@ struct Endpoint {
     base_url: String,
     key: String,
     models: Vec<String>,
+    /// Whether a chat on the endpoint runs without tools. Absent keeps the
+    /// saved setting.
+    #[serde(default)]
+    tools_off: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -956,6 +961,52 @@ mod tests {
             .unwrap();
         assert_eq!(disconnected, serde_json::json!({}));
         assert_eq!(store.read(endpoint_secrets::SERVICE, "custom-proxy"), None);
+        std::fs::remove_dir_all(profile).unwrap();
+    }
+
+    #[test]
+    fn an_endpoint_saves_with_its_tools_off_and_a_save_without_the_field_keeps_it() {
+        let profile =
+            std::env::temp_dir().join(format!("muniment-model-service-{}", uuid::Uuid::now_v7()));
+        let agent = muniment_core::state_root::agent_directory(&profile);
+        std::fs::create_dir_all(&agent).unwrap();
+        let page: Arc<SignInPage> = Arc::new(crate::host::plain_sign_in_page);
+        let service = Arc::new(ModelService::new(&profile, page));
+        let save = |extra: serde_json::Value| {
+            let mut data = serde_json::json!({"kind": "custom", "name": "DO Test",
+                "base_url": "http://127.0.0.1:9/v1", "key": "", "models": ["qwen2.5-1.5b"]});
+            data.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            service
+                .request(request(ModelAction::StoreEndpoint, data), None)
+                .unwrap()
+        };
+        let tools_off = || {
+            let inventory = service
+                .request(
+                    request(ModelAction::ProviderInventory, serde_json::json!({})),
+                    None,
+                )
+                .unwrap();
+            inventory["providers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|provider| provider["id"] == "custom-do-test")
+                .unwrap()
+                .get("tools_off")
+                .cloned()
+        };
+        assert_eq!(
+            save(serde_json::json!({"tools_off": true})),
+            "custom-do-test"
+        );
+        assert_eq!(tools_off(), Some(serde_json::json!(true)));
+        save(serde_json::json!({}));
+        assert_eq!(tools_off(), Some(serde_json::json!(true)));
+        save(serde_json::json!({"tools_off": false}));
+        assert_eq!(tools_off(), None);
         std::fs::remove_dir_all(profile).unwrap();
     }
 

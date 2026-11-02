@@ -108,5 +108,5 @@ pub(super) fn connect_server(
     } else {
         ("custom", kind.name)
     };
-    providers::store_endpoint(agent, engine, endpoint, name, &base_url, &key, &[]).map(drop)
+    providers::store_endpoint(agent, engine, endpoint, name, &base_url, &key, &[], None).map(drop)
 }

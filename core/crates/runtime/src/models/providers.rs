@@ -114,6 +114,9 @@ pub(super) struct InventoryProvider {
     /// The decision models the server reported. They answer on its System One
     /// route, so the classifier list offers them and the chat picker does not.
     decision_models: Vec<String>,
+    /// Whether a chat on the endpoint runs without tools.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    tools_off: bool,
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -395,7 +398,9 @@ fn store_local_provider_in(models_file: &Path, base_url: &str, key: &str) -> Res
 }
 
 /// Saves a named endpoint and answers its provider id. When Pi names no
-/// default yet, the endpoint's first model becomes it.
+/// default yet, the endpoint's first model becomes it. `tools_off` turns
+/// the endpoint's tools off or on, and `None` keeps the saved setting.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn store_endpoint(
     agent: &Path,
     engine: &PiRpcEngine,
@@ -404,8 +409,12 @@ pub(super) fn store_endpoint(
     base_url: &str,
     key: &str,
     models: &[String],
+    tools_off: Option<bool>,
 ) -> Result<String, String> {
     let provider = pi_models::store_endpoint(agent, kind, name, base_url, key, models)?;
+    if let Some(off) = tools_off {
+        pi_models::set_tools_off(agent, &provider, off)?;
+    }
     if default_model_unset(agent) {
         let _ = adopt_provider_default(agent, engine, &provider, false);
     }
@@ -697,6 +706,7 @@ fn provider_inventory_with(
             base_url: None,
             models: Vec::new(),
             decision_models: Vec::new(),
+            tools_off: false,
         });
     }
     if let Some(endpoints) = models_file
@@ -757,6 +767,7 @@ fn provider_inventory_with(
                     })
                     .collect(),
                 decision_models: decision_models(&record, provider),
+                tools_off: pi_models::tools_off(&record, provider),
             });
         }
     }
@@ -779,6 +790,7 @@ fn provider_inventory_with(
             base_url: None,
             models: Vec::new(),
             decision_models: Vec::new(),
+            tools_off: false,
         });
     }
     // A model that refuses the tools every turn sends never reaches a picker.

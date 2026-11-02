@@ -491,11 +491,13 @@ fn take_turn(root: &Path, thread: &str) -> Result<Value, String> {
 /// Loads one turn's capability snapshot into the launch. `agent_skills`
 /// are the skill and plugin ids the thread's agent selected; each turn picks
 /// them as an automatic pick does, so a plugin adds its skills and never its
-/// code.
+/// code. Without `list_skills` the launch lists no skill for the model to
+/// pick, and the skills the user picked still load.
 pub fn prepare(
     root: &Path,
     thread: &str,
     agent_skills: &[String],
+    list_skills: bool,
     config: &mut crate::sidecar::SidecarConfig,
     prompt: &mut String,
 ) -> Result<(), String> {
@@ -544,7 +546,12 @@ pub fn prepare(
     // Pi lists each skill by name and description and the model reads it
     // when a task needs it. A `SKILL.md` loads as its folder, so the files
     // beside it come with it.
-    for skill in snapshot["availableSkills"].as_array().into_iter().flatten() {
+    let listed = if list_skills {
+        snapshot["availableSkills"].as_array()
+    } else {
+        None
+    };
+    for skill in listed.into_iter().flatten() {
         let path = Path::new(skill["path"].as_str().unwrap_or(""));
         if !path.is_file() {
             continue;
@@ -1357,7 +1364,7 @@ mod tests {
         )
         .unwrap();
         let mut config = crate::sidecar::SidecarConfig::new("unused");
-        prepare(&root.0, "chat", &[], &mut config, &mut String::new()).unwrap();
+        prepare(&root.0, "chat", &[], true, &mut config, &mut String::new()).unwrap();
         let generated: Value =
             serde_json::from_slice(&fs::read(&config.env["MUNIMENT_EXTEND_MCP"]).unwrap()).unwrap();
         // Pi reads `record` from the agent directory, so the turn adds only `m`.
@@ -1374,7 +1381,7 @@ mod tests {
 
         // The selection is spent, so the next turn adds nothing.
         let mut next = crate::sidecar::SidecarConfig::new("unused");
-        prepare(&root.0, "chat", &[], &mut next, &mut String::new()).unwrap();
+        prepare(&root.0, "chat", &[], true, &mut next, &mut String::new()).unwrap();
         assert!(next.args.is_empty() && !next.env.contains_key("MUNIMENT_EXTEND_MCP"));
     }
 
@@ -1414,6 +1421,7 @@ mod tests {
                     "off".into(),
                     "missing".into(),
                 ],
+                true,
                 &mut config,
                 &mut prompt,
             )
@@ -1454,7 +1462,7 @@ mod tests {
         .unwrap();
         let mut config = crate::sidecar::SidecarConfig::new("unused");
         let mut prompt = String::new();
-        prepare(&root.0, "chat", &[], &mut config, &mut prompt).unwrap();
+        prepare(&root.0, "chat", &[], true, &mut config, &mut prompt).unwrap();
         let loaded: Vec<_> = config
             .args
             .chunks(2)
@@ -1471,6 +1479,17 @@ mod tests {
         assert!(prompt.contains("picked the skill \"ship\""));
         assert!(prompt.contains(&base.join("commands/ship.md").to_string_lossy().into_owned()));
         assert!(!prompt.contains("Ship it") && !prompt.contains("Long instructions"));
+        // A compact launch lists no skill, and the picked one still loads.
+        fs::write(
+            root.0.join("extensions/inventory.json"),
+            serde_json::to_vec(&inventory).unwrap(),
+        )
+        .unwrap();
+        let mut config = crate::sidecar::SidecarConfig::new("unused");
+        let mut prompt = String::new();
+        prepare(&root.0, "chat", &[], false, &mut config, &mut prompt).unwrap();
+        assert!(!config.args.iter().any(|arg| arg == "--skill"));
+        assert!(prompt.contains("picked the skill \"ship\""));
     }
 
     #[test]

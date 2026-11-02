@@ -14,7 +14,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Map, Value};
 
-use crate::endpoint_models::discover_endpoint_models;
+use crate::endpoint_models::{
+    discover_endpoint_models, discover_endpoint_models_checked, DiscoveryFailure,
+};
 use crate::registry::{
     key_providers, CUSTOM_PROVIDER_PREFIX, LM_STUDIO_PROVIDER, OLLAMA_DECISIONS, OLLAMA_MODEL,
     OLLAMA_PROVIDER, ROUTER_PROVIDER,
@@ -38,6 +40,13 @@ pub const FORMER_NAMES: &str = "formerNames";
 /// The record key that lists the endpoints whose models the person named,
 /// so a refresh keeps exactly those models.
 const NAMED_MODELS: &str = "namedModels";
+/// The record key that lists the endpoints a chat reaches without tools,
+/// for a server that refuses tool calls.
+const TOOLS_OFF: &str = "toolsOff";
+/// The sentence a save answers when the server refuses the key it sent.
+pub const KEY_REFUSED: &str = "The server refused the API key. Check the key and try again.";
+/// The sentence a save answers when the server asks for a key and none was sent.
+pub const KEY_NEEDED: &str = "The server asks for an API key. Enter its key and try again.";
 const LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 const LOCK_RETRY: Duration = Duration::from_millis(20);
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(4);
@@ -246,13 +255,41 @@ fn drop_endpoint(record: &mut Map<String, Value>, provider: &str) -> bool {
             }
         }
     }
-    let named = record_list(record, NAMED_MODELS);
-    if named.iter().any(|id| id == provider) {
-        let rest = named.into_iter().filter(|id| id != provider).collect();
-        set_record_list(record, NAMED_MODELS, rest);
-        changed = true;
+    for key in [NAMED_MODELS, TOOLS_OFF] {
+        let listed = record_list(record, key);
+        if listed.iter().any(|id| id == provider) {
+            let rest = listed.into_iter().filter(|id| id != provider).collect();
+            set_record_list(record, key, rest);
+            changed = true;
+        }
     }
     changed
+}
+
+/// Whether a chat on the endpoint `provider` runs without tools. Pi's
+/// `models.json` has no setting that keeps tools out of a request, so the
+/// record keeps it and a launch on the endpoint starts Pi with no tools.
+pub fn tools_off(record: &Map<String, Value>, provider: &str) -> bool {
+    record_list(record, TOOLS_OFF)
+        .iter()
+        .any(|id| id == provider)
+}
+
+/// Turns tools off or on for the endpoint `provider`.
+pub fn set_tools_off(agent: &Path, provider: &str, off: bool) -> Result<(), String> {
+    let mut record = read_record(agent)?;
+    if tools_off(&record, provider) == off {
+        return Ok(());
+    }
+    let mut listed: Vec<String> = record_list(&record, TOOLS_OFF)
+        .into_iter()
+        .filter(|id| id != provider)
+        .collect();
+    if off {
+        listed.push(provider.to_owned());
+    }
+    set_record_list(&mut record, TOOLS_OFF, listed);
+    write_record(agent, &record)
 }
 
 /// Drops what the record keeps for the endpoint `provider`, as after a
@@ -435,6 +472,32 @@ pub fn valid_identifier(value: &str, limit: usize) -> bool {
         && !value.contains(char::is_control)
 }
 
+/// The API routes a pasted server URL may end in. The longest comes first,
+/// so `/chat/completions` goes whole.
+const API_ROUTES: [&str; 4] = ["/chat/completions", "/completions", "/models", "/responses"];
+
+/// The base URL of a server URL pasted with an API route on it, such as
+/// `http://host:8000/v1/chat/completions`, which Pi and discovery both
+/// extend with a route of their own. Any other URL stays as it is.
+pub fn endpoint_base(base_url: &str) -> String {
+    let trimmed = base_url.trim_end_matches('/');
+    for route in API_ROUTES {
+        let Some(at) = trimmed.len().checked_sub(route.len()) else {
+            continue;
+        };
+        if trimmed.is_char_boundary(at) && trimmed[at..].eq_ignore_ascii_case(route) {
+            let base = trimmed[..at].trim_end_matches('/');
+            if base
+                .split_once("://")
+                .is_some_and(|(_, host)| !host.is_empty())
+            {
+                return base.to_owned();
+            }
+        }
+    }
+    base_url.to_owned()
+}
+
 /// A plain http or https server URL with no credentials, query or fragment.
 pub fn endpoint_url(base_url: &str, message: &str) -> Result<url::Url, String> {
     if base_url.is_empty() || base_url.len() > 16 * 1024 || base_url.trim() != base_url {
@@ -451,6 +514,16 @@ pub fn endpoint_url(base_url: &str, message: &str) -> Result<url::Url, String> {
         return Err(message.into());
     }
     Ok(parsed)
+}
+
+/// What a save says when the model list refused the key `key`, or asked for
+/// one when `key` is blank.
+fn key_refusal(key: &str) -> &'static str {
+    if key.is_empty() {
+        KEY_NEEDED
+    } else {
+        KEY_REFUSED
+    }
 }
 
 pub fn custom_provider_id(name: &str) -> String {
@@ -485,6 +558,7 @@ pub fn store_ollama(
     route: impl FnOnce(&str) -> Result<(), String>,
 ) -> Result<(), String> {
     const MESSAGE: &str = "Enter a valid Ollama server URL.";
+    let base_url = &endpoint_base(base_url);
     if base_url.is_empty() || base_url.len() > 16 * 1024 || base_url.trim() != base_url {
         return Err(MESSAGE.into());
     }
@@ -509,14 +583,17 @@ pub fn store_ollama(
         .as_object_mut()
         .ok_or_else(|| SAVE_ERROR.to_string())?;
     // The server names its own models; the pinned id stands in when it does not answer.
-    let discovered = discover_endpoint_models(
+    let discovered = discover_endpoint_models_checked(
         base_url,
         resolve_key(key).as_deref().or(Some(key)),
         DISCOVERY_TIMEOUT,
     );
     let (model_ids, decisions, windows) = match discovered {
-        Some(found) => (found.chat, found.decisions, found.windows),
-        None => (vec![OLLAMA_MODEL.to_owned()], Vec::new(), BTreeMap::new()),
+        Ok(found) => (found.chat, found.decisions, found.windows),
+        Err(DiscoveryFailure::KeyRefused) => return Err(key_refusal(key).into()),
+        Err(DiscoveryFailure::NoList) => {
+            (vec![OLLAMA_MODEL.to_owned()], Vec::new(), BTreeMap::new())
+        }
     };
     if model_ids.is_empty() {
         return Err("The server has no chat models. Add a chat model, then try again.".into());
@@ -561,6 +638,7 @@ pub fn store_endpoint(
     key: &str,
     models: &[String],
 ) -> Result<String, String> {
+    let base_url = &endpoint_base(base_url);
     endpoint_url(base_url, "Enter a valid server URL.")?;
     if key.len() > 16 * 1024 || key.trim() != key {
         return Err("Enter a valid API key.".into());
@@ -601,12 +679,15 @@ pub fn store_endpoint(
         }
     }
     if models.is_empty() {
-        let found = discover_endpoint_models(
+        let found = match discover_endpoint_models_checked(
             base_url,
             resolve_key(key).as_deref().or(Some(key)),
             DISCOVERY_TIMEOUT,
-        )
-        .unwrap_or_default();
+        ) {
+            Ok(found) => found,
+            Err(DiscoveryFailure::KeyRefused) => return Err(key_refusal(key).into()),
+            Err(DiscoveryFailure::NoList) => Default::default(),
+        };
         models = found.chat;
         windows = found.windows;
         decisions = Some(found.decisions);
@@ -846,7 +927,7 @@ pub fn merge_discovered(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_server::serve_routes;
+    use crate::test_server::{serve_routes, serve_status};
 
     fn temporary_directory() -> PathBuf {
         let path =
@@ -976,6 +1057,90 @@ mod tests {
             models(&agent)["providers"]["lmstudio"]["models"],
             json!([{"id": "named"}])
         );
+        fs::remove_dir_all(agent).unwrap();
+    }
+
+    #[test]
+    fn a_pasted_api_route_saves_as_the_servers_base_url() {
+        for (pasted, base) in [
+            (
+                "http://host:8000/v1/chat/completions",
+                "http://host:8000/v1",
+            ),
+            (
+                "http://host:8000/v1/chat/completions/",
+                "http://host:8000/v1",
+            ),
+            ("https://host/v1/completions", "https://host/v1"),
+            ("http://host:8000/v1/models", "http://host:8000/v1"),
+            ("http://host:8000/V1/Responses", "http://host:8000/V1"),
+            ("http://host:8000/models", "http://host:8000"),
+            ("http://host:8000/v1", "http://host:8000/v1"),
+            ("http://host:8000/v1/", "http://host:8000/v1/"),
+            (
+                "http://localhost:4000/v1/my-models",
+                "http://localhost:4000/v1/my-models",
+            ),
+            ("http:///models", "http:///models"),
+        ] {
+            assert_eq!(endpoint_base(pasted), base, "{pasted}");
+        }
+        let agent = temporary_directory();
+        let url = serve_routes(vec![(
+            "GET /v1/models",
+            json!({"data": [{"id": "qwen2.5-1.5b", "max_model_len": 32768}]}),
+        )]);
+        let pasted = format!("{url}/chat/completions");
+        let id = store_endpoint(&agent, "custom", "DO Test", &pasted, "", &[]).unwrap();
+        let saved = &models(&agent)["providers"][&id];
+        assert_eq!(saved["baseUrl"], url.as_str());
+        assert_eq!(
+            saved["models"],
+            json!([{"id": "qwen2.5-1.5b", "contextWindow": 32768}])
+        );
+        fs::remove_dir_all(agent).unwrap();
+    }
+
+    #[test]
+    fn a_refused_model_list_says_the_server_refused_the_key() {
+        let agent = temporary_directory();
+        let url = serve_status("401 Unauthorized");
+        assert_eq!(
+            store_endpoint(&agent, "custom", "DO Test", &url, "sk-wrong", &[]),
+            Err(KEY_REFUSED.to_owned())
+        );
+        assert_eq!(
+            store_endpoint(&agent, "custom", "DO Test", &url, "", &[]),
+            Err(KEY_NEEDED.to_owned())
+        );
+        let forbidden = serve_status("403 Forbidden");
+        assert_eq!(
+            store_ollama(&agent, &forbidden, "sk-wrong", |_| Ok(())),
+            Err(KEY_REFUSED.to_owned())
+        );
+        // A server with no list keeps its own sentence.
+        let missing = serve_routes(vec![]);
+        assert_eq!(
+            store_endpoint(&agent, "custom", "DO Test", &missing, "", &[]),
+            Err("The server named no models. Start it, or list its models here.".to_owned())
+        );
+        assert!(!models_file(&agent).exists());
+        fs::remove_dir_all(agent).unwrap();
+    }
+
+    #[test]
+    fn tools_off_is_kept_by_endpoint_and_dropped_with_it() {
+        let agent = temporary_directory();
+        set_tools_off(&agent, "custom-do-test", true).unwrap();
+        set_tools_off(&agent, "custom-other", true).unwrap();
+        let record = read_record(&agent).unwrap();
+        assert!(tools_off(&record, "custom-do-test") && tools_off(&record, "custom-other"));
+        set_tools_off(&agent, "custom-other", false).unwrap();
+        let mut record = read_record(&agent).unwrap();
+        assert!(!tools_off(&record, "custom-other"));
+        assert!(drop_endpoint(&mut record, "custom-do-test"));
+        assert!(!tools_off(&record, "custom-do-test"));
+        assert!(record.get(TOOLS_OFF).is_none());
         fs::remove_dir_all(agent).unwrap();
     }
 
