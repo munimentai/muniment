@@ -578,6 +578,13 @@ fn tree(root: &Path, files: &mut Files) {
 mod tests {
     use super::*;
 
+    /// A launch key reads the inherited environment, and one test sets a
+    /// variable there, so the tests that build a key take turns.
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     fn folder() -> std::path::PathBuf {
         let path = std::env::temp_dir().join(format!("muniment-pi-reuse-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir_all(&path).unwrap();
@@ -610,6 +617,7 @@ mod tests {
 
     #[test]
     fn a_reopened_conversation_is_the_same_launch() {
+        let _env = env_lock();
         let root = folder();
         let first = launch(&root);
         let mut reopened = first.clone();
@@ -622,6 +630,7 @@ mod tests {
 
     #[test]
     fn every_input_pi_reads_at_start_changes_the_launch() {
+        let _env = env_lock();
         let root = folder();
         let base = launch(&root);
         let key = LaunchKey::of(&base);
@@ -680,6 +689,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_renamed_folder_is_the_same_launch_in_its_new_place() {
+        let _env = env_lock();
         let root = folder();
         let work = root.join("work");
         let named = root.join("Named-work");
