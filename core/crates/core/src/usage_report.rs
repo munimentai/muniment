@@ -1487,6 +1487,26 @@ fn absent_name(
     format!("{name} (offline)")
 }
 
+/// The joined series bucket that `start_ms` falls in. A runtime before the
+/// time zone field starts its days at a fixed offset, an hour off the zone's
+/// own midnight across a daylight saving change, so its day joins the day
+/// that starts within that hour.
+fn series_bucket(
+    series: &mut BTreeMap<i64, BTreeMap<String, Amount>>,
+    start_ms: i64,
+    day: bool,
+) -> &mut BTreeMap<String, Amount> {
+    let start = if day {
+        series
+            .range(start_ms - DAY_SKEW_MS..=start_ms + DAY_SKEW_MS)
+            .next()
+            .map_or(start_ms, |(start, _)| *start)
+    } else {
+        start_ms
+    };
+    series.entry(start).or_default()
+}
+
 /// Joins the answers of every machine, as [`merge_scoped`] does with no
 /// machine filter.
 pub fn merge(answers: Vec<MachineAnswer>, now_ms: i64) -> FleetSummary {
@@ -1573,6 +1593,18 @@ pub fn merge_scoped(answers: Vec<MachineAnswer>, scope: &Scope, now_ms: i64) -> 
     let mut unmetered: BTreeMap<(String, String, String, String), Unmetered> = BTreeMap::new();
     let mut windows: Vec<AccountWindow> = Vec::new();
     let mut machines = Vec::new();
+    // Every bucket of the range shows, an empty one as zero, whatever the
+    // machine filter or the copies leave out: each answer's series names
+    // every bucket start of its range.
+    for summary in answers
+        .iter()
+        .filter_map(|answer| answer.summary.as_ref().ok())
+    {
+        let day = summary.bucket == "day";
+        for bucket in &summary.series {
+            series_bucket(&mut series, bucket.start_ms, day);
+        }
+    }
     let answers = answers
         .into_iter()
         .map(|answer| (answer, false))
@@ -1628,20 +1660,9 @@ pub fn merge_scoped(answers: Vec<MachineAnswer>, scope: &Scope, now_ms: i64) -> 
         };
         let summary = by_family(summary);
         let mut machine = Amount::default();
-        // A runtime before the time zone field starts its days at a fixed
-        // offset, an hour off the zone's own midnight across a daylight
-        // saving change. Its day joins the day that starts within that hour.
         let day = summary.bucket == "day";
         for bucket in summary.series {
-            let start = if day {
-                series
-                    .range(bucket.start_ms - DAY_SKEW_MS..=bucket.start_ms + DAY_SKEW_MS)
-                    .next()
-                    .map_or(bucket.start_ms, |(start, _)| *start)
-            } else {
-                bucket.start_ms
-            };
-            let held = series.entry(start).or_default();
+            let held = series_bucket(&mut series, bucket.start_ms, day);
             for (provider, amount) in bucket.providers {
                 machine.add(&amount);
                 held.entry(provider).or_default().add(&amount);
@@ -3313,5 +3334,103 @@ mod tests {
         .summary;
         assert_eq!(joined.totals.runs, 1);
         assert_eq!(machine_row(&joined, "hub-runtime").amount.runs, 1);
+    }
+
+    /// The bucket starts the joined series holds, oldest first.
+    fn series_starts(joined: &Summary) -> Vec<i64> {
+        joined.series.iter().map(|bucket| bucket.start_ms).collect()
+    }
+
+    #[test]
+    fn a_filtered_range_shows_every_bucket_with_sparse_data_as_zero() {
+        for range in [Range::Week, Range::Month] {
+            let (starts, _) = request_buckets(&request(range), NOW);
+            let own = [run("a", NOW - HOUR, "openai-codex/gpt", 50, None)];
+            let docker = [
+                run("d1", NOW - 2 * 24 * HOUR, "anthropic/claude", 30, None),
+                run("d2", NOW - 3 * 24 * HOUR, "anthropic/claude", 20, None),
+            ];
+            let hubs = run("h", NOW - 5 * 24 * HOUR, "openai-codex/gpt", 10, None);
+            let mut runs = own.to_vec();
+            runs.extend(docker.iter().map(|run| RunUsage {
+                origin: Some(DOCKER.into()),
+                ..run.clone()
+            }));
+            runs.push(RunUsage {
+                origin: Some("hub-runtime".into()),
+                ..hubs.clone()
+            });
+            let local = Summary {
+                machine_id: Some("local-member".into()),
+                ..summarize(
+                    &runs,
+                    &Owners::default(),
+                    Vec::new(),
+                    Vec::new(),
+                    &request(range),
+                    NOW,
+                )
+            };
+            // An older hub lists no copies, so its runs count from the copy
+            // this computer holds.
+            let hub = Summary {
+                replicas: None,
+                ..summarize(
+                    &[hubs],
+                    &Owners::default(),
+                    Vec::new(),
+                    Vec::new(),
+                    &request(range),
+                    NOW,
+                )
+            };
+            let answers = || {
+                vec![
+                    answer("local", "This computer", local.clone()),
+                    answer("hub-runtime", "Factory hub", hub.clone()),
+                ]
+            };
+            // The offline member's copies, this computer's own runs, and an
+            // older hub's runs, each under its filter, and no filter.
+            for machine in [Some(DOCKER), Some("local"), Some("hub-runtime"), None] {
+                let joined = merge_scoped(answers(), &docker_scope(machine), NOW).summary;
+                assert_eq!(series_starts(&joined), starts, "{range:?} {machine:?}");
+                let filled = joined
+                    .series
+                    .iter()
+                    .filter(|bucket| !bucket.providers.is_empty())
+                    .count();
+                let expected = match machine {
+                    Some(DOCKER) => 2,
+                    Some(_) => 1,
+                    None => 4,
+                };
+                assert_eq!(filled, expected, "{range:?} {machine:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_filter_on_an_offline_member_alone_keeps_the_answers_buckets() {
+        let docker = [run(
+            "d1",
+            NOW - 10 * 24 * HOUR,
+            "anthropic/claude",
+            30,
+            None,
+        )];
+        let joined = merge_scoped(
+            vec![answer(
+                "local",
+                "This computer",
+                this_computer(&[], &docker),
+            )],
+            &docker_scope(Some(DOCKER)),
+            NOW,
+        )
+        .summary;
+        let (starts, _) = request_buckets(&request(Range::Month), NOW);
+        assert_eq!(series_starts(&joined), starts);
+        assert_eq!(total_series_runs(&joined), 1);
     }
 }
