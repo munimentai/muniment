@@ -4,7 +4,7 @@
 </script>
 <div class="toolbar">
   {#if filters}<Button icon="sliders-vertical" iconOnly aria-label={count ? `Filters (${count} active)` : 'Filters'} aria-expanded={expanded} aria-controls={controls} onclick={ontoggle} />{/if}
-  <input type="search" autocomplete="off" aria-label={label} {placeholder} bind:value {oninput}>
+  <input type="search" spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" aria-label={label} {placeholder} bind:value {oninput}>
   {@render actions?.()}
 </div>
 <style>

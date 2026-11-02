@@ -104,7 +104,7 @@
       <button type="button" aria-label="Forward" onclick={() => action('forward')}><LucideIcon name="arrow-right" /></button>
       <button type="button" aria-label="Reload" onclick={() => action('reload')}><LucideIcon name="refresh-cw" /></button>
       <button type="button" aria-label="Home" onclick={() => action('navigate', homepage)}><LucideIcon name="house" /></button>
-      <input aria-label="Search or enter address" placeholder="Search or enter address" bind:value={address} spellcheck="false" />
+      <input spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" aria-label="Search or enter address" placeholder="Search or enter address" bind:value={address} />
       <button type="button" aria-label="Browser settings" aria-expanded={settingsOpen} onclick={() => { homepageDraft = homepage; settingsError = ''; settingsOpen = !settingsOpen }}><LucideIcon name="settings" /></button>
     </form>
   {/if}

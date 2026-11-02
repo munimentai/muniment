@@ -48,6 +48,8 @@ it('offers the servers found on this computer under Connect account and connects
   const found = await screen.findByRole('region', { name: 'Found on this computer' })
   expect(found).toHaveTextContent('oMLX')
   expect(found).not.toHaveTextContent('Connected one')
+  // macOS autocorrect never changes a provider query, so the first click picks a result.
+  for (const [name, value] of [['spellcheck', 'false'], ['autocorrect', 'off'], ['autocapitalize', 'off'], ['autocomplete', 'off']]) expect(screen.getByRole('searchbox', { name: 'Search providers' })).toHaveAttribute(name, value)
   // A server without a key file opens the custom endpoint form with its name and address.
   await fireEvent.click(within(found).getByRole('button', { name: /LM Studio/ }))
   expect(screen.getByLabelText('Name')).toHaveValue('LM Studio')

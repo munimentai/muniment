@@ -220,7 +220,7 @@
   {#if error}<p role="alert">{error}</p>{/if}
   <div class="files-content">
     <div class="file-list" use:panelScroll role="group" aria-label="File list" oncontextmenu={event => { if (listing) void context(event,{path:listing.path,directory:true,name:''}) }}>
-      <div class="filter-row"><input aria-label="Filter files" placeholder="Filter files" bind:value={filter} /><button type="button" aria-label="New file" disabled={!listing || busy} onclick={() => startName('new-file')}><LucideIcon name="file-plus" /></button><button type="button" aria-label="New folder" disabled={!listing || busy} onclick={() => startName('new-folder')}><LucideIcon name="folder-plus" /></button></div>
+      <div class="filter-row"><input spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" aria-label="Filter files" placeholder="Filter files" bind:value={filter} /><button type="button" aria-label="New file" disabled={!listing || busy} onclick={() => startName('new-file')}><LucideIcon name="file-plus" /></button><button type="button" aria-label="New folder" disabled={!listing || busy} onclick={() => startName('new-folder')}><LucideIcon name="folder-plus" /></button></div>
       <label class="hidden-toggle"><input type="checkbox" bind:checked={showHidden} />Show hidden files</label>
       {#if status}<p role="status">{status}</p>{/if}
       {#if selection.size > 1}<p>{selection.size} selected</p>{/if}

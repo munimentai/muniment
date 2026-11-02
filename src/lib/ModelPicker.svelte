@@ -122,7 +122,7 @@
 <div bind:this={picker} data-panel="model-picker" data-panel-variant={embedded ? 'embedded' : 'overlay'} data-composer-panel={embedded ? undefined : ''} class="model-picker" class:embedded role={embedded ? 'group' : 'dialog'} aria-label="Model">
   <div class="picker-search">
     <LucideIcon name="search" variant="action" size={14} />
-    <input type="search" data-focus-frame autocomplete="off" aria-label="Search models" placeholder="Search models" bind:this={search} bind:value={query}>
+    <input type="search" data-focus-frame spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" aria-label="Search models" placeholder="Search models" bind:this={search} bind:value={query}>
     {#if !embedded}<PopupClose label="Close model selector" onclick={onclose} />{/if}
   </div>
   <div class="picker-body">

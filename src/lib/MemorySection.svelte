@@ -352,7 +352,7 @@
       {/if}
       {#if facts.length}
         <div class="toolbar">
-          <input class="search" type="search" autocomplete="off" aria-label="Search memories" placeholder="Search memories" bind:value={filter} oninput={() => { limit = PAGE }} />
+          <input class="search" type="search" spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" aria-label="Search memories" placeholder="Search memories" bind:value={filter} oninput={() => { limit = PAGE }} />
           {#if unconfirmed || trustFilter !== 'all'}
             <SegmentedField hideLabel label="Show memories" value={trustFilter} options={[{ value: 'all', label: 'All' }, { value: 'external', label: `Unconfirmed (${unconfirmed})` }]} onchange={(value) => { trustFilter = value; limit = PAGE }} />
           {/if}

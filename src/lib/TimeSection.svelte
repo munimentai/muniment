@@ -54,7 +54,7 @@
     {#if choosing}
       <Row title="Zone" stacked>
         <div class="zone-picker">
-          <input type="search" aria-label="Search time zones" placeholder="Search time zones" spellcheck="false" autocomplete="off" bind:value={query} />
+          <input type="search" spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" aria-label="Search time zones" placeholder="Search time zones" bind:value={query} />
           <div class="zones" role="listbox" aria-label="Time zones">{#each matches as zone (zone)}<button type="button" role="option" aria-selected={zone === setting.zone} onclick={() => save({ zone })}>{zone}</button>{:else}<p class="empty">No time zone matches.</p>{/each}</div>
         </div>
       </Row>

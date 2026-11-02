@@ -4200,7 +4200,7 @@
             <!-- One search over every page and part. The platform's find shortcut focuses it. -->
             <div class="settings-search">
               <LucideIcon name="search" size={14} />
-              <input id="settings-search" type="search" data-focus-frame placeholder="Search settings" aria-label="Search settings" aria-keyshortcuts={isMacPlatform ? 'Meta+F' : 'Control+F'} autocomplete="off" spellcheck="false" bind:value={settingsQuery}>
+              <input id="settings-search" type="search" data-focus-frame placeholder="Search settings" spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" aria-label="Search settings" aria-keyshortcuts={isMacPlatform ? 'Meta+F' : 'Control+F'} bind:value={settingsQuery}>
             </div>
             <nav class="side-scroll" aria-label="Settings sections" use:panelScroll>
               {#each settingsNav(settingsQuery, { remote: !!remoteRuntime }) as [id, label, icon, parts] (id)}
@@ -4219,7 +4219,7 @@
                 <LucideIcon name="square-pen" /><span>New</span>
               </button>
               {#if selectedThreadIds.size}<div class="selection-bar"><span role="status">{selectedThreadIds.size} selected</span><button type="button" disabled={switchLocked || [...selectedThreadIds].includes(runningThreadId)} onclick={() => askToDeleteThread([...selectedThreadIds][0])}>Delete…</button><button type="button" onclick={clearThreadSelection}>Cancel</button></div>
-              {:else}<div class="thread-search-field"><LucideIcon name="search" size={14} /><input class="thread-search" type="search" autocomplete="off" aria-label="Search threads" placeholder="Search" bind:this={threadSearchInput} bind:value={threadSearch} oninput={filterThreads} />{#if !threadSearch}<button type="button" class="palette-open" aria-label="Open the command palette" aria-keyshortcuts={searchKeyShortcut} onclick={() => { paletteOpen = true }}><kbd>{shortcutDisplayLabel(searchKeyShortcut)}</kbd></button>{/if}</div>{/if}
+              {:else}<div class="thread-search-field"><LucideIcon name="search" size={14} /><input class="thread-search" type="search" spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" aria-label="Search threads" placeholder="Search" bind:this={threadSearchInput} bind:value={threadSearch} oninput={filterThreads} />{#if !threadSearch}<button type="button" class="palette-open" aria-label="Open the command palette" aria-keyshortcuts={searchKeyShortcut} onclick={() => { paletteOpen = true }}><kbd>{shortcutDisplayLabel(searchKeyShortcut)}</kbd></button>{/if}</div>{/if}
             </div>
             <div class="side-scroll" use:panelScroll use:keepSidebarScroll>
             {#if folderAccess}<FolderAccessPrompt access={folderAccess} onallow={() => folderAccessWatch?.allow()} />{/if}
