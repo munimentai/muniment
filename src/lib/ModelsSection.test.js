@@ -52,6 +52,11 @@ it('offers the servers found on this computer under Connect account and connects
   await fireEvent.click(within(found).getByRole('button', { name: /LM Studio/ }))
   expect(screen.getByLabelText('Name')).toHaveValue('LM Studio')
   expect(screen.getByLabelText('Server URL')).toHaveValue('http://127.0.0.1:1234/v1')
+  // macOS autocorrect and spelling never change a model id, an address or a name as it is typed.
+  for (const field of ['Name', 'Server URL', 'Models, one per line']) {
+    for (const [name, value] of [['spellcheck', 'false'], ['autocorrect', 'off'], ['autocapitalize', 'off']]) expect(screen.getByLabelText(field)).toHaveAttribute(name, value)
+  }
+  expect(screen.getByLabelText('Models, one per line')).toHaveAttribute('autocomplete', 'off')
   await fireEvent.click(screen.getByRole('button', { name: 'Back' }))
   await fireEvent.click(within(await screen.findByRole('region', { name: 'Found on this computer' })).getByRole('button', { name: /oMLX/ }))
   expect(tauri.invoke).toHaveBeenCalledWith('onboarding_connect_server', { id: 'omlx', baseUrl: 'http://127.0.0.1:8000/v1', key: null, keyFromFile: true })

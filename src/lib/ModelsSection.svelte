@@ -562,7 +562,7 @@
       <Group label={`${provider.name} key`}>
       <div class="connection-field"><label for="provider-key">{provider.name} API key</label><input id="provider-key" type="password" autocomplete="off" bind:value={key} disabled={pending}></div>
       {#each keyFields as [name, label] (name)}
-        <div class="connection-field"><label for={`key-setting-${name}`}>{label}</label><input id={`key-setting-${name}`} type="text" autocomplete="off" value={keySettings[name] ?? ''} oninput={(event) => { keySettings = { ...keySettings, [name]: event.currentTarget.value } }} disabled={pending}></div>
+        <div class="connection-field"><label for={`key-setting-${name}`}>{label}</label><input id={`key-setting-${name}`} type="text" spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" value={keySettings[name] ?? ''} oninput={(event) => { keySettings = { ...keySettings, [name]: event.currentTarget.value } }} disabled={pending}></div>
       {/each}
       </Group>
       {#if formError}<p class="support" role="alert">{formError}</p>{/if}
@@ -570,7 +570,7 @@
     {:else if method === 'ollama'}
       <p class="support">Point Muniment at a running Ollama server. It asks the server for every model it serves.</p>
       <Group label="Ollama server">
-      <div class="connection-field"><label for="provider-base-url">Ollama server URL</label><input id="provider-base-url" type="url" placeholder="http://localhost:11434/v1" autocomplete="url" bind:value={baseUrl} disabled={pending}></div>
+      <div class="connection-field"><label for="provider-base-url">Ollama server URL</label><input id="provider-base-url" type="url" placeholder="http://localhost:11434/v1" autocomplete="url" spellcheck="false" autocorrect="off" autocapitalize="off" bind:value={baseUrl} disabled={pending}></div>
       <div class="connection-field"><label for="ollama-key">API key (optional)</label><input id="ollama-key" type="password" autocomplete="off" placeholder={editingEndpoint ? 'Leave blank to keep the saved key' : 'For a server behind a key'} bind:value={key} disabled={pending}></div>
       </Group>
       {#if formError}<p class="support" role="alert">{formError}</p>{/if}
@@ -579,11 +579,11 @@
       <p class="support">Any OpenAI-compatible server: {provider.id === 'lmstudio' ? 'LM Studio on this device.' : provider.id === 'vllm' ? 'a running vLLM server.' : 'a LiteLLM proxy or another gateway.'}</p>
       <Group label="Endpoint">
       {#if provider.id === 'custom'}
-        <div class="connection-field"><label for="endpoint-name">Name</label><input id="endpoint-name" type="text" bind:value={endpointName} disabled={pending || !!editingEndpoint}></div>
+        <div class="connection-field"><label for="endpoint-name">Name</label><input id="endpoint-name" type="text" spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" bind:value={endpointName} disabled={pending || !!editingEndpoint}></div>
       {/if}
-      <div class="connection-field"><label for="provider-base-url">Server URL</label><input id="provider-base-url" type="url" placeholder={provider.baseUrl ?? 'http://localhost:4000/v1'} autocomplete="url" bind:value={baseUrl} disabled={pending}></div>
+      <div class="connection-field"><label for="provider-base-url">Server URL</label><input id="provider-base-url" type="url" placeholder={provider.baseUrl ?? 'http://localhost:4000/v1'} autocomplete="url" spellcheck="false" autocorrect="off" autocapitalize="off" bind:value={baseUrl} disabled={pending}></div>
       <div class="connection-field"><label for="endpoint-key">API key (optional)</label><input id="endpoint-key" type="password" autocomplete="off" placeholder={editingEndpoint ? 'Leave blank to keep the saved key' : ''} bind:value={key} disabled={pending}></div>
-      <div class="connection-field"><label for="endpoint-models">Models, one per line</label><textarea id="endpoint-models" rows="3" bind:value={endpointModels} disabled={pending}></textarea><p class="support">Leave the list empty and Muniment asks the server for its models.</p></div>
+      <div class="connection-field"><label for="endpoint-models">Models, one per line</label><textarea id="endpoint-models" rows="3" spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" bind:value={endpointModels} disabled={pending}></textarea><p class="support">Leave the list empty and Muniment asks the server for its models.</p></div>
       </Group>
       {#if formError}<p class="support" role="alert">{formError}</p>{/if}
       <button type="button" data-variant="primary" disabled={pending || !baseUrl.trim() || (provider.id === 'custom' && !endpointName.trim())} onclick={saveEndpoint}>Save endpoint</button>
