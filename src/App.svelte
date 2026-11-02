@@ -1602,6 +1602,7 @@
   let titleActionsButton = $state()
   // The rows a confirm covers, and the rows a Shift or Command click gathered.
   let deletingThreadIds = $state([])
+  let deletingThreadTitle = $state(null)
   let selectedThreadIds = $state(new Set())
   let selectionAnchor = null
   let permissionAnswer = $state(null)
@@ -2560,6 +2561,7 @@
   function askToDeleteThread(threadId) {
     if (deletionHoldsRun(threadId)) return
     deleteFromTitle = !!threadMenu?.fromTitle
+    deletingThreadTitle = threadMenu?.threadId === threadId ? threadMenu.title : null
     closeThreadMenu()
     deletingThreadIds = deletionTargets(threadId)
     deletingThreadId = threadId
@@ -2594,13 +2596,15 @@
 
   // The row's actions live in a menu on right-click, Control-click or the
   // keyboard's context menu key, placed at the pointer like the native one.
-  function openThreadMenu(event, threadId, fromTitle = false) {
+  // The menu names the row it opened from: an agent's creation chat is no
+  // listed summary, so its row's title travels with its id.
+  function openThreadMenu(event, threadId, fromTitle = false, title = null) {
     if (deletingThreadId === threadId) return
     event.preventDefault()
     if (selectedThreadIds.size && !selectedThreadIds.has(threadId)) clearThreadSelection()
     const row = event.currentTarget.getBoundingClientRect()
     const fromKeyboard = !event.clientX && !event.clientY
-    threadMenu = { threadId, fromTitle, x: fromTitle || fromKeyboard ? row.left : event.clientX, y: fromTitle || fromKeyboard ? row.bottom : event.clientY }
+    threadMenu = { threadId, title, fromTitle, x: fromTitle || fromKeyboard ? row.left : event.clientX, y: fromTitle || fromKeyboard ? row.bottom : event.clientY }
     document.addEventListener('pointerdown', closeThreadMenuOutside, true)
   }
 
@@ -4060,7 +4064,7 @@
                 {@const selected = selectedThreadIds.has(summary.threadId)}
                 {@const rowId = nextRowId()}
                 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-                <li class="thread-record" class:selected draggable={threadMovable(summary.threadId) && rowRename?.threadId !== summary.threadId ? 'true' : undefined} ondragstart={(event) => threadDragStart(event, summary.threadId)} oncontextmenu={(event) => openThreadMenu(event, summary.threadId)}>
+                <li class="thread-record" class:selected draggable={threadMovable(summary.threadId) && rowRename?.threadId !== summary.threadId ? 'true' : undefined} ondragstart={(event) => threadDragStart(event, summary.threadId)} oncontextmenu={(event) => openThreadMenu(event, summary.threadId, false, rowTitle)}>
                   {#if rowRename?.threadId === summary.threadId}
                     <form class="row-rename" onsubmit={(event) => { event.preventDefault(); void saveSidebarName() }}>
                       <input aria-label="Thread name" maxlength="80" spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" bind:this={rowRenameInput} bind:value={rowRename.title} onkeydown={sidebarNameKeydown} disabled={rowRenamePending} />
@@ -4075,7 +4079,7 @@
                     <button class="thread-row" class:selected aria-labelledby={`${rowId}-title`} aria-describedby={`${rowId}-lead ${rowId}-agent ${rowId}-meta`} data-thread-id={summary.threadId} data-selected={selected ? 'true' : undefined} data-running={running ? 'true' : undefined} aria-current={current ? 'true' : undefined} aria-keyshortcuts={rowPosition > 0 && rowPosition <= 9 ? threadRowShortcut(rowPosition) : undefined} aria-disabled={runLocked ? 'true' : undefined} onclick={(event) => sidebarRowClick(event, summary)} onkeydown={(event) => threadRowKeydown(event, summary.threadId)}>{@render rowMark(selected)}{@render rowBody(summary, rowTitle, rowId)}{#if running}<span class="visually-hidden">Running</span>{/if}</button>
                   {/if}
                   {#if deletingThreadId !== summary.threadId && rowRename?.threadId !== summary.threadId}
-                    <button type="button" class="quiet thread-actions" aria-label={`Actions for ${rowTitle}`} aria-haspopup="menu" aria-expanded={threadMenu?.threadId === summary.threadId} onclick={(event) => openThreadMenu(event, summary.threadId)}><LucideIcon name="ellipsis-vertical" variant="action" size={14} /></button>
+                    <button type="button" class="quiet thread-actions" aria-label={`Actions for ${rowTitle}`} aria-haspopup="menu" aria-expanded={threadMenu?.threadId === summary.threadId} onclick={(event) => openThreadMenu(event, summary.threadId, false, rowTitle)}><LucideIcon name="ellipsis-vertical" variant="action" size={14} /></button>
                   {/if}
 
                 </li>
@@ -4143,7 +4147,7 @@
             {/if}
             <!-- The title's actions act on the listed thread, a new agent's chat with a draft too. An empty
                  new thread holds none, so the button stays in place, muted, and names why. -->
-            <button type="button" class="quiet title-thread-actions" aria-label="Thread actions" aria-haspopup="menu" aria-expanded={!!threadMenu?.fromTitle} aria-disabled={listedThreadId ? undefined : 'true'} aria-describedby={listedThreadId ? undefined : 'title-thread-actions-reason'} data-tooltip={listedThreadId ? undefined : THREAD_ACTIONS_REASON} disabled={threadSwitching} bind:this={titleActionsButton} onclick={(event) => { if (listedThreadId) openThreadMenu(event, currentThreadId, true) }}><LucideIcon name="ellipsis-vertical" variant="action" size={14} /></button>
+            <button type="button" class="quiet title-thread-actions" aria-label="Thread actions" aria-haspopup="menu" aria-expanded={!!threadMenu?.fromTitle} aria-disabled={listedThreadId ? undefined : 'true'} aria-describedby={listedThreadId ? undefined : 'title-thread-actions-reason'} data-tooltip={listedThreadId ? undefined : THREAD_ACTIONS_REASON} disabled={threadSwitching} bind:this={titleActionsButton} onclick={(event) => { if (listedThreadId) openThreadMenu(event, currentThreadId, true, currentThreadTitle) }}><LucideIcon name="ellipsis-vertical" variant="action" size={14} /></button>
             {#if !listedThreadId}<span id="title-thread-actions-reason" class="visually-hidden">{THREAD_ACTIONS_REASON}</span>{/if}
             {/if}
             {/if}
@@ -4156,8 +4160,8 @@
           </div>
         </header>
                   {#if threadMenu}
-                    {@const summary = threadSummaries.find((item) => item.threadId === threadMenu.threadId) || { threadId: threadMenu.threadId, title: currentThreadTitle }}
-                    {@const rowTitle = summary.title || 'New thread'}
+                    {@const summary = threadSummaries.find((item) => item.threadId === threadMenu.threadId) || { threadId: threadMenu.threadId, title: threadMenu.title }}
+                    {@const rowTitle = threadMenu.title || summary.title || 'New thread'}
                     {@const running = summary.threadId === runningThreadId}
                     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
                     <div class="thread-menu" use:floatingMenu role="menu" tabindex="-1" aria-label={`${rowTitle} actions`} style:left={`${threadMenu.x}px`} style:top={`${threadMenu.y}px`} onkeydown={threadMenuKeydown} onfocusout={menuFocusOut} use:focusMenuOnMount>
@@ -4773,7 +4777,7 @@
   {#if reviewing && currentThreadId}{#await loadReviewChanges() then module}{@const Review = module.default}<Review {tauri} runtime={composerRuntime} threadId={currentThreadId} turns={reviewTurns} initialRunId={reviewing.runId} onclose={() => { reviewing = null }} />{/await}{/if}
   {#if rewinding && currentThreadId}{#await loadRewindDialog() then module}{@const Rewind = module.default}<Rewind {tauri} runtime={composerRuntime} threadId={currentThreadId} runId={rewinding.runId} prompt={rewinding.prompt} ondone={finishRewind} onclose={() => { rewinding = null }} />{/await}{/if}
   {#if deletingThreadId}
-    <ConfirmDialog title={deletingThreadIds.length > 1 ? `Delete ${deletingThreadIds.length} threads?` : `Delete ${threadSummaries.find(t => t.threadId === deletingThreadId)?.title || 'this thread'}?`} cancelLabel="Cancel" confirmLabel={deletingThreadIds.length > 1 ? `Delete ${deletingThreadIds.length} threads` : 'Delete'} destructive onDecision={approve => approve ? confirmDeleteThread(deletingThreadId) : cancelDeleteThread()}>
+    <ConfirmDialog title={deletingThreadIds.length > 1 ? `Delete ${deletingThreadIds.length} threads?` : `Delete ${threadSummaries.find(t => t.threadId === deletingThreadId)?.title || deletingThreadTitle || 'this thread'}?`} cancelLabel="Cancel" confirmLabel={deletingThreadIds.length > 1 ? `Delete ${deletingThreadIds.length} threads` : 'Delete'} destructive onDecision={approve => approve ? confirmDeleteThread(deletingThreadId) : cancelDeleteThread()}>
       {#if deletingThreadIds.length > 1}
         {@const titles = deletingThreadIds.map(id => threadSummaries.find(t => t.threadId === id)?.title || 'New thread')}
         <p>These threads and their messages will be deleted:</p>

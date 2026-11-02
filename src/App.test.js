@@ -9951,6 +9951,37 @@ describe('agent chat', () => {
     expect(within(rows()).queryByText('New agent', { selector: '.thread-row-title' })).toBeNull()
   })
 
+  it('opens the sidebar actions of a saved agent\'s creation chat for that chat while another thread is open', async () => {
+    threadSummaryResult = [{ threadId: 'thread-x', title: 'Dummy reply', updatedAt: new Date().toISOString() }]
+    chatMock([])
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation((command, payload) => command === 'chat_delete_thread' ? Promise.resolve(true) : original(command, payload))
+    render(App)
+    await screen.findByPlaceholderText('Ask anything')
+    await openSidebarPage('Agents')
+    const panel = await screen.findByRole('region', { name: 'Agents' })
+    await fireEvent.click(within(await within(panel).findByRole('region', { name: 'Give an agent a job' })).getByRole('button', { name: /^Weekly report/ }))
+    const reply = await screen.findByRole('article', { name: 'Draft: Weekly recap' })
+    await fireEvent.click(within(reply).getByRole('button', { name: 'Save' }))
+    const list = screen.getByRole('list', { name: 'Projects list' })
+    await waitFor(() => expect(within(list).getAllByText('Weekly recap', { selector: '.thread-row-title' })).toHaveLength(1))
+    // Thread X opens, and the creation chat is a row with no listed summary.
+    await fireEvent.click(within(list).getByRole('button', { name: 'Dummy reply' }))
+    await waitFor(() => expect(document.querySelector('#sidebar [data-thread-id="thread-x"]')).toHaveAttribute('aria-current', 'true'))
+    await fireEvent.click(within(list).getByRole('button', { name: 'Actions for Weekly recap' }))
+    const menu = screen.getByRole('menu', { name: 'Weekly recap actions' })
+    expect(within(menu).getByRole('menuitem', { name: 'Delete Weekly recap' })).toBeInTheDocument()
+    await fireEvent.click(within(menu).getByRole('menuitem', { name: 'Rename' }))
+    expect(within(list).getByRole('textbox', { name: 'Thread name' })).toHaveValue('Weekly recap')
+    await fireEvent.click(within(list).getByRole('button', { name: 'Cancel' }))
+    await fireEvent.click(within(list).getByRole('button', { name: 'Actions for Weekly recap' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete Weekly recap' }))
+    const confirm = screen.getByRole('dialog', { name: 'Delete Weekly recap?' })
+    await fireEvent.click(within(confirm).getByRole('button', { name: 'Delete' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_delete_thread', { threadId: CHAT }))
+    expect(invoke).not.toHaveBeenCalledWith('chat_delete_thread', { threadId: 'thread-x' })
+  })
+
   it('names a deleted agent\'s kept folder in a composer notice that stays past the notice timeout, reveals it and leaves on dismiss', async () => {
     const saved = []
     chatMock(saved)
