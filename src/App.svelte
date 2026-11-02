@@ -1160,6 +1160,7 @@
   const fileContext = $derived(folderAgent ? {agentId:folderAgent} : agentsOpen ? {catalog:'agents'} : artifactsOpen ? {catalog:'artifacts'} : projectsOpen ? (settingsProject && sidebarProjectById[settingsProject]?.kind === 'project' ? {projectId:settingsProject} : catalogProject ? {projectId:catalogProject} : {catalog:'projects'}) : selectedAgent ? {agentId:selectedAgent} : currentCreation?.kind === 'artifact' && currentCreation.resultId ? {artifactId:currentCreation.resultId} : {threadId:currentThreadId, projectId:projectCatalog.threads[currentThreadId] || null, threadTitle:threadInFlight ? undefined : currentThreadTitle})
   let expandedProjects = $state(new Set())
   let projectForm = $state(null)
+  let revealProject = $state(null)
   let projectName = $state('')
   let projectBusy = $state(false)
   let projectError = $state('')
@@ -2038,7 +2039,7 @@
   }
   async function createCatalogProject(name) {
     projectForm = 'new'; projectName = name
-    await saveProject()
+    await saveProject({ reveal: false })
     return !projectError
   }
   function selectProject(projectId) {
@@ -2085,7 +2086,8 @@
     await openAgentChat({ projectId: project.id })
   }
 
-  async function saveProject() {
+  // A project the sidebar's form creates is revealed in the sidebar list.
+  async function saveProject({ reveal = true } = {}) {
     if (remoteSelected(runtimeList)) await onThisComputer()
     if (projectBusy || !projectName.trim()) return
     projectBusy = true
@@ -2098,7 +2100,7 @@
       projectName = ''
       projectError = ''
       projectBusy = false
-      if (creating) await selectProject(id)
+      if (creating) { await selectProject(id); if (reveal) revealProject = id }
     } catch (error) { projectError = String(error); projectBusy = false }
   }
 
@@ -4191,7 +4193,7 @@
             {#if swarm.absence.paused}<AbsencePrompt {tauri} runtime={swarm.self[LOCAL_RUNTIME_ID] ? LOCAL_RUNTIME_ID : Object.keys(swarm.self)[0]} pausedAt={swarm.absence.paused_at} count={roster.filter(agent => agent.paused_reason === 'absence').length} onresumed={() => refreshAgents()} />{/if}
             <SidebarSections sidebar={shownSidebar} row={coreRow} fresh={freshRow} library={libraryRow} query={threadSearch} pages={sidebarPages} owners={projectOwners}
               showFresh={launchSettled && showFreshThread} disabled={switchLocked} expanded={expandedProjects} bind:archivedOpen
-              {projectForm} bind:projectName {projectBusy} {projectError}
+              {projectForm} bind:projectName {projectBusy} {projectError} reveal={revealProject} onrevealed={() => { revealProject = null }}
               onpage={openSidebarPage} ontoggleproject={selectProject} onnewthread={newProjectThread} onsettings={showProjectSettings} dragType={THREAD_DRAG} onmovethread={(threadId, projectId) => { void moveThread(threadId, projectId) }}
               onrenameproject={(id, name) => { projectForm = id; projectName = name }} onopenfolder={openProjectFolder}
               ondeleteproject={(project) => { deletingProject = { id: project.id, name: project.name, count: projectThreadCount(project.id) } }}

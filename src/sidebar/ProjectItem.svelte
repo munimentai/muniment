@@ -13,7 +13,8 @@
   import { statusTone } from './sidebar-model.js'
   // `owner` names the fleet member that holds a shared project's files.
   // `ondropthread` makes the row a drop target for a thread row dragged as `dragType`.
-  let { owner = null, name, triggers = '', status = 'read', statusLabel = '', expanded, disabled = false, dragType = '', ontoggle, onnew, onsettings, onrename, onopen, ongroup, ondelete, ondropthread } = $props()
+  // `current` marks the row with the selection, as a project just created.
+  let { current = false, owner = null, name, triggers = '', status = 'read', statusLabel = '', expanded, disabled = false, dragType = '', ontoggle, onnew, onsettings, onrename, onopen, ongroup, ondelete, ondropthread } = $props()
   let open = $state(false)
   let dropping = $state(false)
   const carries = (event) => !!ondropthread && !!dragType && [...(event.dataTransfer?.types ?? [])].includes(dragType)
@@ -67,8 +68,8 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="project-row" class:dropping style:--controls-width={`${(actions.length ? 2 : 1) * 24}px`} bind:this={row} ondragover={dragOver} ondragenter={dragOver} ondragleave={() => { dropping = false }} ondrop={drop}>
-  <button class="project-title" aria-label={[`Project ${name}`, statusLabel, triggers].filter(Boolean).join(', ')} aria-expanded={expanded} onclick={ontoggle} oncontextmenu={contextMenu} onkeydown={contextKey}><LucideIcon name={icon} /><span>{name}</span>{#if statusLabel}<StatusChip tone={statusTone(status)}>{statusLabel}</StatusChip>{/if}{#if triggers}<em class="triggers"><span class="trigger-words">{triggerParts[0]}</span>{#if triggerParts[1]}<span class="trigger-more">{triggerParts[1]}</span>{/if}</em>{/if}{#if owner}<OwnerChip machine={owner} prefix="files on" compact />{/if}</button>
+<div class="project-row" class:dropping class:current style:--controls-width={`${(actions.length ? 2 : 1) * 24}px`} bind:this={row} ondragover={dragOver} ondragenter={dragOver} ondragleave={() => { dropping = false }} ondrop={drop}>
+  <button class="project-title" aria-label={[`Project ${name}`, statusLabel, triggers].filter(Boolean).join(', ')} aria-expanded={expanded} aria-current={current || undefined} data-project-title onclick={ontoggle} oncontextmenu={contextMenu} onkeydown={contextKey}><LucideIcon name={icon} /><span>{name}</span>{#if statusLabel}<StatusChip tone={statusTone(status)}>{statusLabel}</StatusChip>{/if}{#if triggers}<em class="triggers"><span class="trigger-words">{triggerParts[0]}</span>{#if triggerParts[1]}<span class="trigger-more">{triggerParts[1]}</span>{/if}</em>{/if}{#if owner}<OwnerChip machine={owner} prefix="files on" compact />{/if}</button>
   <!-- The controls sit over the row's right end and show on hover or focus. The title then leaves their width free, so they never cover the triggers. -->
   <span class="project-controls" class:visible={open}>
     <button class="project-control" aria-label={`New thread in ${name}`} {disabled} onclick={onnew}><LucideIcon name="square-pen" size={14} /></button>
@@ -94,7 +95,7 @@
   .trigger-words { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .trigger-more { flex: none; }
   .project-title:hover { background: var(--faint); }
-  .dropping .project-title { background: var(--selected); color: var(--on-selected); }
+  .dropping .project-title, .current .project-title { background: var(--selected); color: var(--on-selected); }
   .project-controls { position: absolute; top: 0; right: 0; bottom: 0; display: flex; align-items: center; border-radius: var(--radius-control); background: var(--faint); opacity: 0; pointer-events: none; }
   .project-row:hover .project-controls, .project-row:focus-within .project-controls, .project-controls.visible { opacity: 1; pointer-events: auto; }
   @media (hover: hover) { .project-row:hover .project-title, .project-row:focus-within .project-title, .project-row:has(.project-controls.visible) .project-title { padding-right: calc(8px + var(--controls-width)); } }

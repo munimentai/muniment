@@ -3316,8 +3316,19 @@ describe('thread name', () => {
     // macOS autocorrect and spelling never change a name as it is typed.
     for (const [name, value] of [['spellcheck', 'false'], ['autocorrect', 'off'], ['autocapitalize', 'off'], ['autocomplete', 'off']]) expect(screen.getByRole('textbox', { name: 'Project name' })).toHaveAttribute(name, value)
     await fireEvent.input(screen.getByRole('textbox', { name: 'Project name' }), { target: { value: 'Contracts' } })
-    await fireEvent.click(screen.getByRole('button', { name: 'Create' }))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Project Contracts' })).toHaveAttribute('aria-expanded', 'true'))
+    // Core may place the new project below the fold, so Create scrolls it into view and marks it.
+    const scrolled = []
+    Element.prototype.scrollIntoView = function (options) { scrolled.push([this.getAttribute('aria-label'), options]) }
+    try {
+      await fireEvent.click(screen.getByRole('button', { name: 'Create' }))
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Project Contracts' })).toHaveAttribute('aria-expanded', 'true'))
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Project Contracts' })).toHaveFocus())
+      expect(screen.getByRole('button', { name: 'Project Contracts' })).toHaveAttribute('aria-current', 'true')
+      expect(scrolled).toContainEqual(['Project Contracts', { block: 'nearest' }])
+      // The mark lasts while the new row holds focus.
+      screen.getByRole('button', { name: 'Project Contracts' }).blur()
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Project Contracts' })).not.toHaveAttribute('aria-current'))
+    } finally { delete Element.prototype.scrollIntoView }
     expect(invoke).not.toHaveBeenCalledWith('chat_new_thread', expect.anything())
     await fireEvent.click(screen.getByRole('button', { name: 'New thread in Contracts' }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_new_thread', { projectId: 'created' }))

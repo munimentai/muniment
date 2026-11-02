@@ -17,6 +17,9 @@
     sidebar, row, fresh = null, showFresh = false, query = '', pages = [], owners = {},
     disabled = false, expanded = new Set(), archivedOpen = $bindable(false),
     projectForm = null, projectName = $bindable(''), projectBusy = false, projectError = '',
+    // A project just created scrolls into view, takes focus and carries the
+    // selection until focus leaves it, wherever core places it in the list.
+    reveal = null, onrevealed,
     onpage, ontoggleproject, onnewthread, onsettings, onrenameproject, onopenfolder, ondeleteproject, ongroup, onnewproject, onsaveproject, oncancelproject, onretryprojects, library, footer,
     // A thread row dropped on a project of this computer moves there.
     dragType = '', onmovethread,
@@ -28,6 +31,21 @@
   // The name field takes focus as it opens, after a menu or the palette that
   // opened it returns focus, with its text selected so typing replaces the name.
   const focusField = (node) => { void tick().then(() => { node.focus(); node.select() }) }
+  let projectList = $state()
+  let marked = $state(null)
+  $effect(() => {
+    const id = reveal
+    if (!id || searching || !sidebar.projects.some((project) => project.id === id)) return
+    void tick().then(() => {
+      const title = [...(projectList?.querySelectorAll('[data-project-id]') ?? [])].find((entry) => entry.dataset.projectId === id)?.querySelector('[data-project-title]')
+      if (!title) return
+      title.scrollIntoView?.({ block: 'nearest' })
+      title.focus()
+      marked = id
+      title.addEventListener('blur', () => { if (marked === id) marked = null }, { once: true })
+      onrevealed?.(id)
+    })
+  })
 </script>
 
 <div>
@@ -54,14 +72,14 @@
           <button type="button" disabled={projectBusy} onclick={oncancelproject}>Cancel</button>
         </form>
       {/key}{/if}
-      <ul class="thread-list" aria-label="Projects list">
+      <ul class="thread-list" aria-label="Projects list" bind:this={projectList}>
         {#each sidebar.projects as project, index (project.id)}
           {#if index === freshAt}{@render fresh?.()}{/if}
           {#if project.kind === 'thread'}
             {@render row(project.threads[0])}
           {:else}
-            <li class="project-entry">
-              <ProjectItem name={project.name} triggers={project.triggers} status={project.status} statusLabel={project.status_label} owner={owners[project.id] ?? null} expanded={expanded.has(project.id)} disabled={disabled || projectBusy}
+            <li class="project-entry" data-project-id={project.id}>
+              <ProjectItem current={marked === project.id} name={project.name} triggers={project.triggers} status={project.status} statusLabel={project.status_label} owner={owners[project.id] ?? null} expanded={expanded.has(project.id)} disabled={disabled || projectBusy}
                 ontoggle={() => ontoggleproject(project.id)} onnew={() => onnewthread(project.id)} onsettings={() => onsettings(project.id)}
                 onrename={project.kind === 'project' && !project.owner ? () => onrenameproject(project.id, project.name) : undefined}
                 onopen={project.kind === 'project' && !project.owner ? () => onopenfolder(project.id) : undefined}
