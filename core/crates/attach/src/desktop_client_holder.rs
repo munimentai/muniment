@@ -102,7 +102,7 @@ impl DesktopClientHolder {
         self.with_client(|client| client.rename_thread(thread_id, title))
     }
 
-    pub fn delete_thread(&self, thread_id: &str) -> Result<(), ClientError> {
+    pub fn delete_thread(&self, thread_id: &str) -> Result<Value, ClientError> {
         self.with_client(|client| client.delete_thread(thread_id))
     }
 

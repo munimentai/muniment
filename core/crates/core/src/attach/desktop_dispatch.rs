@@ -1882,14 +1882,14 @@ pub(super) fn dispatch_request<S: ThreadListService>(
                 thread_id.as_str()
             );
         }
-        service.delete_thread(
+        let answer = service.delete_thread(
             workspace,
             &thread_id,
             &request.request_id,
             idempotency_key,
             provenance,
         )?;
-        return Ok(response_only(serde_json::json!({})));
+        return Ok(response_only(answer));
     }
     if request.operation == Operation::RunCursorAck {
         #[derive(serde::Deserialize)]

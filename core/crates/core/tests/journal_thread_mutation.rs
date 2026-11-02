@@ -508,17 +508,22 @@ fn a_deleted_threads_session_folder_goes_unless_it_holds_the_users_files() {
     let (swept, swept_folder) = thread();
     let (live, live_folder) = thread();
 
-    // A delete removes the folder that holds only Muniment's files.
+    // A delete removes the folder that holds only Muniment's files, and
+    // answers the folder that stays with the user's files.
+    let mut kept = Vec::new();
     for thread in [&internal, &mine] {
-        delete_thread_with_creation_now(
-            &mut journal,
-            &profile,
-            Some("owner"),
-            thread,
-            &provenance(Some("owner")),
-        )
-        .unwrap();
+        kept.push(
+            delete_thread_with_creation_now(
+                &mut journal,
+                &profile,
+                Some("owner"),
+                thread,
+                &provenance(Some("owner")),
+            )
+            .unwrap(),
+        );
     }
+    assert_eq!(kept, [None, Some(mine_folder.clone())]);
     assert!(!internal_folder.exists());
     assert_eq!(
         std::fs::read_to_string(mine_folder.join("report.md")).unwrap(),

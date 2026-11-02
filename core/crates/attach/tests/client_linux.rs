@@ -1270,7 +1270,39 @@ fn desktop_thread_mutations_match_the_golden_request_bodies() {
     });
     let mut client = handshake_desktop_client_stream(client, "0.0.1", SHORT).unwrap();
     client.rename_thread("thread-1", "Renamed thread").unwrap();
-    client.delete_thread("thread-1").unwrap();
+    assert_eq!(
+        client.delete_thread("thread-1").unwrap(),
+        serde_json::json!({})
+    );
+    worker.join().unwrap();
+}
+
+#[test]
+fn a_thread_delete_answers_the_folder_that_stays() {
+    let kept = serde_json::json!({
+        "folder_kept": "/home/me/muniment/sessions/Report-12345678",
+        "message": "The thread's folder holds your files, so it stays."
+    });
+    let answer = kept.clone();
+    let (client, mut server) = UnixStream::pair().unwrap();
+    let worker = thread::spawn(move || {
+        complete_desktop_client_handshake(&mut server);
+        let request = read_client_value(&mut server);
+        let request_id = request["request_id"].as_str().unwrap();
+        server
+            .write_all(
+                &encode_frame(&Response {
+                    protocol: Protocol,
+                    request_id: Id::new(request_id).unwrap(),
+                    ok: Success,
+                    body: answer,
+                })
+                .unwrap(),
+            )
+            .unwrap();
+    });
+    let mut client = handshake_desktop_client_stream(client, "0.0.1", SHORT).unwrap();
+    assert_eq!(client.delete_thread("thread-1").unwrap(), kept);
     worker.join().unwrap();
 }
 
@@ -1354,7 +1386,7 @@ fn desktop_thread_mutations_reject_invalid_answers_and_map_errors() {
             let result = if rename {
                 client.rename_thread("thread-1", "Renamed thread")
             } else {
-                client.delete_thread("thread-1")
+                client.delete_thread("thread-1").map(drop)
             };
             assert_eq!(result, Err(expected));
             worker.join().unwrap();

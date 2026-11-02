@@ -449,11 +449,13 @@ pub trait RunAttachBoundaries {
         Err(ProtocolError::unsupported_operation())
     }
     #[cfg(any(unix, target_os = "windows"))]
+    /// Deletes a thread and answers its folder when the folder stays
+    /// because it holds the user's files.
     fn delete_thread(
         &self,
         _thread_id: &str,
         _provenance: Provenance,
-    ) -> Result<(), ProtocolError> {
+    ) -> Result<Option<std::path::PathBuf>, ProtocolError> {
         Err(ProtocolError::unsupported_operation())
     }
     #[cfg(any(unix, target_os = "windows"))]

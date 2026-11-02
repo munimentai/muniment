@@ -473,6 +473,9 @@ fn sessions_root(profile: &Path) -> Result<Option<PathBuf>, String> {
     Ok((root.is_dir() && !root.is_symlink()).then_some(root))
 }
 
+/// What a thread delete says when the thread's folder stays.
+pub const THREAD_FOLDER_KEPT: &str = "The thread's folder holds your files, so it stays.";
+
 /// Removes a deleted thread's own session folder when it holds only
 /// Muniment's own files, and its name record with it. A folder with the
 /// user's files stays, and the answer names it.

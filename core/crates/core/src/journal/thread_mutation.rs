@@ -104,14 +104,15 @@ pub fn append_thread_delete_now(
 
 /// Deletes a thread and its creation chat record in `profile`. An agent's
 /// creation chat holds its messages in that record and may hold no run, so
-/// the record alone is enough to delete it.
+/// the record alone is enough to delete it. Answers the thread's folder when
+/// it stays because it holds the user's files.
 pub fn delete_thread_with_creation_now(
     journal: &mut RunJournal,
     profile: &std::path::Path,
     subject: Option<&str>,
     thread_id: &str,
     provenance: &Provenance,
-) -> Result<(), ThreadMutationError> {
+) -> Result<Option<std::path::PathBuf>, ThreadMutationError> {
     let creation = crate::creations::read(profile, thread_id)
         .ok()
         .flatten()
@@ -126,17 +127,22 @@ pub fn delete_thread_with_creation_now(
         crate::creations::remove(profile, thread_id).map_err(ThreadMutationError::Creation)?;
     }
     // The thread's own session folder goes when it holds only Muniment's
-    // files. A folder with the user's files stays, and the log says so.
-    match crate::projects::remove_thread_folder(profile, thread_id) {
-        Ok(None) => {}
-        Ok(Some(folder)) => crate::runtime_eprintln!(
-            "thread_delete: folder kept thread={thread_id} folder={} reason=holds_user_files",
-            folder.display()
-        ),
-        Err(error) => crate::runtime_eprintln!(
-            "thread_delete: folder not removed thread={thread_id} error={error}"
-        ),
-    }
+    // files. A folder with the user's files stays, and the answer names it.
+    let folder_kept = match crate::projects::remove_thread_folder(profile, thread_id) {
+        Ok(None) => None,
+        Ok(Some(folder)) => {
+            crate::runtime_eprintln!(
+                "thread_delete: folder kept thread={thread_id} reason=holds_user_files"
+            );
+            Some(folder)
+        }
+        Err(error) => {
+            crate::runtime_eprintln!(
+                "thread_delete: folder not removed thread={thread_id} error={error}"
+            );
+            None
+        }
+    };
     // An agent whose primary thread the user deletes starts a new one on its
     // next run. The delete is committed, so a state error only logs.
     let agent_thread = crate::agents::state(profile).is_ok_and(|state| {
@@ -147,7 +153,7 @@ pub fn delete_thread_with_creation_now(
                 .any(|primary| primary == thread_id)
     });
     if !agent_thread {
-        return Ok(());
+        return Ok(folder_kept);
     }
     if let Err(error) = crate::agents::with_state(profile, |state| {
         Ok(crate::agents::forget_thread(state, thread_id))
@@ -156,7 +162,7 @@ pub fn delete_thread_with_creation_now(
             "thread_delete: agent state not updated thread={thread_id} error={error}"
         );
     }
-    Ok(())
+    Ok(folder_kept)
 }
 
 /// Takes a run and every later run out of the thread's conversation.

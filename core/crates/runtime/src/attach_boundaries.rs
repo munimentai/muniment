@@ -1630,7 +1630,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
         &self,
         thread_id: &str,
         mut provenance: Provenance,
-    ) -> Result<(), ProtocolError> {
+    ) -> Result<Option<std::path::PathBuf>, ProtocolError> {
         let subject = self
             .fresh_tokens()
             .map_err(|error| error.protocol_error())?

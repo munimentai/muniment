@@ -247,7 +247,10 @@ impl DesktopClient {
         Ok(())
     }
 
-    pub fn delete_thread(&mut self, thread_id: &str) -> Result<(), ClientError> {
+    /// Deletes a thread. The answer is empty, or names the thread's folder
+    /// that stays because it holds the user's files, with the words that
+    /// say so.
+    pub fn delete_thread(&mut self, thread_id: &str) -> Result<serde_json::Value, ClientError> {
         if thread_id.is_empty() || thread_id.len() > MAX_THREAD_ID_LENGTH {
             return Err(ClientError::UnexpectedMessage);
         }
@@ -256,10 +259,19 @@ impl DesktopClient {
             Some(fresh_request_id()?),
             serde_json::json!({"thread_id": thread_id}),
         )?;
-        if response.body != serde_json::json!({}) {
+        let kept = response.body.as_object().is_some_and(|body| {
+            body.len() == 2
+                && body
+                    .get("folder_kept")
+                    .is_some_and(serde_json::Value::is_string)
+                && body
+                    .get("message")
+                    .is_some_and(serde_json::Value::is_string)
+        });
+        if response.body != serde_json::json!({}) && !kept {
             return Err(ClientError::UnexpectedMessage);
         }
-        Ok(())
+        Ok(response.body)
     }
 
     pub fn thread_select(&mut self, thread_id: &str) -> Result<(), ClientError> {
