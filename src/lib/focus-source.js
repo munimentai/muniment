@@ -21,6 +21,15 @@ export function trackFocusSource(root, target = window) {
   }
 }
 
+// A popup in its own window, such as the native menu window, reports which
+// input chose its item, and the window that opened it takes that lead before
+// the choice moves focus there, since its own tracker saw no key or press.
+export const inputLeads = (root = document.documentElement) => root.hasAttribute('data-pointer') ? 'pointer' : 'keys'
+export function takeInputLead(via, root = document.documentElement) {
+  if (via === 'keys') delete root.dataset.pointer
+  else if (via === 'pointer') root.dataset.pointer = ''
+}
+
 // Code that moves focus, such as a closing confirmation returning it to its
 // opener, shows the ring when the keys lead, as Tab would. A focus() from
 // code after the old focus left the page matches no :focus-visible in some

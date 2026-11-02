@@ -5,6 +5,7 @@
   import { applyTheme, readStoredTheme } from './theme-state.js'
   import LucideIcon from './LucideIcon.svelte'
   import { followPointer } from './menu-pointer.js'
+  import { inputLeads } from './focus-source.js'
   let selected = $state(null)
   let actionId = $state(null)
   let label = $state('Workspace tools')
@@ -26,7 +27,8 @@
     else delete document.documentElement.dataset.pointer
   }
   async function close() { if (!shown) return; shown = false; await popup.hide(); await emitTo('main', actionId ? 'action-menu-closed' : 'workspace-menu-closed', actionId) }
-  async function choose(id) { const source = actionId; shown = false; await popup.hide(); await emitTo('main', source ? 'action-menu-select' : 'workspace-menu-select', source ? {id: source, item: id} : id) }
+  // An action choice names the input that made it, read before the hide.
+  async function choose(id) { const source = actionId; const via = inputLeads(); shown = false; await popup.hide(); await emitTo('main', source ? 'action-menu-select' : 'workspace-menu-select', source ? {id: source, item: id, via} : id) }
   function keys(event) {
     const buttons = [...menu.querySelectorAll('button:not(:disabled)')]
     const index = buttons.indexOf(document.activeElement)

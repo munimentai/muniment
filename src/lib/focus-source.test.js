@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest'
-import { focusLikeKeys, trackFocusSource } from './focus-source.js'
+import { focusLikeKeys, inputLeads, takeInputLead, trackFocusSource } from './focus-source.js'
 
 it('marks the root while the pointer leads and clears it when a key moves focus', () => {
   const root = document.createElement('div')
@@ -51,4 +51,15 @@ it('focuses a control from code with the ring while the keys lead, and with none
   button.remove()
   expect(focusLikeKeys(button)).toBe(false)
   expect(focusLikeKeys(null)).toBe(false)
+})
+
+it('reads and takes the lead another window reports', () => {
+  const root = document.createElement('div')
+  expect(inputLeads(root)).toBe('keys')
+  takeInputLead('pointer', root)
+  expect(inputLeads(root)).toBe('pointer')
+  takeInputLead(undefined, root)
+  expect(inputLeads(root)).toBe('pointer')
+  takeInputLead('keys', root)
+  expect(inputLeads(root)).toBe('keys')
 })

@@ -3,6 +3,7 @@ import { PhysicalPosition, LogicalSize } from '@tauri-apps/api/dpi'
 import { listen } from '@tauri-apps/api/event'
 import { currentZoom } from './display-state.js'
 import { followPointer } from './menu-pointer.js'
+import { takeInputLead } from './focus-source.js'
 
 // Whether a pointer press opened the menu, so the popup marks focus as this window does.
 export const pointerLeads = () => document.documentElement.hasAttribute('data-pointer')
@@ -54,6 +55,9 @@ export function floatingMenu(node) {
     retain(await listen('action-menu-select', ({ payload }) => {
       if (payload.id !== id || disposed) return
       restore()
+      // The keys that chose in the popup lead here too, so a dialog the
+      // choice opens shows the ring on the control it focuses.
+      takeInputLead(payload.via)
       buttons()[payload.item]?.click()
     }))
     // A menu that became its own dialog, such as a delete confirmation, stays

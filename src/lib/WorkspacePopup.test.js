@@ -1,7 +1,8 @@
 import '@testing-library/jest-dom/vitest'
 import { afterEach, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte'
-import { listen } from '@tauri-apps/api/event'
+import { emitTo, listen } from '@tauri-apps/api/event'
+import { trackFocusSource } from './focus-source.js'
 import WorkspacePopup from './WorkspacePopup.svelte'
 import popupSource from './WorkspacePopup.svelte?raw'
 const setTitle = vi.hoisted(() => vi.fn(async () => {}))
@@ -47,4 +48,25 @@ it('draws a destructive item, such as a thread\'s Delete, in the danger color', 
   expect(screen.getByRole('menuitem', { name: 'Delete' })).toHaveAttribute('data-danger')
   expect(screen.getByRole('menuitem', { name: 'Archive' })).not.toHaveAttribute('data-danger')
   expect(popupSource).toMatch(/button\[data-danger\]\s*\{\s*color:\s*var\(--danger\)/)
+})
+
+it('names the keys when arrow keys and Enter choose the item after a click opened the menu', async () => {
+  // main.js tracks the input in the popup window as in every window.
+  const stop = trackFocusSource(document.documentElement)
+  await opened({ pointer: true })
+  await fireEvent.keyDown(screen.getByRole('menuitem', { name: 'New thread' }), { key: 'ArrowDown' })
+  expect(screen.getByRole('menuitem', { name: 'Settings' })).toHaveFocus()
+  await fireEvent.keyDown(screen.getByRole('menuitem', { name: 'Settings' }), { key: 'Enter' })
+  await fireEvent.click(screen.getByRole('menuitem', { name: 'Settings' }), { detail: 0 })
+  await waitFor(() => expect(emitTo).toHaveBeenCalledWith('main', 'action-menu-select', { id: 'menu', item: 1, via: 'keys' }))
+  stop()
+})
+
+it('names the pointer when a click chooses the item after the keys opened the menu', async () => {
+  const stop = trackFocusSource(document.documentElement)
+  await opened({ pointer: false })
+  await fireEvent.pointerDown(screen.getByRole('menuitem', { name: 'Rename' }))
+  await fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }))
+  await waitFor(() => expect(emitTo).toHaveBeenCalledWith('main', 'action-menu-select', { id: 'menu', item: 2, via: 'pointer' }))
+  stop()
 })
