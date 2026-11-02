@@ -486,6 +486,8 @@
                 {/if}
                 <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${entry.name}`} onclick={(event) => askDisconnect(entry.name, 'Muniment removes this connection. Connect it again to use it.', () => disconnect(entry), event.currentTarget)}><LucideIcon name="unplug" size={16} variant="action" /></button>
               </div>
+              <!-- The runtime holds this endpoint's key in memory alone, because the keychain refused it. -->
+              {#if endpoint && entry.key_notice}<p class="support" role="status" data-testid="endpoint-key-notice">{entry.key_notice}</p>{/if}
             {/if}
             {#if entry.family && router && firstOfFamily}<ModelAccounts {tauri} {listen} {runtime} settings={router} family={entry.family} onsettings={onRouterSettings} {fleet} onheld={onHeld} />{/if}
           </section>

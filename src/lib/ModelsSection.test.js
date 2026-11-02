@@ -179,6 +179,23 @@ it('says where an endpoint key stays when the keychain keeps it after a disconne
   expect(await screen.findByText(`Live27 is disconnected. ${kept}`)).toBeInTheDocument()
 })
 
+it('says on the endpoint card that the key stays in memory when the keychain refused it', async () => {
+  const notice = 'The key is kept until Muniment quits; the keychain refused it.'
+  const keyed = { providers: [
+    { id: 'custom-live28', name: 'Live28', source: 'custom', base_url: 'https://live28.example/v1', models: [{ id: 'm' }], key_notice: notice },
+    { id: 'custom-other', name: 'Other', source: 'custom', base_url: 'https://other.example/v1', models: [{ id: 'm' }] }
+  ], hidden: [], shown: [], default_provider: null, default_model: null }
+  const tauri = { invoke: vi.fn(async (command) => {
+    if (command === 'local_mode_provider_inventory') return keyed
+    if (command === 'model_router_settings') return { families: [], subscriptions: [], accounts: [] }
+    return null
+  }) }
+  render(ModelsSection, { props: { tauri, listen: async () => () => {}, inventory: keyed } })
+  const card = await screen.findByRole('region', { name: 'Live28' })
+  expect(within(card).getByText(notice)).toBeInTheDocument()
+  expect(within(screen.getByRole('region', { name: 'Other' })).queryByText(notice)).not.toBeInTheDocument()
+})
+
 it('draws the stored rows core answers at once while the full read waits, then takes the full read', async () => {
   let finish
   const full = new Promise((resolve) => { finish = resolve })
