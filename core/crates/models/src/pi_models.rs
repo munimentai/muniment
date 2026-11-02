@@ -32,6 +32,9 @@ pub const RECORD_FILE: &str = "muniment-models.json";
 const DECISION_MODELS: &str = "decisionModels";
 /// The record key that keeps each endpoint's name by provider.
 const NAMES: &str = "names";
+/// The record key that keeps the last name of each disconnected endpoint by
+/// provider, so its usage history keeps a name a person reads.
+pub const FORMER_NAMES: &str = "formerNames";
 /// The record key that lists the endpoints whose models the person named,
 /// so a refresh keeps exactly those models.
 const NAMED_MODELS: &str = "namedModels";
@@ -217,15 +220,29 @@ pub fn named_models(record: &Map<String, Value>, provider: &str) -> bool {
         .any(|id| id == provider)
 }
 
-/// Drops what the record keeps for the endpoint `provider`: its name, its
-/// named list and its decision models. Answers whether the record changed.
+/// Drops what the record keeps for the endpoint `provider`: its named list
+/// and its decision models, and moves its name to the former names. Answers
+/// whether the record changed.
 fn drop_endpoint(record: &mut Map<String, Value>, provider: &str) -> bool {
     let mut changed = false;
     for key in [NAMES, DECISION_MODELS] {
         if let Some(entries) = record.get_mut(key).and_then(Value::as_object_mut) {
-            changed |= entries.remove(provider).is_some();
+            let dropped = entries.remove(provider);
             if entries.is_empty() {
                 record.remove(key);
+            }
+            let Some(dropped) = dropped else {
+                continue;
+            };
+            changed = true;
+            if key == NAMES {
+                if let Some(former) = record
+                    .entry(FORMER_NAMES)
+                    .or_insert_with(|| json!({}))
+                    .as_object_mut()
+                {
+                    former.insert(provider.to_owned(), dropped);
+                }
             }
         }
     }
@@ -623,6 +640,13 @@ pub fn store_endpoint(
             .as_object_mut()
             .ok_or_else(|| SAVE_ERROR.to_string())?;
         names.insert(provider.clone(), name.into());
+    }
+    // A live name replaces the former one.
+    if let Some(former) = record.get_mut(FORMER_NAMES).and_then(Value::as_object_mut) {
+        former.remove(&provider);
+        if former.is_empty() {
+            record.remove(FORMER_NAMES);
+        }
     }
     let mut named: Vec<String> = record_list(&record, NAMED_MODELS)
         .into_iter()
@@ -1103,16 +1127,28 @@ mod tests {
             Value::Object(read_record(&agent).unwrap()),
             json!({
                 "names": {"custom-live30": "Live30"},
+                "formerNames": {"custom-live27": "Live27"},
                 "namedModels": ["custom-live30"],
                 "hidden": ["custom-live30/m"]
             })
         );
         assert_eq!(sweep_endpoints(&agent).unwrap(), 0);
+        // A disconnect keeps the endpoint's last name for its usage history.
         forget_endpoint(&agent, "custom-live30").unwrap();
         assert_eq!(
             Value::Object(read_record(&agent).unwrap()),
-            json!({"hidden": ["custom-live30/m"]})
+            json!({
+                "formerNames": {"custom-live27": "Live27", "custom-live30": "Live30"},
+                "hidden": ["custom-live30/m"]
+            })
         );
+        // The same endpoint connected again takes its live name back.
+        let url = serve_routes(vec![("GET /v1/models", json!({"data": [{"id": "m"}]}))]);
+        let id = store_endpoint(&agent, "custom", "Live30", &url, "", &["m".into()]).unwrap();
+        assert_eq!(id, "custom-live30");
+        let record = read_record(&agent).unwrap();
+        assert_eq!(record["names"]["custom-live30"], "Live30");
+        assert_eq!(record["formerNames"], json!({"custom-live27": "Live27"}));
         // A missing model file drops no name.
         write_record(
             &agent,

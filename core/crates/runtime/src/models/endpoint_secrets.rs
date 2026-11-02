@@ -204,22 +204,25 @@ pub const REFUSED_STATUS: i32 = 2;
 /// the answer for the next request.
 pub const PENDING_STATUS: i32 = 3;
 
+/// The exit status of `secret get` for a provider whose stored key is
+/// stale: the store refused the key that replaced it, so the person enters
+/// the key again. The command prints nothing then, and never reads the store.
+pub const STALE_STATUS: i32 = 4;
+
 /// The folder under the state root that holds the socket the runtime
 /// answers `secret get` on. Only the owner may open it.
-pub const SOCKET_DIRECTORY_NAME: &str = "endpoint-keys";
+pub const SOCKET_DIRECTORY_NAME: &str = muniment_core::state_root::ENDPOINT_KEYS_DIRECTORY_NAME;
 
 /// The socket the runtime answers `secret get` on, under `state`.
 pub fn socket_path(state: &Path) -> PathBuf {
     state.join(SOCKET_DIRECTORY_NAME).join("socket")
 }
 
-/// The folder beside the socket that holds one empty mark per provider whose
-/// stored key is stale, because the store refused the key that replaced it.
-const STALE_DIRECTORY_NAME: &str = "stale";
-
-/// The folder of stale-key marks under `state`.
+/// The folder of stale-key marks under `state`, beside the socket: one
+/// empty mark per provider whose stored key is stale, because the store
+/// refused the key that replaced it.
 pub fn stale_marks_path(state: &Path) -> PathBuf {
-    state.join(SOCKET_DIRECTORY_NAME).join(STALE_DIRECTORY_NAME)
+    muniment_core::state_root::stale_endpoint_keys(state)
 }
 
 /// Whether `marks` holds the stale-key mark of `provider`.
@@ -247,6 +250,8 @@ pub enum KeyAnswer {
     Refused,
     /// The keychain still waits for the person's answer.
     Pending,
+    /// The store's key is stale, so the person enters the key again.
+    Stale,
 }
 
 impl std::fmt::Debug for KeyAnswer {
@@ -256,6 +261,7 @@ impl std::fmt::Debug for KeyAnswer {
             Self::Missing => "Missing",
             Self::Refused => "Refused",
             Self::Pending => "Pending",
+            Self::Stale => "Stale",
         })
     }
 }
@@ -268,6 +274,7 @@ impl KeyAnswer {
             Self::Missing => 1,
             Self::Refused => REFUSED_STATUS,
             Self::Pending => PENDING_STATUS,
+            Self::Stale => STALE_STATUS,
         }
     }
 
@@ -368,7 +375,7 @@ impl KeyBroker {
     /// read for the entry already runs, and waits for the answer up to its
     /// bound. A read that outlasts the bound answers [`KeyAnswer::Pending`]
     /// and keeps running, so its answer serves the next request. A stale
-    /// stored key answers [`KeyAnswer::Missing`] without a store read.
+    /// stored key answers [`KeyAnswer::Stale`] without a store read.
     pub fn answer(self: &Arc<Self>, provider: &str) -> KeyAnswer {
         if !safe_provider(provider) {
             return KeyAnswer::Missing;
@@ -376,13 +383,17 @@ impl KeyBroker {
         let ask = {
             let mut slots = self.slots();
             match slots.get(provider) {
-                Some(Slot::Held(key)) => return KeyAnswer::Key(key.clone()),
+                Some(Slot::Held(key)) => {
+                    // A key that answers ends a failure the store holds for it.
+                    self.store.answered(SERVICE, provider);
+                    return KeyAnswer::Key(key.clone());
+                }
                 Some(Slot::Asking(ask)) => Arc::clone(ask),
                 None if self.stale(provider) => {
                     muniment_core::runtime_eprintln!(
                         "muniment-runtime: endpoint_key provider={provider} read=stale"
                     );
-                    return KeyAnswer::Missing;
+                    return KeyAnswer::Stale;
                 }
                 None => {
                     let ask = Arc::new(Ask::default());
@@ -410,7 +421,7 @@ impl KeyBroker {
         let outcome = match answer {
             KeyAnswer::Key(_) => "answered",
             KeyAnswer::Missing => "missing",
-            KeyAnswer::Refused | KeyAnswer::Pending => "refused",
+            KeyAnswer::Refused | KeyAnswer::Pending | KeyAnswer::Stale => "refused",
         };
         muniment_core::runtime_eprintln!(
             "muniment-runtime: endpoint_key provider={provider} read={outcome}"
@@ -471,6 +482,9 @@ impl KeyBroker {
         self.slots()
             .insert(provider.to_owned(), Slot::Held(key.to_owned()));
         self.memory().insert(provider.to_owned());
+        // The endpoint card names the key in memory, and nothing retries the
+        // write, so the store's failure for it no longer holds.
+        self.store.answered(SERVICE, provider);
         // The store may still hold the key this one replaced, so a later
         // runtime must not answer it.
         if let Some(marks) = &self.marks {
@@ -588,6 +602,7 @@ fn ask_runtime(socket: &Path, provider: &str) -> Option<KeyAnswer> {
         _ => match reply.parse::<i32>() {
             Ok(1) => KeyAnswer::Missing,
             Ok(REFUSED_STATUS) => KeyAnswer::Refused,
+            Ok(STALE_STATUS) => KeyAnswer::Stale,
             _ => KeyAnswer::Pending,
         },
     })
@@ -596,8 +611,8 @@ fn ask_runtime(socket: &Path, provider: &str) -> Option<KeyAnswer> {
 /// Answers `secret get <provider>`, the command a reference runs: the key on
 /// standard output. Answers none for other arguments, so the caller handles
 /// them, and the exit status otherwise: 0 with the key, 1 without one,
-/// [`REFUSED_STATUS`] when the store refused it and [`PENDING_STATUS`] while
-/// the keychain waits for the person. The running runtime answers through
+/// [`REFUSED_STATUS`] when the store refused it, [`PENDING_STATUS`] while
+/// the keychain waits for the person, and [`STALE_STATUS`] for a stale key. The running runtime answers through
 /// its socket under the state root. Only without one does the command read
 /// `store` itself, and never for a provider whose stored key is stale.
 pub fn run_command(
@@ -632,10 +647,11 @@ pub fn run_command_through(
     };
     let stale = socket
         .and_then(Path::parent)
-        .is_some_and(|folder| marked_stale(&folder.join(STALE_DIRECTORY_NAME), provider));
+        .and_then(Path::parent)
+        .is_some_and(|state| marked_stale(&stale_marks_path(state), provider));
     let answer = answer.unwrap_or_else(|| {
         if stale {
-            KeyAnswer::Missing
+            KeyAnswer::Stale
         } else {
             KeyAnswer::from_lookup(store().lookup(SERVICE, provider))
         }
@@ -806,14 +822,17 @@ mod tests {
             marks.clone(),
         );
         assert!(restarted.stale("custom-live29"));
-        assert_eq!(restarted.answer("custom-live29"), KeyAnswer::Missing);
+        assert_eq!(restarted.answer("custom-live29"), KeyAnswer::Stale);
+        assert_eq!(KeyAnswer::Stale.status(), STALE_STATUS);
+        assert_ne!(STALE_STATUS, REFUSED_STATUS);
         assert_eq!(restarted.held("custom-live29"), None);
-        // A command that finds no runtime reads no stale key either.
+        // A command that finds no runtime reads no stale key either, and
+        // its status says the key is stale, not refused.
         let open = || Arc::new(FileCredentialStore::new(&credentials)) as Arc<dyn CredentialStore>;
         let socket = socket_path(&root);
         assert_eq!(
             run_command_through(&secret_get("custom-live29"), Some(&socket), open),
-            Some(1)
+            Some(STALE_STATUS)
         );
         assert_eq!(
             run_command_through(&secret_get("custom-other"), Some(&socket), open),
@@ -973,6 +992,45 @@ mod tests {
         fn retry_refused(&self) {
             self.refusals.clear();
         }
+
+        fn answered(&self, service: &str, name: &str) {
+            self.refusals.settled(service, name);
+        }
+    }
+
+    #[test]
+    fn a_key_that_works_ends_the_failure_the_store_holds_for_it() {
+        let store = SlowKeychain::new(Duration::ZERO, Ok(None));
+        let failed = CredentialRefusal::Failed("The specified item already exists.".into());
+        let now = std::time::Instant::now();
+        store.refusals.note(SERVICE, "custom-live30", &failed, now);
+        store.refusals.note(SERVICE, "custom-other", &failed, now);
+        let broker = KeyBroker::new(Arc::clone(&store) as Arc<dyn CredentialStore>);
+        // The store refused the new key, so the broker holds it, and the
+        // Machines notice no longer names the failure.
+        broker.keep("custom-live30", "sk-new");
+        let names = |store: &SlowKeychain| {
+            store
+                .refusals()
+                .into_iter()
+                .map(|entry| entry.name)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(&store), ["custom-other"]);
+        // A key the broker answers ends a failure noted since.
+        store.refusals.note(SERVICE, "custom-live30", &failed, now);
+        assert_eq!(
+            broker.answer("custom-live30"),
+            KeyAnswer::Key("sk-new".into())
+        );
+        assert_eq!(names(&store), ["custom-other"]);
+        // A declined prompt stays until the person retries.
+        let declined = CredentialRefusal::Declined("User canceled the operation.".into());
+        store
+            .refusals
+            .note(SERVICE, "custom-live30", &declined, now);
+        broker.answer("custom-live30");
+        assert_eq!(names(&store), ["custom-live30", "custom-other"]);
     }
 
     fn secret_get(provider: &str) -> Vec<String> {

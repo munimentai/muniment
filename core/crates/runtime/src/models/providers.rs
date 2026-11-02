@@ -136,6 +136,9 @@ pub(super) struct ProviderInventory {
     /// provider once and marks the ones two or more accounts serve, because
     /// picking one of those balances across them.
     router_models: Vec<RouterModel>,
+    /// The last name of each disconnected endpoint by provider id, so usage
+    /// history reads by a name and not the raw id.
+    former_names: std::collections::BTreeMap<String, String>,
 }
 
 /// One model the router serves, as the picker places it under its provider.
@@ -797,6 +800,7 @@ fn provider_inventory_with(
             model.settle_thinking(&provider.id, thinking, &settings);
         }
     }
+    let former_names = former_names(&record, &providers);
     Ok(ProviderInventory {
         providers,
         default_provider: settings
@@ -812,7 +816,24 @@ fn provider_inventory_with(
         router_classifier: router_classifier(agent),
         router_decision_model: router_decision_model(agent),
         router_models: router_models(agent),
+        former_names,
     })
+}
+
+/// The former names the record keeps for endpoints `providers` no longer
+/// lists.
+fn former_names(
+    record: &serde_json::Map<String, serde_json::Value>,
+    providers: &[InventoryProvider],
+) -> std::collections::BTreeMap<String, String> {
+    record
+        .get(pi_models::FORMER_NAMES)
+        .and_then(serde_json::Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter(|(id, _)| !providers.iter().any(|known| known.id == **id))
+        .filter_map(|(id, name)| Some((id.clone(), name.as_str()?.to_owned())))
+        .collect()
 }
 
 /// The models the router serves and the accounts behind each: the accounts
@@ -1632,7 +1653,7 @@ llama     qwen3              32K      16.4K    yes       no\n";
             r#"{"defaultProvider":"ollama","defaultModel":"llama3.2:3b"}"#,
         )
         .unwrap();
-        fs::write(agent.join(MODELS_RECORD_FILE), r#"{"hidden":["anthropic/claude-haiku-4-5"],"names":{"custom-proxy":"My proxy"},"claudeCode":true}"#).unwrap();
+        fs::write(agent.join(MODELS_RECORD_FILE), r#"{"hidden":["anthropic/claude-haiku-4-5"],"names":{"custom-proxy":"My proxy"},"formerNames":{"custom-live30":"Live30","custom-proxy":"Old proxy"},"claudeCode":true}"#).unwrap();
         let models = vec![
             PiModelRow {
                 provider: "ollama".into(),
@@ -1680,6 +1701,12 @@ llama     qwen3              32K      16.4K    yes       no\n";
         assert_eq!(inventory.default_provider.as_deref(), Some("ollama"));
         assert_eq!(inventory.default_model.as_deref(), Some("llama3.2:3b"));
         assert_eq!(inventory.hidden, vec!["anthropic/claude-haiku-4-5"]);
+        // A disconnected endpoint keeps its last name for usage history,
+        // and a connected one reads by its live name alone.
+        assert_eq!(
+            serde_json::to_value(&inventory).unwrap()["former_names"],
+            serde_json::json!({"custom-live30": "Live30"})
+        );
         fs::remove_dir_all(agent).unwrap();
     }
 

@@ -31,6 +31,11 @@ pub trait CredentialStore: Send + Sync {
     /// The person asked to try again: the store forgets every refusal, so
     /// the next read of each entry asks the system again.
     fn retry_refused(&self) {}
+
+    /// A key for the entry works now, as one the store took or one the
+    /// caller holds in its place: a failure the store holds for the entry
+    /// goes. A declined prompt stays until the person retries.
+    fn answered(&self, _service: &str, _name: &str) {}
 }
 
 /// One entry a store refused and holds back.
@@ -165,6 +170,19 @@ impl RefusalMemory {
     pub fn answered(&self, service: &str, name: &str) {
         self.entries()
             .remove(&(service.to_owned(), name.to_owned()));
+    }
+
+    /// A key for an entry works now: a failure held for it goes, and a
+    /// decline stays until the person retries.
+    pub fn settled(&self, service: &str, name: &str) {
+        let mut entries = self.entries();
+        let key = (service.to_owned(), name.to_owned());
+        if entries
+            .get(&key)
+            .is_some_and(|held| matches!(held.refusal, CredentialRefusal::Failed(_)))
+        {
+            entries.remove(&key);
+        }
     }
 
     /// Every refusal the memory holds.
@@ -491,6 +509,19 @@ mod refusal_memory_tests {
         memory.answered("s", "a");
         memory.note("s", "a", &failed(), now);
         assert!(memory.held("s", "a", now + FIRST_REFUSAL_BACKOFF).is_none());
+    }
+
+    #[test]
+    fn a_working_key_ends_a_failure_and_keeps_a_decline() {
+        let memory = RefusalMemory::default();
+        let now = std::time::Instant::now();
+        memory.note("s", "a", &failed(), now);
+        memory.note("s", "b", &declined(), now);
+        memory.settled("s", "a");
+        memory.settled("s", "b");
+        assert!(!memory.refused("s", "a"));
+        assert!(memory.refused("s", "b"));
+        assert_eq!(memory.list().len(), 1);
     }
 
     #[test]

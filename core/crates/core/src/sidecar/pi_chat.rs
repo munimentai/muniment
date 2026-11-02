@@ -501,8 +501,9 @@ const PROVIDER_DETAIL_CHARS: usize = 300;
 /// with credentials removed, and at most 300 characters long.
 pub fn provider_error_detail(text: &str) -> Option<String> {
     if let Some(provider) = refused_key_provider(text) {
-        return Some(format!(
-            "The keychain refused the key for {provider}. Answer its prompt if one is open, or choose Try again in Settings → Machines, then send the message again."
+        return Some(key_failure_detail(
+            crate::state_root::state_directory().as_deref(),
+            provider,
         ));
     }
     let body = text
@@ -540,6 +541,37 @@ pub fn provider_error_detail(text: &str) -> Option<String> {
     } else {
         clean.to_owned()
     })
+}
+
+/// The sentence a run carries when the runtime's `secret get` answered no
+/// key for the endpoint `provider`, under its name when the state root at
+/// `state` names it. Pi drops the command's exit status, so the stale-key
+/// mark the runtime keeps under `state` tells a stale key from a refusal: a
+/// stale key never comes back, and the person enters it again.
+fn key_failure_detail(state: Option<&Path>, provider: &str) -> String {
+    let name = state
+        .and_then(|state| {
+            crate::models::pi_models::read_record(&crate::state_root::agent_directory(state)).ok()
+        })
+        .and_then(|record| {
+            record
+                .get("names")
+                .and_then(|names| names.get(provider))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| provider.to_owned());
+    if state.is_some_and(|state| crate::state_root::endpoint_key_stale(state, provider)) {
+        format!(
+            "The saved key for {name} is out of date. Enter the key again in Settings → Models, then send the message again."
+        )
+    } else {
+        format!(
+            "The keychain refused the key for {name}. Answer its prompt if one is open, or choose Try again in Settings → Machines, then send the message again."
+        )
+    }
 }
 
 /// The provider whose key Pi failed to read through the runtime's
@@ -1971,6 +2003,43 @@ mod tests {
                 "{own}"
             );
         }
+    }
+
+    #[test]
+    fn a_stale_endpoint_key_reads_as_out_of_date_under_the_endpoint_name() {
+        let state = std::env::temp_dir().join(format!(
+            "muniment-stale-key-detail-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let agent = crate::state_root::agent_directory(&state);
+        std::fs::create_dir_all(&agent).unwrap();
+        std::fs::write(
+            agent.join(crate::models::pi_models::RECORD_FILE),
+            r#"{"names":{"custom-live30":"Live30"}}"#,
+        )
+        .unwrap();
+        // A refusal names the endpoint by its name.
+        assert_eq!(
+            key_failure_detail(Some(&state), "custom-live30"),
+            "The keychain refused the key for Live30. Answer its prompt if one is open, or choose Try again in Settings → Machines, then send the message again."
+        );
+        // A stale key asks for the key again in Models, and never for a retry.
+        let marks = crate::state_root::stale_endpoint_keys(&state);
+        std::fs::create_dir_all(&marks).unwrap();
+        std::fs::write(marks.join("custom-live30"), b"").unwrap();
+        let stale = key_failure_detail(Some(&state), "custom-live30");
+        assert_eq!(
+            stale,
+            "The saved key for Live30 is out of date. Enter the key again in Settings → Models, then send the message again."
+        );
+        assert!(!stale.contains("Machines") && !stale.contains("custom-live30"));
+        // An endpoint with no name reads by its id.
+        std::fs::write(marks.join("custom-unnamed"), b"").unwrap();
+        assert!(key_failure_detail(Some(&state), "custom-unnamed")
+            .starts_with("The saved key for custom-unnamed is out of date."));
+        assert!(key_failure_detail(None, "custom-live30")
+            .starts_with("The keychain refused the key for custom-live30."));
+        let _ = std::fs::remove_dir_all(state);
     }
 
     #[test]

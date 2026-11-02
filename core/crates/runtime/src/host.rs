@@ -479,6 +479,10 @@ impl CredentialStore for KeyringCredentialStore {
         refused
     }
 
+    fn answered(&self, service: &str, name: &str) {
+        self.refusals.settled(service, name);
+    }
+
     fn retry_refused(&self) {
         self.refusals.clear();
         if let Some(shared) = &self.shared {
@@ -563,6 +567,32 @@ mod keyring_store_tests {
         assert!(store.refusals().is_empty());
         assert!(store.put("ai.muniment.hooks", "hook-1", || Ok(())).is_ok());
         let _ = declined();
+    }
+
+    #[test]
+    fn a_key_that_works_ends_a_refused_write_and_the_next_save_writes() {
+        let store = KeyringCredentialStore::default();
+        let failed = || {
+            Err(muniment_core::keyring::Error::PlatformFailure(Box::new(
+                std::io::Error::other("The specified item already exists in the keychain."),
+            )))
+        };
+        assert!(store
+            .put("ai.muniment.endpoints", "custom-live30", failed)
+            .is_err());
+        assert_eq!(store.refusals().len(), 1);
+        // The runtime holds the key in its place, so the failure goes and
+        // the next save reaches the keychain once more.
+        store.answered("ai.muniment.endpoints", "custom-live30");
+        assert!(store.refusals().is_empty());
+        let wrote = Cell::new(false);
+        assert!(store
+            .put("ai.muniment.endpoints", "custom-live30", || {
+                wrote.set(true);
+                Ok(())
+            })
+            .is_ok());
+        assert!(wrote.get());
     }
 
     #[test]

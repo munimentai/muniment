@@ -170,10 +170,13 @@ impl ModelService {
             let Some(id) = provider.get("id").and_then(Value::as_str) else {
                 continue;
             };
+            // `key_state` tells the edit form which notice the card shows.
             if keys.broker.kept_in_memory(id) {
                 provider["key_notice"] = endpoint_secrets::MEMORY_KEY_NOTICE.into();
+                provider["key_state"] = "memory".into();
             } else if keys.broker.stale(id) {
                 provider["key_notice"] = endpoint_secrets::stale_key_notice(id).into();
+                provider["key_state"] = "stale".into();
             }
         }
         inventory
@@ -1060,6 +1063,7 @@ mod tests {
             inventory["providers"][0]["key_notice"],
             endpoint_secrets::MEMORY_KEY_NOTICE
         );
+        assert_eq!(inventory["providers"][0]["key_state"], "memory");
         assert!(inventory["providers"][1].get("key_notice").is_none());
         // After a restart the runtime never answers the store's older key,
         // and the card asks for the key again.
@@ -1073,7 +1077,7 @@ mod tests {
         let again = restarted.endpoint_keys.as_ref().unwrap();
         assert_eq!(
             again.broker.answer("custom-live28"),
-            endpoint_secrets::KeyAnswer::Missing
+            endpoint_secrets::KeyAnswer::Stale
         );
         let inventory = restarted.with_key_notices(serde_json::json!({"providers": [
             {"id": "custom-live28"}, {"id": "custom-other"}
@@ -1082,6 +1086,8 @@ mod tests {
             inventory["providers"][0]["key_notice"],
             endpoint_secrets::stale_key_notice("custom-live28")
         );
+        assert_eq!(inventory["providers"][0]["key_state"], "stale");
+        assert!(inventory["providers"][1].get("key_state").is_none());
         assert!(inventory["providers"][1].get("key_notice").is_none());
         let names = || {
             muniment_core::models::pi_models::read_record(&agent)

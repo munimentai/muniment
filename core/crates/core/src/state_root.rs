@@ -79,6 +79,26 @@ pub fn agent_directory(state: &Path) -> PathBuf {
     state.join(AGENT_DIRECTORY_NAME)
 }
 
+/// The folder under the state root where the runtime answers endpoint keys
+/// on its socket and keeps its stale-key marks.
+pub const ENDPOINT_KEYS_DIRECTORY_NAME: &str = "endpoint-keys";
+
+/// The folder of stale-key marks under `state`: one empty mark per endpoint
+/// whose stored key is stale, because the keychain refused the key that
+/// replaced it.
+pub fn stale_endpoint_keys(state: &Path) -> PathBuf {
+    state.join(ENDPOINT_KEYS_DIRECTORY_NAME).join("stale")
+}
+
+/// Whether the stored key of the endpoint `provider` is stale under `state`.
+pub fn endpoint_key_stale(state: &Path, provider: &str) -> bool {
+    !provider.is_empty()
+        && provider
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        && stale_endpoint_keys(state).join(provider).is_file()
+}
+
 /// The roots an install before this layout wrote: the runtime's data root, the
 /// desktop's config root, and the harness's own agent directory.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
