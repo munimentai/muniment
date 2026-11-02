@@ -287,6 +287,7 @@ impl RemoteListener {
             active: AtomicUsize::new(0),
             next_connection: AtomicU64::new(0),
             live: Mutex::new(HashMap::new()),
+            handshake_log: HandshakeLog::default(),
             config: self.config,
         });
         let result = loop {
@@ -345,6 +346,141 @@ impl RemoteListener {
     }
 }
 
+/// How long a handshake failure line for one peer and one cause stays quiet
+/// after it is written. The next line counts the failures it held back.
+const HANDSHAKE_LOG_QUIET: Duration = Duration::from_secs(10 * 60);
+const MAX_HANDSHAKE_LOG_KEYS: usize = 256;
+
+/// Holds back repeated handshake failure lines, per peer and cause.
+#[derive(Default)]
+struct HandshakeLog {
+    lines: Mutex<HashMap<(IpAddr, String), (Instant, u64)>>,
+}
+
+impl HandshakeLog {
+    /// The failures held back since the last line, when a line for `peer`
+    /// and `cause` is due at `now`. `None` holds this one back.
+    fn admit(&self, peer: IpAddr, cause: &str, now: Instant) -> Option<u64> {
+        let mut lines = self
+            .lines
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let key = (peer_key(peer), cause.to_owned());
+        if lines.len() >= MAX_HANDSHAKE_LOG_KEYS && !lines.contains_key(&key) {
+            lines.retain(|_, (written, _)| {
+                now.saturating_duration_since(*written) < HANDSHAKE_LOG_QUIET
+            });
+            if lines.len() >= MAX_HANDSHAKE_LOG_KEYS {
+                lines.clear();
+            }
+        }
+        match lines.get_mut(&key) {
+            Some((written, held))
+                if now.saturating_duration_since(*written) < HANDSHAKE_LOG_QUIET =>
+            {
+                *held += 1;
+                None
+            }
+            Some(entry) => {
+                let held = entry.1;
+                *entry = (now, 0);
+                Some(held)
+            }
+            None => {
+                lines.insert(key, (now, 0));
+                Some(0)
+            }
+        }
+    }
+}
+
+/// What a peer sent before the handshake read it.
+#[derive(Debug, Eq, PartialEq)]
+enum FirstBytes {
+    /// The first bytes that arrived, at most eight.
+    Bytes(Vec<u8>),
+    /// The peer closed before it sent a byte.
+    Closed,
+    /// Nothing arrived before the handshake deadline, or the socket failed.
+    Nothing,
+}
+
+impl FirstBytes {
+    fn peek(socket: &TcpStream, deadline: Instant) -> Self {
+        let mut bytes = [0_u8; 8];
+        loop {
+            let Some(remaining) = deadline
+                .checked_duration_since(Instant::now())
+                .filter(|remaining| !remaining.is_zero())
+            else {
+                return Self::Nothing;
+            };
+            if socket.set_read_timeout(Some(remaining)).is_err() {
+                return Self::Nothing;
+            }
+            return match socket.peek(&mut bytes) {
+                Ok(0) => Self::Closed,
+                Ok(read) => Self::Bytes(bytes[..read].to_vec()),
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(_) => Self::Nothing,
+            };
+        }
+    }
+
+    /// The kind of client the first bytes point at.
+    fn class(&self) -> &'static str {
+        const HTTP: [&[u8]; 9] = [
+            b"GET ", b"POST", b"HEAD", b"PUT ", b"DELE", b"OPTI", b"PATC", b"CONN", b"PRI ",
+        ];
+        match self {
+            Self::Closed => "nothing_then_closed",
+            Self::Nothing => "nothing",
+            Self::Bytes(bytes) => match bytes.as_slice() {
+                [0x16, ..] => "tls",
+                bytes if HTTP.iter().any(|method| bytes.starts_with(method)) => "plain_http",
+                bytes if bytes.starts_with(b"SSH-") => "ssh",
+                bytes
+                    if bytes
+                        .iter()
+                        .all(|byte| byte.is_ascii_graphic() || *byte == b' ') =>
+                {
+                    "text"
+                }
+                _ => "binary",
+            },
+        }
+    }
+}
+
+/// The log fields that say why a handshake failed: the error kind, what the
+/// peer sent, and the TLS error when rustls raised one.
+fn handshake_failure_cause(sent: &FirstBytes, error: &io::Error) -> String {
+    let mut cause = format!("reason={:?} sent={}", error.kind(), sent.class());
+    if let Some(tls) = error
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<rustls::Error>())
+    {
+        let tls = match tls {
+            // A client that refuses this listener's certificate, such as one
+            // that pins another fingerprint, ends the handshake with an alert.
+            rustls::Error::AlertReceived(alert) => format!("client_alert={alert:?}"),
+            other => {
+                let mut detail = format!("{other:?}");
+                detail.retain(|character| !character.is_whitespace());
+                let end = (0..=detail.len().min(120))
+                    .rev()
+                    .find(|end| detail.is_char_boundary(*end))
+                    .unwrap_or(0);
+                detail.truncate(end);
+                format!("tls_error={detail}")
+            }
+        };
+        cause.push(' ');
+        cause.push_str(&tls);
+    }
+    cause
+}
+
 /// Binds `config.address` and serves remote clients until `stop` fires.
 pub fn run_remote_listener<S, F, E>(
     config: RemoteListenerConfig,
@@ -370,6 +506,7 @@ struct Shared<S> {
     active: AtomicUsize,
     next_connection: AtomicU64,
     live: Mutex<HashMap<u64, TcpStream>>,
+    handshake_log: HandshakeLog,
     config: RemoteListenerConfig,
 }
 
@@ -425,17 +562,34 @@ fn serve_connection<S: ThreadListService>(
         Ok(connection) => connection,
         Err(_) => return,
     };
+    let handshake_deadline = Instant::now() + shared.config.handshake_timeout;
+    // The listener speaks only after the client's first bytes, so a look at
+    // them changes nothing for the handshake and names what a failed peer sent.
+    let sent = FirstBytes::peek(&socket, handshake_deadline);
+    let from_self = socket
+        .local_addr()
+        .is_ok_and(|local| peer_key(local.ip()) == peer_key(peer.ip()));
     let mut tls = TlsStream::new(connection, socket);
-    if let Err(error) = tls.handshake_before(Instant::now() + shared.config.handshake_timeout) {
+    if let Err(error) = tls.handshake_before(handshake_deadline) {
         // A peer that holds a connection slot through the whole handshake
         // bound counts as a refusal, so it cannot keep the slots forever.
         if super::deadline_io::is_timeout(&error) {
             shared.backoff.record_failure(peer.ip(), Instant::now());
         }
-        crate::runtime_eprintln!(
-            "muniment-runtime: remote attach handshake failed peer={peer} reason={:?}",
-            error.kind()
-        );
+        let cause = handshake_failure_cause(&sent, &error);
+        if let Some(repeated) = shared
+            .handshake_log
+            .admit(peer.ip(), &cause, Instant::now())
+        {
+            let repeated = if repeated > 0 {
+                format!(" repeated={repeated}")
+            } else {
+                String::new()
+            };
+            crate::runtime_eprintln!(
+                "muniment-runtime: remote attach handshake failed peer={peer} self={from_self} {cause}{repeated}"
+            );
+        }
         tls.close();
         return;
     }
@@ -804,6 +958,115 @@ mod tests {
             ReadableWait::Closed
         );
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    fn remote_access(name: &str) -> (std::path::PathBuf, RemoteAccess) {
+        let directory =
+            std::env::temp_dir().join(format!("muniment-remote-{name}-{}", uuid::Uuid::now_v7()));
+        let access = RemoteAccess::open(
+            &directory,
+            super::super::RemoteAccessOptions {
+                runtime_name: None,
+                runtime_version: "1.0.0".into(),
+                install_kind: muniment_attach::InstallKind::Server,
+            },
+        )
+        .unwrap();
+        (directory, access)
+    }
+
+    /// The cause the listener logs for the client `client` runs.
+    fn handshake_cause(
+        access: &RemoteAccess,
+        client: impl FnOnce(SocketAddr) + Send + 'static,
+    ) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let client = std::thread::spawn(move || client(address));
+        let (socket, _) = listener.accept().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let sent = FirstBytes::peek(&socket, deadline);
+        let mut tls = TlsStream::new(
+            rustls::ServerConnection::new(access.server_config()).unwrap(),
+            socket,
+        );
+        let error = tls.handshake_before(deadline).unwrap_err();
+        tls.close();
+        client.join().unwrap();
+        handshake_failure_cause(&sent, &error)
+    }
+
+    #[test]
+    fn a_failed_handshake_names_what_the_peer_sent() {
+        let (directory, access) = remote_access("listener");
+        let (other_directory, other) = remote_access("other");
+        let pinned = other.certificate_fingerprint();
+
+        let http = handshake_cause(&access, |address| {
+            let mut socket = TcpStream::connect(address).unwrap();
+            socket
+                .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+                .unwrap();
+            let _ = socket.read(&mut [0_u8; 64]);
+        });
+        assert!(
+            http.starts_with("reason=InvalidData sent=plain_http tls_error=InvalidMessage("),
+            "{http}"
+        );
+
+        let mismatch = handshake_cause(&access, move |address| {
+            let refused = muniment_attach::connect_pinned(
+                &[address.to_string()],
+                pinned,
+                Duration::from_secs(5),
+            );
+            assert!(refused.is_err());
+        });
+        assert!(
+            mismatch.starts_with("reason=InvalidData sent=tls client_alert="),
+            "{mismatch}"
+        );
+
+        let empty = handshake_cause(&access, |address| {
+            drop(TcpStream::connect(address).unwrap());
+        });
+        assert_eq!(empty, "reason=UnexpectedEof sent=nothing_then_closed");
+
+        std::fs::remove_dir_all(directory).unwrap();
+        std::fs::remove_dir_all(other_directory).unwrap();
+    }
+
+    #[test]
+    fn first_bytes_name_the_client_kind() {
+        let class = |bytes: &[u8]| FirstBytes::Bytes(bytes.to_vec()).class();
+        assert_eq!(class(&[0x16, 0x03, 0x01]), "tls");
+        assert_eq!(class(b"POST /h"), "plain_http");
+        assert_eq!(class(b"PRI * HT"), "plain_http");
+        assert_eq!(class(b"SSH-2.0-"), "ssh");
+        assert_eq!(class(b"hello"), "text");
+        assert_eq!(class(&[0, 1, 2]), "binary");
+        assert_eq!(FirstBytes::Closed.class(), "nothing_then_closed");
+        assert_eq!(FirstBytes::Nothing.class(), "nothing");
+    }
+
+    #[test]
+    fn identical_handshake_failure_lines_are_held_back_and_counted() {
+        let log = HandshakeLog::default();
+        let peer: IpAddr = "::ffff:10.1.2.10".parse().unwrap();
+        let same: IpAddr = "10.1.2.10".parse().unwrap();
+        let other: IpAddr = "10.1.2.11".parse().unwrap();
+        let start = Instant::now();
+        let cause = "reason=InvalidData sent=plain_http";
+        assert_eq!(log.admit(peer, cause, start), Some(0));
+        assert_eq!(log.admit(same, cause, start + Duration::from_secs(4)), None);
+        assert_eq!(log.admit(peer, cause, start + Duration::from_secs(9)), None);
+        assert_eq!(
+            log.admit(peer, "reason=UnexpectedEof sent=nothing_then_closed", start),
+            Some(0)
+        );
+        assert_eq!(log.admit(other, cause, start), Some(0));
+        assert_eq!(log.admit(peer, cause, start + HANDSHAKE_LOG_QUIET), Some(2));
+        assert_eq!(log.admit(peer, cause, start + HANDSHAKE_LOG_QUIET), None);
     }
 
     #[test]
