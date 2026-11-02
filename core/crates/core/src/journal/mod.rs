@@ -3344,9 +3344,13 @@ fn validate_thread_identity(connection: &Connection) -> Result<(), JournalError>
             "thread deletion must be the last event".into(),
         ));
     }
+    // A thread with no run names its owner's attach profile on every event.
+    // A delete the runtime appended without one still reads, because the
+    // thread's creation names the owner and a deleted thread takes no event.
     let invalid_unstamped_threads: i64 = connection.query_row(
         "SELECT COUNT(*) FROM (SELECT DISTINCT te.thread_id FROM thread_events te \
          WHERE NOT EXISTS(SELECT 1 FROM run_threads rt WHERE rt.thread_id=te.thread_id) \
+         AND te.event_type<>'thread.deleted' \
          AND json_type(te.envelope_json,'$.provenance.attach_profile') IS NOT 'text')",
         [],
         |row| row.get(0),

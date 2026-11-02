@@ -196,12 +196,26 @@ pub fn delete_agent_creation_threads_now(
             let last_thread_seq = journal
                 .last_thread_seq(thread_id)
                 .map_err(ThreadMutationError::Journal)?;
+            // A thread with no run names its owner's attach profile on every
+            // event, so the delete carries the profile the thread was created with.
+            let mut provenance = provenance.clone();
+            if !provenance.extra.contains_key("attach_profile") {
+                if let Some(profile) = journal
+                    .thread_scope(thread_id)
+                    .map_err(ThreadMutationError::Journal)?
+                    .and_then(|(_, profile)| profile)
+                {
+                    provenance
+                        .extra
+                        .insert("attach_profile".into(), profile.into());
+                }
+            }
             journal
                 .append_thread_deleted(
                     last_thread_seq,
                     thread_id,
                     &Utc::now().to_rfc3339_opts(SecondsFormat::AutoSi, true),
-                    provenance,
+                    &provenance,
                 )
                 .map_err(ThreadMutationError::Journal)?;
             deleted.push(thread_id.clone());

@@ -658,7 +658,7 @@ fn a_deleted_agents_creation_chats_go_and_the_start_sweep_removes_the_ones_left(
         Some("owner"),
         &renamed,
         "Plans",
-        &provenance(Some("owner")),
+        &attach_provenance(),
     )
     .unwrap();
     let primary = created_long_ago(&mut journal, None);
@@ -690,6 +690,49 @@ fn a_deleted_agents_creation_chats_go_and_the_start_sweep_removes_the_ones_left(
             .unwrap()
             .is_empty()
     );
+    // Each delete names the profile its thread was created with, and the
+    // journal opens again after the sweep.
+    for thread in [&chat, &left_chat, &bare] {
+        let events = journal.thread_events(thread).unwrap();
+        let deleted = events.last().unwrap();
+        assert_eq!(deleted.event_type, "thread.deleted");
+        assert_eq!(
+            deleted.provenance.extra.get("attach_profile"),
+            Some(&json!("profile-a"))
+        );
+    }
     drop(journal);
+    let mut journal = RunJournal::open(profile.join("runs.sqlite3")).unwrap();
+    assert!(thread_deleted(&mut journal, &left_chat));
+    drop(journal);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_journal_opens_when_a_runless_threads_delete_names_no_attach_profile() {
+    // The startup sweep once deleted run-less creation chats with the
+    // runtime's own provenance, which names no attach profile, and the
+    // next open rejected the journal.
+    let root = muniment_core::state_root::test_root()
+        .join(format!("muniment-unstamped-delete-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("runs.sqlite3");
+    let mut journal = RunJournal::open(&path).unwrap();
+    let thread = create_thread_now(&mut journal, "workspace-a", attach_provenance()).unwrap();
+    let kept = create_thread_now(&mut journal, "workspace-a", attach_provenance()).unwrap();
+    journal
+        .append_thread_deleted(1, &thread, RECORDED_AT, &provenance(None))
+        .unwrap();
+    drop(journal);
+
+    let mut journal = RunJournal::open(&path).unwrap();
+    assert!(thread_deleted(&mut journal, &thread));
+    assert!(!thread_deleted(&mut journal, &kept));
+    // Any other run-less event without a profile still fails the open.
+    journal
+        .append_thread_title_renamed(1, &kept, "Plans", RECORDED_AT, &provenance(None))
+        .unwrap();
+    drop(journal);
+    assert!(RunJournal::open(&path).is_err());
     std::fs::remove_dir_all(root).unwrap();
 }

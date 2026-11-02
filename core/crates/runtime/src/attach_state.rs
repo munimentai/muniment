@@ -124,6 +124,25 @@ fn remove_orphan_creation_threads(
     }
 }
 
+/// Logs the open step that failed and its error, which names no secret.
+fn state_open_failed(step: &str, error: &str) {
+    muniment_core::runtime_eprintln!(
+        "muniment-runtime: state_open outcome=failed step={step} error={error}"
+    );
+}
+
+/// An error and each source under it, joined into one line.
+fn error_chain(error: &dyn std::error::Error) -> String {
+    let mut line = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        line.push_str(": ");
+        line.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    line
+}
+
 impl RuntimeAttachState {
     /// Opens the profile storage and companion registry for the runtime of one host.
     pub fn open(
@@ -145,8 +164,11 @@ impl RuntimeAttachState {
     ) -> Result<Self, ProtocolError> {
         let profile_directory = profile_directory.as_ref().to_path_buf();
         let config_directory = config_directory.as_ref().to_path_buf();
-        let storage = open_profile_storage_as(&profile_directory, host.runtime_version)
-            .map_err(|_| ProtocolError::persistence_failed())?;
+        let storage =
+            open_profile_storage_as(&profile_directory, host.runtime_version).map_err(|error| {
+                state_open_failed("profile_storage", &error_chain(&error));
+                ProtocolError::persistence_failed()
+            })?;
         remove_orphan_creation_threads(&storage, &profile_directory, host.runtime_version);
         // Session folders from older versions take their thread titles here,
         // so the runtime stays the only process that opens the journal. Home
@@ -161,7 +183,10 @@ impl RuntimeAttachState {
                 );
             }
         });
-        let companion_registry = open_companion_registry(&profile_directory)?;
+        let companion_registry =
+            open_companion_registry(&profile_directory).inspect_err(|error| {
+                state_open_failed("companion_registry", &error.to_string());
+            })?;
         let drain_state = DrainState::new();
         let runtime_activity = RuntimeActivityRegistry::with_drain_state(&drain_state);
         let approval = SignedWorkspaceApproval::default();
@@ -189,7 +214,10 @@ impl RuntimeAttachState {
             Arc::clone(&storage),
             Arc::clone(&swarm_host) as Arc<dyn muniment_core::swarm::SwarmHost>,
         )
-        .map_err(|_| ProtocolError::persistence_failed())?;
+        .map_err(|error| {
+            state_open_failed("swarm", &error);
+            ProtocolError::persistence_failed()
+        })?;
 
         Ok(Self {
             memory_runtime: Arc::new(
