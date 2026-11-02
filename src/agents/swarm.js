@@ -92,11 +92,11 @@ export async function listSwarm(tauri, runtimeList) {
 }
 
 // What the keychain refused this computer, from its own `swarm.members`
-// answer: the fleet key and the other secrets core holds back, or null when
+// answer to `{ keychain: true }`, which core gives with remote access off
+// too: the fleet key and the other secrets core holds back, or null when
 // the keychain refused nothing. `declined` is true when the person turned
 // the keychain's prompt down, which only Try again or a restart asks again.
-export function keychainRefusal(swarm) {
-  const view = swarm?.views?.[LOCAL_RUNTIME_ID]
+export function keychainRefusal(view) {
   const items = [...(view?.fleet_key?.state ? [{ label: 'fleet key', state: view.fleet_key.state }] : []), ...(Array.isArray(view?.keychain) ? view.keychain : [])]
   const labels = [...new Set(items.map((item) => String(item.label ?? '')).filter(Boolean))]
   if (!labels.length) return null

@@ -13,8 +13,8 @@
   // offline and log settings. Sync lists what this computer still takes from
   // the others while a bootstrap runs or a sign-in waits. When the keychain
   // refused this computer's fleet key or other saved secrets, a notice names
-  // them, and Try again asks core to read them once more. Core asks the
-  // keychain only on that action or at its next start. With MuniCloud on, the account's devices and
+  // them, with remote access on or off, and Try again asks core to read them
+  // once more. Core asks the keychain only on that action or at its next start. With MuniCloud on, the account's devices and
   // the phone paired through the relay are rows as well, and Add machine
   // pairs a phone.
   import { onMount } from 'svelte'
@@ -42,6 +42,7 @@
   let { tauri, listen = (...args) => window.__TAURI__?.event?.listen(...args), focus = null } = $props()
   let list = $state(null)
   let swarm = $state(null)
+  let keychain = $state(null)
   let devices = $state([])
   let cloudDevices = $state([])
   let phone = $state(null)
@@ -65,7 +66,7 @@
   let adding = $state(focus === 'add')
   // svelte-ignore state_referenced_locally
   let computerOpen = $state(focus === 'this-computer')
-  const keyRefusal = $derived(keychainRefusal(swarm))
+  const keyRefusal = $derived(keychainRefusal(keychain))
   const rows = $derived(list ? machineRows({ list, swarm, devices, cloudDevices, phone }) : [])
   const updateWaits = $derived(!!localVersion || updatableRuntimes(list).length > 0)
   // Update all acts only on this computer's waiting update or a machine that answers and is behind.
@@ -120,7 +121,13 @@
   // A machine without a fleet refuses, and the list shows the machines this
   // app reaches.
   async function readSwarm() {
+    void readKeychain()
     try { swarm = await listSwarm(tauri, list) } catch (_) { swarm = null }
+  }
+
+  // What the keychain refused this computer, which core answers with remote access off too.
+  async function readKeychain() {
+    try { keychain = await agentRequest(tauri, 'local', 'swarm.members', { keychain: true }) } catch (_) { keychain = null }
   }
 
   async function readDevices() {
@@ -317,7 +324,7 @@
   async function retryKeychain() {
     busy = 'keychain'
     try {
-      await agentRequest(tauri, 'local', 'swarm.members', { retry_keychain: true })
+      keychain = await agentRequest(tauri, 'local', 'swarm.members', { retry_keychain: true })
     } catch (failure) {
       error = errorText(failure)
     } finally {

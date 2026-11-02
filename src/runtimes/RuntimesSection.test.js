@@ -600,4 +600,33 @@ describe('Keychain refusal', () => {
     await waitFor(() => expect(retries).toEqual([{ retry_keychain: true }]))
     await waitFor(() => expect(screen.queryByText(/The keychain refused/)).not.toBeInTheDocument())
   })
+
+  it('shows what the keychain refused with remote access off and retries it', async () => {
+    let declined = true
+    const asked = []
+    const handlers = {
+      app_update_prepare: () => null,
+      agent_request: ({ runtime, operation, body }) => {
+        if (operation !== 'swarm.members' || runtime !== 'local') return {}
+        asked.push(body)
+        // With remote access off core refuses the members view and answers only what the keychain refused.
+        if (!body?.keychain && !body?.retry_keychain) throw new Error('Turn on remote access to see the swarm.')
+        if (body.retry_keychain) declined = false
+        return {
+          self: null,
+          members: [],
+          fleet_key: null,
+          keychain: declined ? [{ service: 'ai.muniment.endpoints', label: 'model endpoint keys', state: 'declined', message: 'User canceled the operation.' }] : [],
+        }
+      },
+    }
+    render(RuntimesSection, { tauri: tauri(handlers), listen })
+    const notice = await screen.findByText(/The keychain refused this computer's model endpoint keys/)
+    expect(notice).toHaveTextContent('Muniment holds them back until you try again.')
+    expect(asked).toContainEqual({ keychain: true })
+    expect(asked).not.toContainEqual({ retry_keychain: true })
+    await fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(asked).toContainEqual({ retry_keychain: true }))
+    await waitFor(() => expect(screen.queryByText(/The keychain refused/)).not.toBeInTheDocument())
+  })
 })
