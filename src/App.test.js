@@ -9611,6 +9611,36 @@ describe('agent chat', () => {
     expect(screen.queryByRole('list', { name: 'Weekly recap threads' })).toBeNull()
   })
 
+  it('shows one row for a new agent after Open agent starts its empty thread', async () => {
+    const saved = []
+    chatMock(saved)
+    const original = invoke.getMockImplementation()
+    let home = null
+    let listedHome = false
+    invoke.mockImplementation((command, payload) => {
+      if (command === 'chat_new_thread' && payload?.agentId) { home = 'agent-home'; return Promise.resolve(home) }
+      if (isAgentList(command, payload)) { listedHome ||= !!home; return Promise.resolve(agentListAnswer(saved, home ? { 'agent-1': home } : {})) }
+      if (command === 'chat_thread_open' && payload?.threadId === 'agent-home') return Promise.resolve([])
+      return original(command, payload)
+    })
+    render(App)
+    await screen.findByPlaceholderText('Ask anything')
+    await openSidebarPage('Agents')
+    const panel = await screen.findByRole('region', { name: 'Agents' })
+    await fireEvent.click(within(await within(panel).findByRole('region', { name: 'Give an agent a job' })).getByRole('button', { name: /^Weekly report/ }))
+    const reply = await screen.findByRole('article', { name: 'Draft: Weekly recap' })
+    await fireEvent.click(within(reply).getByRole('button', { name: 'Save' }))
+    await fireEvent.click(await within(reply).findByRole('button', { name: 'Open agent' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_new_thread', expect.objectContaining({ agentId: 'agent-1' })))
+    const list = screen.getByRole('list', { name: 'Projects list' })
+    // The agent listing names the home thread, and the rows settle after it.
+    await waitFor(() => expect(listedHome).toBe(true))
+    await screen.findByRole('complementary', { name: 'Agent profile' })
+    for (let turn = 0; turn < 5; turn += 1) await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(document.querySelector('#sidebar .thread-row[data-thread-id="agent-home"]')).toBeNull()
+    expect(within(list).getAllByText('Weekly recap', { selector: '.thread-row-title' })).toHaveLength(1)
+  })
+
   it('deletes a saved agent from its card through the profile confirmation, and its creation chat goes with it', async () => {
     const saved = []
     chatMock(saved)
