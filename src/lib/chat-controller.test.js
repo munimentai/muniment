@@ -138,6 +138,100 @@ describe('first thread page', () => {
     expect(invoke.mock.calls.filter(([command]) => command === 'chat_thread_summaries')).toHaveLength(2)
   })
 
+  // 12 archived threads lead 30 others, as in the live list that hid ten threads.
+  const live = Array.from({ length: 42 }, (_, index) => ({ threadId: `t${index}` }))
+  const liveArchived = new Set(['t0', 't1', 't2', 't3', 't4', 't5', 't6', 't7', 't8', 't9', 't10', 't11'])
+  const livePage = (cursor) => {
+    const from = cursor == null ? 0 : Number(cursor)
+    return { summaries: live.slice(from, from + 20), nextCursor: from + 20 < live.length ? String(from + 20) : null }
+  }
+  const shownCount = (context) => context.summaries().filter((summary) => !liveArchived.has(summary.threadId)).length
+
+  it('fills to 20 unarchived threads when a history load replaces the list during a page read', async () => {
+    const reads = []
+    const invoke = vi.fn(async (command, args) => {
+      if (command === 'chat_thread_summaries') {
+        if (args.cursor == null) return livePage(null)
+        const read = deferred()
+        reads.push(read)
+        return read.promise.then(() => livePage(args.cursor))
+      }
+      if (command === 'chat_thread_open') return { entries: [], nextCursor: null }
+      return null
+    })
+    const context = setup(invoke, { options: { readArchived: (id) => liveArchived.has(id) } })
+    const first = context.controller.loadHistory()
+    await vi.waitFor(() => expect(reads).toHaveLength(1))
+    // A reconnect reloads the history while the first fill reads page two.
+    const second = context.controller.loadHistory()
+    await vi.waitFor(() => expect(context.summaries()).toHaveLength(20))
+    reads[0].resolve()
+    await vi.waitFor(() => expect(reads).toHaveLength(2))
+    reads[1].resolve()
+    await Promise.all([first, second])
+    await vi.waitFor(() => expect(shownCount(context)).toBeGreaterThanOrEqual(20))
+    expect(context.summaries().map((summary) => summary.threadId)).toEqual(live.slice(0, 40).map((summary) => summary.threadId))
+    expect(context.onMoreThreads).toHaveBeenLastCalledWith(true)
+  })
+
+  it('takes the next page from a refresh when the first list read failed', async () => {
+    let failFirst = true
+    const invoke = vi.fn(async (command, args) => {
+      if (command === 'chat_thread_summaries') {
+        if (args.cursor == null && failFirst) { failFirst = false; throw new Error('Muniment is busy with another request.') }
+        return livePage(args.cursor)
+      }
+      if (command === 'chat_current_thread') return null
+      if (command === 'chat_thread_open') return { entries: [], nextCursor: null }
+      return null
+    })
+    const context = setup(invoke, { options: { readArchived: (id) => liveArchived.has(id) } })
+    await context.controller.loadHistory()
+    expect(context.controller.historyReadFailed()).toBe(true)
+    await context.controller.refreshThreads()
+    await vi.waitFor(() => expect(shownCount(context)).toBe(28))
+    expect(context.onMoreThreads).toHaveBeenLastCalledWith(true)
+    await expect(context.controller.loadOlderThreads()).resolves.toBe('t40')
+    expect(shownCount(context)).toBe(30)
+    expect(context.onMoreThreads).toHaveBeenLastCalledWith(false)
+  })
+
+  it('shares one page read between the fill and a search, so neither reads nothing', async () => {
+    const read = deferred()
+    const invoke = vi.fn(async (command, args) => {
+      if (command === 'chat_thread_summaries') return args.cursor == null ? livePage(null) : read.promise.then(() => livePage(args.cursor))
+      if (command === 'chat_thread_open') return { entries: [], nextCursor: null }
+      return null
+    })
+    const context = setup(invoke, { options: { readArchived: (id) => liveArchived.has(id) } })
+    const loading = context.controller.loadHistory()
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_summaries', { limit: 20, cursor: '20' }))
+    const searched = context.controller.loadOlderThreads()
+    read.resolve()
+    await expect(searched).resolves.toBe('t20')
+    await loading
+    expect(invoke.mock.calls.filter(([command, args]) => command === 'chat_thread_summaries' && args.cursor === '20')).toHaveLength(1)
+    expect(shownCount(context)).toBe(28)
+  })
+
+  it('keeps filling when a refresh lands during a page read', async () => {
+    const read = deferred()
+    const invoke = vi.fn(async (command, args) => {
+      if (command === 'chat_thread_summaries') return args.cursor == null ? livePage(null) : read.promise.then(() => livePage(args.cursor))
+      if (command === 'chat_current_thread') return null
+      if (command === 'chat_thread_open') return { entries: [], nextCursor: null }
+      return null
+    })
+    const context = setup(invoke, { options: { readArchived: (id) => liveArchived.has(id) } })
+    const loading = context.controller.loadHistory()
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_summaries', { limit: 20, cursor: '20' }))
+    await context.controller.refreshThreads()
+    read.resolve()
+    await loading
+    await vi.waitFor(() => expect(shownCount(context)).toBe(28))
+    expect(context.onMoreThreads).toHaveBeenLastCalledWith(true)
+  })
+
   it('reads no further page when the first holds 20 threads to show', async () => {
     const invoke = vi.fn(async (command) => {
       if (command === 'chat_thread_summaries') return page(0, 20, 'c1')

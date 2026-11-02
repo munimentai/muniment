@@ -3336,6 +3336,26 @@ describe('thread name', () => {
     await waitFor(() => expect(document.querySelector('.thread-row-title')).toHaveTextContent('Vendor audit'))
   })
 
+  it('fills the list past 12 archived threads, offers older threads, and searches every page', async () => {
+    const titles = Array.from({ length: 42 }, (_, index) => ({ threadId: `t${index}`, title: index === 41 ? 'Red Trek Bicycle Rocket' : `Plain thread ${index}`, updatedAt: new Date(Date.UTC(2026, 9, 1) - index * 60000).toISOString(), runtimeId: 'local' }))
+    localStorage.setItem('muniment.thread-organization', JSON.stringify(Object.fromEntries(Array.from({ length: 12 }, (_, index) => [`t${index + 1}`, { archived: true }]))))
+    const core = window.__TAURI__.core.invoke
+    window.__TAURI__.core.invoke = (command, ...args) => {
+      if (command !== 'chat_thread_summaries') return core(command, ...args)
+      const from = args[0]?.cursor ? Number(args[0].cursor) : 0
+      return Promise.resolve({ summaries: titles.slice(from, from + 20), nextCursor: from + 20 < titles.length ? String(from + 20) : null })
+    }
+    onTestFinished(() => { window.__TAURI__.core.invoke = core })
+    render(App)
+    const list = await screen.findByRole('list', { name: 'Projects list' })
+    await waitFor(() => expect(within(list).getAllByRole('listitem').length).toBeGreaterThanOrEqual(20))
+    expect(await screen.findByRole('button', { name: 'Older threads' })).toBeEnabled()
+    expect(within(list).queryByText('Red Trek Bicycle Rocket')).toBeNull()
+    await fireEvent.input(screen.getByRole('searchbox', { name: 'Search threads' }), { target: { value: 'red trek' } })
+    expect(await screen.findByRole('button', { name: 'Red Trek Bicycle Rocket' })).toBeInTheDocument()
+    expect(screen.queryByText('No matching threads.')).not.toBeInTheDocument()
+  })
+
   it('searches older titles and renames a thread without opening it', async () => {
     threadSummaryResult = [{ threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' }]
     olderThreadSummaryResult = [{ threadId: 'thread-2', title: 'Vendor audit', updatedAt: '' }]

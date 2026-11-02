@@ -136,7 +136,18 @@ export function createChatController({
   let threadRefreshSequence = 0
   let threadPageCount = 1
   let nextThreadCursor = null
-  let loadingOlderThreads = false
+  // Whether this computer's list ended: a page it answered named no next
+  // cursor. Until then a refresh's cursor restores the next page.
+  let threadListEnded = false
+  // The read of the next page in flight. A second caller shares it, so a
+  // search, the Older threads control and the fill never race for a page.
+  let olderThreadsLoad = null
+  // Each history load starts the list again, so a page read for the list
+  // it replaced is read again from the new list's cursor.
+  let threadListSequence = 0
+  // Whether the last page read failed. The list then waits for the user's
+  // Retry, and the fill stops.
+  let olderThreadsFailed = false
   const threadPageSize = 20
   // The shell shows a fresh thread and the first load after sign-in the same way:
   // no thread id. loadHistory reads this flag back to tell the two apart.
@@ -334,6 +345,12 @@ export function createChatController({
       const listed = firstPage.summaries.map((summary) => summary.replica && held.has(summary.threadId) ? held.get(summary.threadId) : summary)
       const summaries = [...listed, ...retainedSummaries]
       onThreadSummaries(summaries)
+      // A list whose first read failed or held no next cursor, such as one a
+      // paired machine answered alone, takes the next page from this read.
+      if (nextThreadCursor == null && !threadListEnded && firstPage.nextCursor != null && localListed) {
+        nextThreadCursor = firstPage.nextCursor
+        onMoreThreads(true)
+      }
       void fillThreads()
       const shownThreadId = currentThreadId ?? (freshThread ? null : readThreadId())
       onThreadSelected(shownThreadId)
@@ -508,7 +525,9 @@ export function createChatController({
       onDeletedThreads(deletedThreadIds ?? [])
       historyLoadFailed = false
       threadPageCount = 1
+      threadListSequence += 1
       nextThreadCursor = nextCursor
+      threadListEnded = nextCursor == null && localListed
       onThreadSummaries(summaries)
       onMoreThreads(nextThreadCursor != null)
       await fillThreads()
@@ -561,38 +580,55 @@ export function createChatController({
   }
 
   // Archived threads count toward a page, so the list reads older pages
-  // until it holds a page of threads the user did not archive or ends.
+  // until it holds a page of threads the user did not archive or ends. A
+  // page read in flight is awaited, never a reason to stop.
   async function fillThreads() {
-    for (let pages = 0; pages < 10; pages += 1) {
-      if (destroyed || loadingOlderThreads || nextThreadCursor == null) return
+    for (let pages = 0; pages < 50; pages += 1) {
+      if (destroyed || nextThreadCursor == null) return
       const listed = readThreadSummaries()
       const shown = listed.filter((summary) => !readArchived(summary.threadId)).length
       if (shown >= threadPageSize || shown === listed.length) return
-      if (await loadOlderThreads() == null) return
+      await loadOlderThreads()
+      if (olderThreadsFailed) return
     }
   }
 
-  async function loadOlderThreads() {
-    if (destroyed || loadingOlderThreads || nextThreadCursor == null) return null
-    loadingOlderThreads = true
-    const cursor = nextThreadCursor
-    const sequence = threadRefreshSequence
-    try {
-      const result = await invoke('chat_thread_summaries', { limit: threadPageSize, cursor })
-      if (destroyed || sequence !== threadRefreshSequence) return null
+  function loadOlderThreads() {
+    if (destroyed || nextThreadCursor == null) return Promise.resolve(null)
+    olderThreadsLoad ??= readOlderThreads().finally(() => { olderThreadsLoad = null })
+    return olderThreadsLoad
+  }
+
+  async function readOlderThreads() {
+    // A history load that replaced the list during the read leaves its page
+    // unused, and the read goes on from the new list's cursor.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (destroyed || nextThreadCursor == null) return null
+      const cursor = nextThreadCursor
+      const sequence = threadListSequence
+      let result
+      try {
+        result = await invoke('chat_thread_summaries', { limit: threadPageSize, cursor })
+      } catch (_) {
+        if (destroyed) return null
+        if (sequence !== threadListSequence) continue
+        olderThreadsFailed = true
+        onThreadListError('Older threads could not be loaded.', { label: 'Load older threads', run: loadOlderThreads })
+        return null
+      }
+      if (destroyed) return null
+      if (sequence !== threadListSequence || cursor !== nextThreadCursor) continue
+      olderThreadsFailed = false
       const firstThreadId = result.summaries[0]?.threadId ?? null
       onThreadSummaries([...readThreadSummaries(), ...result.summaries])
       threadPageCount += 1
       nextThreadCursor = result.nextCursor
+      if (result.nextCursor == null && listedLocally(result)) threadListEnded = true
       onMoreThreads(nextThreadCursor != null)
       onThreadListError('')
       return firstThreadId
-    } catch (_) {
-      if (!destroyed && sequence === threadRefreshSequence) onThreadListError('Older threads could not be loaded.', { label: 'Load older threads', run: loadOlderThreads })
-      return null
-    } finally {
-      loadingOlderThreads = false
     }
+    return null
   }
 
   // A quiet open reports no failure, since its caller falls back to another
