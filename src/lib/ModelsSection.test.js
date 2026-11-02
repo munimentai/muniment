@@ -282,3 +282,18 @@ it('fills the Edit form with the endpoint models and keeps them on a save with n
     kind: 'custom', name: 'oMLX', models: ['Qwen3.8-27B-4bit', 'gemma-4-26b-a4b-it-4bit'],
   })))
 })
+
+it('saves an edited endpoint with its kept models and a model added to the list', async () => {
+  const tauri = bridge()
+  const base = tauri.invoke.getMockImplementation()
+  tauri.invoke.mockImplementation(async (command, payload) => command === 'local_mode_store_endpoint' ? 'custom-omlx' : base(command, payload))
+  render(ModelsSection, { props: { tauri, listen: async () => () => {}, inventory } })
+  await fireEvent.click(within(screen.getByRole('region', { name: 'oMLX' })).getByRole('button', { name: 'Edit oMLX' }))
+  const field = screen.getByLabelText('Models, one per line')
+  await fireEvent.input(field, { target: { value: `${field.value}\nqwen3-coder` } })
+  await fireEvent.click(screen.getByRole('button', { name: 'Save endpoint' }))
+  // Core carries the kept models' limits forward and asks the server for the new one's.
+  await waitFor(() => expect(tauri.invoke).toHaveBeenCalledWith('local_mode_store_endpoint', expect.objectContaining({
+    models: ['Qwen3.8-27B-4bit', 'gemma-4-26b-a4b-it-4bit', 'qwen3-coder'],
+  })))
+})
