@@ -609,40 +609,44 @@ export function createChatController({
 
   function loadOlderThreads() {
     if (destroyed || nextThreadCursor == null) return Promise.resolve(null)
-    olderThreadsLoad ??= readOlderThreads().finally(() => { olderThreadsLoad = null })
+    olderThreadsLoad ??= readOlderThreads()
     return olderThreadsLoad
   }
 
   async function readOlderThreads() {
     // A history load that replaced the list during the read leaves its page
     // unused, and the read goes on from the new list's cursor.
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      if (destroyed || nextThreadCursor == null) return null
-      const cursor = nextThreadCursor
-      const sequence = threadListSequence
-      let result
-      try {
-        result = await invoke('chat_thread_summaries', { limit: threadPageSize, cursor })
-      } catch (_) {
+    try {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        if (destroyed || nextThreadCursor == null) return null
+        const cursor = nextThreadCursor
+        const sequence = threadListSequence
+        let result
+        try {
+          result = await invoke('chat_thread_summaries', { limit: threadPageSize, cursor })
+        } catch (_) {
+          if (destroyed) return null
+          if (sequence !== threadListSequence) continue
+          olderThreadsFailed = true
+          onThreadListError('Older threads could not be loaded.', { label: 'Load older threads', run: loadOlderThreads })
+          return null
+        }
         if (destroyed) return null
-        if (sequence !== threadListSequence) continue
-        olderThreadsFailed = true
-        onThreadListError('Older threads could not be loaded.', { label: 'Load older threads', run: loadOlderThreads })
-        return null
+        if (sequence !== threadListSequence || cursor !== nextThreadCursor) continue
+        olderThreadsFailed = false
+        const firstThreadId = result.summaries[0]?.threadId ?? null
+        onThreadSummaries([...readThreadSummaries(), ...result.summaries])
+        threadPageCount += 1
+        nextThreadCursor = result.nextCursor
+        if (result.nextCursor == null && listedLocally(result)) threadListEnded = true
+        onMoreThreads(nextThreadCursor != null)
+        onThreadListError('')
+        return firstThreadId
       }
-      if (destroyed) return null
-      if (sequence !== threadListSequence || cursor !== nextThreadCursor) continue
-      olderThreadsFailed = false
-      const firstThreadId = result.summaries[0]?.threadId ?? null
-      onThreadSummaries([...readThreadSummaries(), ...result.summaries])
-      threadPageCount += 1
-      nextThreadCursor = result.nextCursor
-      if (result.nextCursor == null && listedLocally(result)) threadListEnded = true
-      onMoreThreads(nextThreadCursor != null)
-      onThreadListError('')
-      return firstThreadId
+      return null
+    } finally {
+      olderThreadsLoad = null
     }
-    return null
   }
 
   // A quiet open reports no failure, since its caller falls back to another

@@ -1987,9 +1987,27 @@
     const firstThreadId = await chatController.loadOlderThreads()
     loadingOlderThreads = false
     if (!firstThreadId) return
+    olderRowFocus = firstThreadId
     await tick()
-    document.querySelector(`[data-thread-id="${CSS.escape(firstThreadId)}"]`)?.focus()
+    focusOlderRow()
   }
+  // The first row Older threads added takes focus. The list draws its rows
+  // again as its arrangement settles, so focus follows each new draw of that
+  // row until the user moves focus elsewhere.
+  let olderRowFocus = $state(null)
+  function focusOlderRow() {
+    const row = olderRowFocus && document.querySelector(`[data-thread-id="${CSS.escape(olderRowFocus)}"]`)
+    if (row && document.activeElement !== row) row.focus()
+  }
+  $effect(() => {
+    void shownSidebar
+    if (olderRowFocus) untrack(() => tick().then(focusOlderRow))
+  })
+  onMount(() => {
+    const moved = (event) => { if (olderRowFocus && event.target?.dataset?.threadId !== olderRowFocus) olderRowFocus = null }
+    document.addEventListener('focusin', moved)
+    return () => document.removeEventListener('focusin', moved)
+  })
 
   $effect(() => {
     const needsIndex = projectsOpen || [...expandedProjects].some((id) => !openedForThread.has(id)) || threadSearch.trim() || archivedOpen || Object.entries(threadOrganization)
