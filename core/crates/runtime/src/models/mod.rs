@@ -129,6 +129,9 @@ impl ModelService {
     }
 
     /// Moves each plain endpoint key in `models.json` to the credential store.
+    /// A key the store refuses stays in the broker's memory for this runtime
+    /// and leaves the file as well. Each moved key leaves a reference, so the
+    /// store hears one write per saved key and never a retry.
     fn seal_endpoint_keys(&self) {
         let Some(keys) = &self.endpoint_keys else {
             return;
@@ -137,12 +140,38 @@ impl ModelService {
             &self.agent,
             keys.store.as_ref(),
             &keys.executable,
-            &mut |provider| keys.broker.forget(provider),
+            &mut |provider, sealed| match sealed {
+                endpoint_secrets::Sealed::Stored => keys.broker.forget(provider),
+                endpoint_secrets::Sealed::Refused(key) => keys.broker.keep(provider, key),
+            },
         ) {
             muniment_core::runtime_eprintln!(
                 "muniment-runtime: endpoint_keys outcome=failed error={error}"
             );
         }
+    }
+
+    /// `inventory` with a `key_notice` on each endpoint whose key the runtime
+    /// holds in memory alone, because the store refused it.
+    fn with_key_notices(&self, mut inventory: Value) -> Value {
+        let Some(keys) = &self.endpoint_keys else {
+            return inventory;
+        };
+        for provider in inventory
+            .get_mut("providers")
+            .and_then(Value::as_array_mut)
+            .into_iter()
+            .flatten()
+        {
+            let kept = provider
+                .get("id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| keys.broker.kept_in_memory(id));
+            if kept {
+                provider["key_notice"] = endpoint_secrets::MEMORY_KEY_NOTICE.into();
+            }
+        }
+        inventory
     }
 
     /// The key a model list read sends for an `apiKey` value: a key the
@@ -311,6 +340,7 @@ impl ModelService {
                         &|value| self.discovery_key(value),
                     ))
                 }
+                .map(|inventory| self.with_key_notices(inventory))
             }
             ModelAction::SetDefaultModel => {
                 let data: ProviderModel = parse(data)?;
@@ -936,6 +966,95 @@ mod tests {
         fn remove(&self, _: &str, _: &str) -> Result<(), String> {
             Err("The keychain kept the secret: User canceled the operation.".into())
         }
+    }
+
+    /// A keychain stand-in whose every write fails the way the keychain's
+    /// read-first write failed over an item the runtime may not read.
+    struct RefusingWrites {
+        writes: std::sync::atomic::AtomicUsize,
+    }
+
+    impl CredentialStore for RefusingWrites {
+        fn read(&self, _: &str, _: &str) -> Option<String> {
+            panic!("a saved key is never read back from the store")
+        }
+
+        fn write(&self, _: &str, _: &str, _: &str) -> Result<(), String> {
+            self.writes
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err("The keychain refused the secret: Platform secure storage failure: The specified item already exists in the keychain.".into())
+        }
+
+        fn remove(&self, _: &str, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_key_the_store_refuses_stays_in_memory_and_never_on_disk_and_asks_once() {
+        let profile =
+            std::env::temp_dir().join(format!("muniment-model-service-{}", uuid::Uuid::now_v7()));
+        let agent = muniment_core::state_root::agent_directory(&profile);
+        std::fs::create_dir_all(&agent).unwrap();
+        let store = Arc::new(RefusingWrites {
+            writes: Default::default(),
+        });
+        let page: Arc<SignInPage> = Arc::new(crate::host::plain_sign_in_page);
+        let service = Arc::new(ModelService::new(&profile, page).with_endpoint_keys(
+            Arc::clone(&store) as Arc<dyn CredentialStore>,
+            PathBuf::from("/opt/muniment/muniment-runtime"),
+        ));
+        let provider = service
+            .request(
+                request(
+                    ModelAction::StoreEndpoint,
+                    serde_json::json!({"kind": "custom", "name": "Live28", "base_url": "http://127.0.0.1:9/v1", "key": "sk-live28", "models": ["m"]}),
+                ),
+                None,
+            )
+            .unwrap();
+        assert_eq!(provider, "custom-live28");
+        // Later model actions find no plain key to move, so the store hears
+        // no second write.
+        for _ in 0..7 {
+            service
+                .request(
+                    request(ModelAction::ProviderStatus, serde_json::json!({})),
+                    None,
+                )
+                .unwrap();
+        }
+        assert_eq!(store.writes.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let text = std::fs::read_to_string(agent.join("models.json")).unwrap();
+        assert!(!text.contains("sk-live28"), "{text}");
+        assert!(text.contains("secret get custom-live28"), "{text}");
+        // Pi's command gets the key from the runtime, which never asks the store.
+        let keys = service.endpoint_keys.as_ref().unwrap();
+        assert_eq!(
+            keys.broker.answer("custom-live28"),
+            endpoint_secrets::KeyAnswer::Key("sk-live28".into())
+        );
+        let inventory = service.with_key_notices(serde_json::json!({"providers": [
+            {"id": "custom-live28"}, {"id": "custom-other"}
+        ]}));
+        assert_eq!(
+            inventory["providers"][0]["key_notice"],
+            endpoint_secrets::MEMORY_KEY_NOTICE
+        );
+        assert!(inventory["providers"][1].get("key_notice").is_none());
+        // A disconnect drops the key the runtime held.
+        service
+            .request(
+                request(
+                    ModelAction::DisconnectProvider,
+                    serde_json::json!({"provider": "custom-live28"}),
+                ),
+                None,
+            )
+            .unwrap();
+        assert!(!keys.broker.kept_in_memory("custom-live28"));
+        assert_eq!(keys.broker.held("custom-live28"), None);
+        std::fs::remove_dir_all(profile).unwrap();
     }
 
     #[test]

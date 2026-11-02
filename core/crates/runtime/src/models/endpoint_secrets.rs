@@ -67,18 +67,31 @@ fn safe_provider(provider: &str) -> bool {
 /// Moves every plain endpoint key in `models.json` into `store` and writes a
 /// reference through `executable` in its place, and points each reference
 /// this module wrote at `executable`, so a moved runtime keeps its keys.
-/// Answers how many entries changed. A key the store refuses stays in the
-/// file, so no key is lost.
+/// Answers how many entries changed. No plain key stays in the file: a key
+/// the store refuses leaves it too, and only [`seal_with`] hands it to the
+/// caller.
 pub fn seal(agent: &Path, store: &dyn CredentialStore, executable: &Path) -> Result<usize, String> {
-    seal_with(agent, store, executable, &mut |_| {})
+    seal_with(agent, store, executable, &mut |_, _| {})
 }
 
-/// [`seal`], which also names each provider whose key it wrote to `store`.
+/// What became of one plain key [`seal_with`] moved out of `models.json`.
+pub enum Sealed<'a> {
+    /// The store holds the key.
+    Stored,
+    /// The store refused the key, and the caller holds it.
+    Refused(&'a str),
+}
+
+/// [`seal`], which also names each provider whose plain key it moved and
+/// what became of the key. A key the store refuses goes to `moved` as
+/// [`Sealed::Refused`] and leaves the file all the same, so a plain key never
+/// stays on disk. The file then holds a reference, so a later pass finds no
+/// key to move and the store hears one write per key the person saves.
 pub fn seal_with(
     agent: &Path,
     store: &dyn CredentialStore,
     executable: &Path,
-    stored: &mut dyn FnMut(&str),
+    moved: &mut dyn FnMut(&str, Sealed<'_>),
 ) -> Result<usize, String> {
     let models_file = pi_models::models_file(agent);
     if !models_file.is_file() {
@@ -114,13 +127,15 @@ pub fn seal_with(
                 {
                     continue;
                 }
-                if let Err(error) = store.write(SERVICE, provider, key) {
-                    muniment_core::runtime_eprintln!(
-                        "muniment-runtime: endpoint_key provider={provider} outcome=kept error={error}"
-                    );
-                    continue;
+                match store.write(SERVICE, provider, key) {
+                    Ok(()) => moved(provider, Sealed::Stored),
+                    Err(error) => {
+                        muniment_core::runtime_eprintln!(
+                            "muniment-runtime: endpoint_key provider={provider} outcome=memory error={error}"
+                        );
+                        moved(provider, Sealed::Refused(key));
+                    }
                 }
-                stored(provider);
             }
             entry["apiKey"] = next.into();
             changed += 1;
@@ -132,6 +147,11 @@ pub fn seal_with(
     }
     Ok(changed)
 }
+
+/// The sentence an endpoint card shows while the runtime holds its key in
+/// memory alone, because the store refused it.
+pub const MEMORY_KEY_NOTICE: &str =
+    "The key is kept until Muniment quits; the keychain refused it.";
 
 /// The sentence a disconnect shows when the store kept `provider`'s key:
 /// where the key stays and how the person removes it.
@@ -233,6 +253,8 @@ impl KeyAnswer {
 pub struct KeyBroker {
     store: Arc<dyn CredentialStore>,
     slots: Mutex<BTreeMap<String, Slot>>,
+    /// The providers whose key the store refused, so the broker alone holds it.
+    memory: Mutex<std::collections::BTreeSet<String>>,
     wait: Duration,
 }
 
@@ -284,6 +306,7 @@ impl KeyBroker {
         Arc::new(Self {
             store,
             slots: Mutex::new(BTreeMap::new()),
+            memory: Mutex::new(Default::default()),
             wait,
         })
     }
@@ -374,6 +397,30 @@ impl KeyBroker {
     /// what it holds, and a read that runs now answers its waiters only.
     pub fn forget(&self, provider: &str) {
         self.slots().remove(provider);
+        self.memory().remove(provider);
+    }
+
+    /// The store refused `key`, the new key for `provider`: the broker holds
+    /// it for the requests of this runtime, which never ask the store for it.
+    pub fn keep(&self, provider: &str, key: &str) {
+        if !safe_provider(provider) {
+            return;
+        }
+        self.slots()
+            .insert(provider.to_owned(), Slot::Held(key.to_owned()));
+        self.memory().insert(provider.to_owned());
+    }
+
+    /// Whether the broker alone holds `provider`'s key, because the store
+    /// refused it.
+    pub fn kept_in_memory(&self, provider: &str) -> bool {
+        self.memory().contains(provider)
+    }
+
+    fn memory(&self) -> std::sync::MutexGuard<'_, std::collections::BTreeSet<String>> {
+        self.memory
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -592,7 +639,7 @@ mod tests {
     }
 
     #[test]
-    fn a_key_the_store_refuses_stays_in_the_file() {
+    fn a_key_the_store_refuses_leaves_the_file_for_the_caller_and_asks_once() {
         let root = temporary("refused");
         let agent = root.join("agent");
         std::fs::create_dir_all(&agent).unwrap();
@@ -601,17 +648,53 @@ mod tests {
             r#"{"providers":{"custom-proxy":{"baseUrl":"https://proxy.example/v1","apiKey":"sk-kept"}}}"#,
         )
         .unwrap();
-        let store = FileCredentialStore::environment_only();
-        assert_eq!(seal(&agent, &store, Path::new("/opt/runtime")).unwrap(), 0);
+        let store = Refusing::default();
+        let executable = Path::new("/opt/runtime");
+        let mut held = Vec::new();
+        let mut moved = |provider: &str, sealed: Sealed<'_>| match sealed {
+            Sealed::Refused(key) => held.push((provider.to_owned(), key.to_owned())),
+            Sealed::Stored => panic!("the store refused the key"),
+        };
+        assert_eq!(
+            seal_with(&agent, &store, executable, &mut moved).unwrap(),
+            1
+        );
+        // Every later pass finds the reference and asks the store nothing.
+        for _ in 0..7 {
+            assert_eq!(
+                seal_with(&agent, &store, executable, &mut moved).unwrap(),
+                0
+            );
+        }
+        assert_eq!(held, [("custom-proxy".to_owned(), "sk-kept".to_owned())]);
+        assert_eq!(store.writes.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(!std::fs::read_to_string(agent.join("models.json"))
+            .unwrap()
+            .contains("sk-kept"));
         assert_eq!(
             models(&agent)["providers"]["custom-proxy"]["apiKey"],
-            "sk-kept"
+            "!\"/opt/runtime\" secret get custom-proxy"
         );
+
+        // The broker answers the kept key without a store read, until a
+        // disconnect or a stored key drops it.
+        let broker = KeyBroker::new(Arc::new(Refusing::default()));
+        broker.keep("custom-proxy", "sk-kept");
+        assert!(broker.kept_in_memory("custom-proxy"));
+        assert_eq!(
+            broker.answer("custom-proxy"),
+            KeyAnswer::Key("sk-kept".into())
+        );
+        broker.forget("custom-proxy");
+        assert!(!broker.kept_in_memory("custom-proxy"));
         let _ = std::fs::remove_dir_all(root);
     }
 
-    /// A store whose every read the keychain declined.
-    struct Refusing;
+    /// A store whose every read and write the keychain declined.
+    #[derive(Default)]
+    struct Refusing {
+        writes: std::sync::atomic::AtomicUsize,
+    }
 
     impl CredentialStore for Refusing {
         fn read(&self, _: &str, _: &str) -> Option<String> {
@@ -625,7 +708,9 @@ mod tests {
         }
 
         fn write(&self, _: &str, _: &str, _: &str) -> Result<(), String> {
-            Err("refused".into())
+            self.writes
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err("The keychain refused the secret: User canceled the operation.".into())
         }
 
         fn remove(&self, _: &str, _: &str) -> Result<(), String> {
@@ -663,7 +748,7 @@ mod tests {
             run_command_through(&arguments(&["--version"]), None, open),
             None
         );
-        let refusing = || Arc::new(Refusing) as Arc<dyn CredentialStore>;
+        let refusing = || Arc::new(Refusing::default()) as Arc<dyn CredentialStore>;
         assert_eq!(
             run_command_through(
                 &arguments(&["secret", "get", "custom-proxy"]),

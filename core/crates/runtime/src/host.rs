@@ -424,11 +424,20 @@ impl KeyringCredentialStore {
                     .into(),
             );
         }
+        // A refused write holds back the entry as a refused read does, so
+        // the keychain hears no second write until the person retries.
         set().map_err(|error| {
-            format!(
-                "The keychain refused the secret: {}.",
-                error.to_string().trim_end_matches('.')
-            )
+            let refusal = muniment_core::keychain_refusal::keyring_refusal(&error);
+            muniment_core::runtime_eprintln!(
+                "muniment-runtime: the keychain refused a write to {service}: {}",
+                refusal.message()
+            );
+            self.refusals
+                .note(service, name, &refusal, std::time::Instant::now());
+            if let Some(shared) = &self.shared {
+                shared.note(service, &refusal);
+            }
+            refusal.message().to_owned()
         })
     }
 }
@@ -448,8 +457,10 @@ impl CredentialStore for KeyringCredentialStore {
 
     fn write(&self, service: &str, name: &str, secret: &str) -> Result<(), String> {
         muniment_core::state_root::guard_keychain(service);
+        // The write never reads the old secret, so a key the runtime may not
+        // read takes no prompt to replace.
         self.put(service, name, || {
-            Entry::new(service, name).and_then(|entry| entry.set_password(secret))
+            muniment_core::keychain_refusal::write_without_reading(service, name, secret)
         })
     }
 
@@ -586,6 +597,38 @@ mod keyring_store_tests {
             .unwrap_err();
         assert!(kept.starts_with("The keychain kept the secret: "), "{kept}");
         assert!(!kept.ends_with(".."), "{kept}");
+    }
+
+    #[test]
+    fn a_refused_write_asks_the_keychain_once_until_a_retry() {
+        let store = KeyringCredentialStore::default();
+        let writes = Cell::new(0);
+        let refused = || {
+            writes.set(writes.get() + 1);
+            Err(user_canceled())
+        };
+        let error = store
+            .put("ai.muniment.endpoints", "custom-live28", refused)
+            .unwrap_err();
+        assert!(
+            error.starts_with("The keychain refused the secret: "),
+            "{error}"
+        );
+        // Every later save and start answers the held refusal without a write.
+        for _ in 0..7 {
+            assert!(store
+                .put("ai.muniment.endpoints", "custom-live28", refused)
+                .is_err());
+        }
+        assert_eq!(writes.get(), 1);
+        assert_eq!(store.refusals().len(), 1);
+        assert_eq!(store.refusals()[0].name, "custom-live28");
+        // Try again lets the next save write once more.
+        store.retry_refused();
+        assert!(store
+            .put("ai.muniment.endpoints", "custom-live28", || Ok(()))
+            .is_ok());
+        assert!(store.refusals().is_empty());
     }
 
     #[cfg(target_os = "macos")]
