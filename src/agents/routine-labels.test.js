@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, expect, it } from 'vitest'
 import { isProposal, lastFiredLabel, nextRunLabel, pollLabel, routineWhen, triggerSummary } from './routine-labels.js'
 import { runTimeLabel } from '../lib/agent-labels.js'
-import { nextCronFire } from './cron.js'
 import { saveTimeSetting } from '../lib/time-format.svelte.js'
 
 beforeEach(() => saveTimeSetting(null, { zone: 'UTC', clock: '24h' }))
@@ -73,29 +72,18 @@ it('names the next run in local time with no time zone', () => {
   const next = Math.floor(now / 1000) + 3600
   const cron = (tz, extra = {}) => ({ id: tz, enabled: true, trigger: { kind: 'cron', expr: '0 2 * * *', tz }, ...extra })
   expect(nextRunLabel({ routines: [cron('UTC', { next_fire_at: next })] }, now)).toBe(runTimeLabel(next * 1000, now))
+  expect(nextRunLabel({ routines: [cron('UTC')] }, now)).toBe('Every day at 02:00')
   expect(nextRunLabel({ routines: [cron('UTC')] }, now)).not.toMatch(/UTC|GMT/)
   expect(nextRunLabel({ routines: [{ id: 'hook', enabled: true, trigger: { kind: 'webhook', preset: 'github' } }] }, now)).toBe('Webhook · GitHub')
   expect(nextRunLabel({ routines: [cron('UTC', { enabled: false })] }, now)).toBe('Manual')
   expect(nextRunLabel({ paused_reason: 'budget', routines: [cron('UTC')] }, now)).toBe('Paused')
 })
 
-it('names a just-saved schedule\'s next run as a time before core reports it, in the words core\'s time brings', async () => {
+it('names a just-saved schedule\'s next run from the time core\'s save reports', async () => {
   await saveTimeSetting(null, { zone: 'America/New_York', clock: '12h' })
-  // Sunday 1 November 2026 at 10:00 in New York. A Monday 9:00 AM schedule fires tomorrow.
+  // Sunday 1 November 2026 at 10:00 in New York. Core's save times a Monday 9:00 AM schedule for tomorrow.
   const now = Date.parse('2026-11-01T15:00:00Z')
   const monday = { id: 'brief', enabled: true, trigger: { kind: 'cron', expr: '0 9 * * 1', tz: 'America/New_York' } }
   const fired = Date.parse('2026-11-02T14:00:00Z')
-  expect(nextCronFire('0 9 * * 1', 'America/New_York', now)).toBe(fired)
-  expect(nextRunLabel({ routines: [monday] }, now)).toBe('Tomorrow at 9:00 AM')
   expect(nextRunLabel({ routines: [{ ...monday, next_fire_at: fired / 1000 }] }, now)).toBe('Tomorrow at 9:00 AM')
-  // Each builder shape, in the routine's own zone, across the day's end and the weekend.
-  expect(nextCronFire('0 9 * * *', 'America/New_York', now)).toBe(Date.parse('2026-11-02T14:00:00Z'))
-  expect(nextCronFire('30 10 * * *', 'America/New_York', now)).toBe(Date.parse('2026-11-01T15:30:00Z'))
-  expect(nextCronFire('0 8 * * 1-5', 'America/New_York', Date.parse('2026-10-30T13:00:00Z'))).toBe(Date.parse('2026-11-02T13:00:00Z'))
-  expect(nextCronFire('0 2 * * *', 'UTC', now)).toBe(Date.parse('2026-11-02T02:00:00Z'))
-  expect(nextCronFire('*/15 * * * *', 'UTC', Date.parse('2026-11-01T15:07:30Z'))).toBe(Date.parse('2026-11-01T15:15:00Z'))
-  expect(nextCronFire('0 */6 * * *', 'UTC', now)).toBe(Date.parse('2026-11-01T18:00:00Z'))
-  // An expression the builder cannot show keeps its words.
-  expect(nextCronFire('0 9 1 * *', 'UTC', now)).toBeNull()
-  expect(nextRunLabel({ routines: [{ ...monday, trigger: { kind: 'cron', expr: '0 9 1 * *', tz: 'UTC' } }] }, now)).toBe('0 9 1 * *')
 })
