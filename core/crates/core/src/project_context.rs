@@ -216,6 +216,7 @@ mod tests {
                 output: "HTML".into(),
                 result_id: None,
                 turns: Vec::new(),
+                title: None,
             },
         )
         .unwrap();

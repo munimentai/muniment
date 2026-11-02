@@ -467,10 +467,10 @@ impl ApplicationMemoryRuntime {
                 }
                 let plan: Plan =
                     serde_json::from_str(arguments).map_err(|_| "Invalid creation goal.")?;
-                let existing = crate::creations::read(&self.config, &thread)?;
-                let result_id = existing
-                    .filter(|p| p.kind == plan.kind)
-                    .and_then(|p| p.result_id);
+                let existing =
+                    crate::creations::read(&self.config, &thread)?.filter(|p| p.kind == plan.kind);
+                let result_id = existing.as_ref().and_then(|p| p.result_id.clone());
+                let title = existing.and_then(|p| p.title);
                 let plan = crate::creations::save(
                     &self.config,
                     crate::creations::Creation {
@@ -480,6 +480,7 @@ impl ApplicationMemoryRuntime {
                         output: plan.output,
                         result_id,
                         turns: Vec::new(),
+                        title,
                     },
                 )?;
                 Ok(serde_json::json!({"saved":true,"creation":plan}))
@@ -534,6 +535,7 @@ impl ApplicationMemoryRuntime {
                             output: format!("Saved agent: {}", agent.name),
                             result_id: None,
                             turns: Vec::new(),
+                            title: None,
                         },
                     );
                     if plan.kind == "agent" {

@@ -145,7 +145,7 @@
   import { SETTINGS_PAGE, isPaletteShortcut, paletteInput, paletteShortcut, settingsPages } from './sidebar/palette.js'
   import { layerLabel, sourceLine } from './sidebar/sources.js'
   import { arrangeSidebar, emptySidebar, markRead, readMarks, rowTime, runStates, shownRows, sidebarInput, threadChangedAt } from './sidebar/sidebar-model.js'
-  import { threadTitle, creationTitle } from './lib/thread-title.js'
+  import { threadTitle, creationTitle, creationThreadTitle } from './lib/thread-title.js'
   import { createVoiceGesture } from './lib/voice-gesture.js'
   import { createVoiceShortcutManager } from './lib/voice-shortcut.js'
   import { cleanTranscript, dictationStartOptions, readVoiceSettings } from './lib/voice-settings.js'
@@ -328,7 +328,7 @@
       } else {
         const id = kind === 'artifact' && (item.resultId || item.id)
         if (id) await tauri.invoke('artifact_edit',{id,name})
-        else await tauri.invoke('creation_save',{creation:{...item,goal:name}})
+        else await tauri.invoke('creation_save',{creation:{...item,goal:name,title:name}})
         await refreshCreations()
       }
       return
@@ -380,6 +380,20 @@
     if (values[0].status === 'fulfilled' && Array.isArray(values[0].value)) creations = values[0].value
     if (values[1].status === 'fulfilled' && Array.isArray(values[1].value)) artifactItems = values[1].value
   }
+  // A creation chat keeps the thread list's name in its record, so its
+  // heading stays when the list's page no longer holds the chat.
+  const creationTitleSaves = new Map()
+  $effect(() => {
+    for (const item of creations) {
+      const title = creationThreadTitle(item, threadSummaries)
+      if (!title || title === item.title || item.turns?.length || creationTitleSaves.get(item.threadId) === title) continue
+      creationTitleSaves.set(item.threadId, title)
+      const { turns: _, ...record } = $state.snapshot(item)
+      untrack(() => tauri.invoke('creation_save', { creation: { ...record, title } }))
+        .then((saved) => { if (saved?.threadId) creations = creations.map(entry => entry.threadId === saved.threadId ? { ...entry, title: saved.title } : entry) })
+        .catch(() => {})
+    }
+  })
   async function startCreation(kind, chosen = creationDefaults(kind), text = '') {
     if (remoteSelected(runtimeList)) await onThisComputer()
     if (switchLocked) return

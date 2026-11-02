@@ -448,6 +448,7 @@ fn deletes_an_agent_creation_chat_that_holds_no_run() {
                 output: "A saved agent".into(),
                 result_id: None,
                 turns: Vec::new(),
+                title: None,
             },
         )
         .unwrap();
@@ -632,6 +633,7 @@ fn save_creation(profile: &std::path::Path, thread_id: &str, agent: &str) {
             output: "A saved agent".into(),
             result_id: Some(agent.to_owned()),
             turns: Vec::new(),
+            title: None,
         },
     )
     .unwrap();

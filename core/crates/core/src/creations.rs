@@ -19,6 +19,10 @@ pub struct Creation {
     /// it with, oldest first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub turns: Vec<DraftTurn>,
+    /// The chat's last known short name, so a creation keeps its heading
+    /// when the thread list no longer holds the chat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 /// One message of an agent's creation chat and the draft `agent.draft`
 /// answered it with.
@@ -64,10 +68,20 @@ pub fn save(profile: &Path, mut item: Creation) -> Result<Creation, String> {
     }
     item.goal = item.goal.trim().into();
     item.output = item.output.trim().into();
-    // A save that carries no turns keeps the chat's turns.
-    if item.turns.is_empty() {
+    item.title = item
+        .title
+        .map(|title| title.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|title| !title.is_empty() && title.chars().count() <= 80);
+    // A save that carries no turns keeps the chat's turns, and a save that
+    // carries no title keeps the chat's title.
+    if item.turns.is_empty() || item.title.is_none() {
         if let Some(saved) = read(profile, &item.thread_id)? {
-            item.turns = saved.turns;
+            if item.turns.is_empty() {
+                item.turns = saved.turns;
+            }
+            if item.title.is_none() {
+                item.title = saved.title;
+            }
         }
     }
     let path = record_path(profile, &item.thread_id)?;
@@ -198,6 +212,7 @@ pub fn publish(
         output: "An interactive HTML artifact".into(),
         result_id: None,
         turns: Vec::new(),
+        title: None,
     });
     if plan.kind == "artifact" {
         plan.result_id = Some(item.id.clone());
@@ -269,6 +284,28 @@ pub fn edit_artifact(profile: &Path, id: &str, name: Option<&str>) -> Result<(),
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_save_without_a_title_keeps_the_chat_title() {
+        let profile = std::env::temp_dir().join(format!("creation-{}", uuid::Uuid::new_v4()));
+        let thread = uuid::Uuid::new_v4().to_string();
+        let record = |title: Option<&str>| Creation {
+            thread_id: thread.clone(),
+            kind: "agent".into(),
+            goal: "Report the project status every morning to the owner".into(),
+            output: "A saved agent".into(),
+            result_id: None,
+            turns: Vec::new(),
+            title: title.map(Into::into),
+        };
+        save(&profile, record(Some("  Muniment   Project Status "))).unwrap();
+        save(&profile, record(None)).unwrap();
+        let kept = read(&profile, &thread).unwrap().unwrap();
+        assert_eq!(kept.title.as_deref(), Some("Muniment Project Status"));
+        save(&profile, record(Some(&"x".repeat(81)))).unwrap();
+        let kept = read(&profile, &thread).unwrap().unwrap();
+        assert_eq!(kept.title.as_deref(), Some("Muniment Project Status"));
+        let _ = fs::remove_dir_all(profile);
+    }
     #[test]
     fn publication_updates_one_output_and_preserves_its_name() {
         let root = std::env::temp_dir().join(format!("creation-{}", uuid::Uuid::new_v4()));

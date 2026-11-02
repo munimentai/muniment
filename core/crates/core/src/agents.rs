@@ -3030,6 +3030,7 @@ mod tests {
             output: "A saved agent".into(),
             result_id,
             turns: Vec::new(),
+            title: None,
         };
         let chat = crate::creations::save(&profile, creation(Some(agent.id.clone()))).unwrap();
         let other = crate::creations::save(&profile, creation(None)).unwrap();
