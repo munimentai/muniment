@@ -64,3 +64,18 @@ it('keeps the default off a secondary press on a model picker, menu, list or tre
   expect(down('search', { button: 2 })).toBe(false)
   expect(down('text', { button: 2 })).toBe(false)
 })
+
+it('keeps the browser menu off a right-click on a model picker row, while a row menu still opens and a text field keeps its own', () => {
+  document.body.innerHTML = '<div data-panel="model-picker"><input id="search"><button id="model"><span id="label">Astra</span></button></div>'
+    + '<div data-panel="sidebar"><button id="row">Thread</button></div><main><p id="text">Reply</p><textarea id="composer"></textarea></main>'
+  let rowMenu = 0
+  document.getElementById('row').addEventListener('contextmenu', () => { rowMenu += 1 })
+  const menu = (id) => {
+    const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 })
+    document.getElementById(id).dispatchEvent(event)
+    return event.defaultPrevented
+  }
+  for (const id of ['label', 'model', 'row']) expect(menu(id)).toBe(true)
+  expect(rowMenu).toBe(1)
+  for (const id of ['search', 'text', 'composer']) expect(menu(id)).toBe(false)
+})

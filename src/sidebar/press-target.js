@@ -21,9 +21,18 @@ export function holdSecondaryPress(event) {
   event.preventDefault()
 }
 
+// The same rows never show the browser's own menu (Reload, AutoFill). A row
+// with a menu of its own still opens it, and a text field keeps the browser's.
+export function holdNativeMenu(event) {
+  const target = event.target instanceof Element ? event.target : event.target?.parentElement
+  if (!target?.closest(HELD) || target.closest('input, textarea, [contenteditable]:not([contenteditable="false"])')) return
+  event.preventDefault()
+}
+
 if (typeof document !== 'undefined') {
   document.addEventListener('pointerdown', recordPress, true)
   document.addEventListener('mousedown', holdSecondaryPress, true)
+  document.addEventListener('contextmenu', holdNativeMenu, true)
 }
 
 // Whether `event`, a pointer's context menu on `row`, follows a press that
