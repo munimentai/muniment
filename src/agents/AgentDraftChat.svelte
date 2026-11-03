@@ -55,6 +55,8 @@
   // The test run as the window last heard of it.
   const testLatest = $derived(testRun ? (runs.find((run) => run.id === testRun.id && (run.runtimeId ?? LOCAL_RUNTIME_ID) === runtime) ?? testRun) : null)
   const testLine = $derived(testLatest ? testRunLine(testLatest) : null)
+  // A Save error speaks for the draft it tried, so the next draft clears it.
+  $effect(() => { void draftKey; saveError = '' })
 
   // A test save keeps the triggers off, then starts one run of the agent.
   async function save(test) {
@@ -95,7 +97,7 @@
         {#if draft.label}<p class="label">{draft.label}</p>{/if}
         <dl>
           <dt>What it does</dt><dd class="instructions">{draft.instructions}</dd>
-          <dt>When</dt><dd>{schedule(draft)}{#if (draft.routines ?? []).some(hasPickedTime)} <span class="picked" role="note">{DEFAULT_TIME_NOTE}</span>{/if}</dd>
+          <dt>When</dt><dd>{schedule(draft)}{#if (draft.routines ?? []).some(hasPickedTime)}<p class="picked" role="note">{DEFAULT_TIME_NOTE}</p>{/if}</dd>
           {#if skillNames(draft).length}<dt>Skills</dt><dd>{skillNames(draft).join(', ')}</dd>{/if}
           {#if model}<dt>Model</dt><dd>{model}</dd>{/if}
         </dl>
@@ -150,7 +152,7 @@
   dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 16px; margin: 0; }
   dt { color: var(--muted); font-size: var(--text-13); }
   dd { margin: 0; overflow-wrap: anywhere; }
-  .picked { color: var(--warning); font-size: var(--text-12); }
+  .picked { margin: 2px 0 0; color: var(--warning); font-size: var(--text-12); }
   .instructions { white-space: pre-wrap; }
   .question { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); }
   .question p { margin: 0; font-weight: var(--weight-semibold); }

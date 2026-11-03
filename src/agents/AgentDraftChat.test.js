@@ -57,7 +57,11 @@ it('says Muniment picked a time the message did not name, and Save keeps the dra
   const picked = { ...draft, routines: [{ ...draft.routines[0], trigger: { kind: 'cron', expr: '0 9 * * 5', tz: 'America/New_York' }, default_time: true }] }
   render(AgentDraftChat, { tauri, turns: [turn('On Fridays, back up the notes folder', { draft: picked, question: null, via: 'router' })] })
   const shown = screen.getByRole('article', { name: 'Draft: Inbox brief' })
-  expect(within(shown).getByRole('note')).toHaveTextContent('Muniment picked the time. Change it if needed.')
+  const note = within(shown).getByRole('note')
+  expect(note).toHaveTextContent('Muniment picked the time. Change it if needed.')
+  // The note is its own line under the time, never run into it.
+  expect(note.tagName).toBe('P')
+  expect(note.previousSibling.textContent).toBe('Fridays at 09:00')
   cleanup()
   render(AgentDraftChat, { tauri, turns: [turn('Every weekday at 9am, summarize my inbox')] })
   expect(screen.queryByRole('note')).toBeNull()
@@ -213,6 +217,22 @@ it('rests Save on the draft it saved until a new message drafts a change', async
   expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled()
   // An unsaved change clears Saved. under the waking Save changes.
   expect(screen.queryByText('Saved.')).toBeNull()
+})
+
+it('clears a Save error when the next draft arrives', async () => {
+  const { tauri } = runtime()
+  const invoke = tauri.invoke.getMockImplementation()
+  tauri.invoke.mockImplementation(async (command, args) => {
+    if (args.operation === 'agent.save') throw new Error('Remove credentials from the agent instructions.')
+    return invoke(command, args)
+  })
+  const first = [turn('Summarize my inbox')]
+  const { rerender } = render(AgentDraftChat, { tauri, turns: first })
+  await fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+  expect(await screen.findByRole('alert')).toHaveTextContent('Remove credentials from the agent instructions.')
+  await rerender({ turns: [...first, { ...turn('Call it Inbox digest', { draft: { ...draft, name: 'Inbox digest' }, question: null, via: 'router' }), at: '2026-10-19T10:05:00Z' }] })
+  expect(screen.queryByRole('alert')).toBeNull()
+  expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled()
 })
 
 it('asks core with a chat message and polls until the draft is done', async () => {
