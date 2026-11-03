@@ -143,3 +143,16 @@ it('keeps a folder the person chose when the thread takes its title', async () =
   expect(screen.getByRole('treeitem',{name:'home.md'})).toBeInTheDocument()
   expect(invoke.mock.calls.filter(([command,args]) => command === 'workspace_list' && args.path === '/home/sessions/Plan-c3fa5c5a')).toHaveLength(0)
 })
+
+it('reads a hidden view folders only once it shows, so a chat leaves no folder unseen', async () => {
+  const invoke = vi.fn(async (command,args) => command === 'workspace_folders'
+    ? [{label:'Muniment folder',path:'/home'},{label:'Thread workspace',path:'/home/sessions/New_agent-0b3e9d21'}]
+    : {path:args.path,entries:[{name:'notes.md',path:`${args.path}/notes.md`,directory:false}]})
+  const view = render(FilesWorkspace,{props:{tauri:{invoke},hidden:true,context:{threadId:'t1',threadTitle:'New agent',label:'New agent'}}})
+  await view.rerender({props:{hidden:true,context:{threadId:'t1',threadTitle:'Inbox brief',label:'Inbox brief'}}})
+  await new Promise(resolve => setTimeout(resolve))
+  expect(invoke).not.toHaveBeenCalled()
+  await view.rerender({props:{hidden:false,context:{threadId:'t1',threadTitle:'Inbox brief',label:'Inbox brief'}}})
+  expect(await screen.findByRole('treeitem',{name:'notes.md'})).toBeInTheDocument()
+  expect(invoke.mock.calls.filter(([command]) => command === 'workspace_folders')).toEqual([['workspace_folders',{threadId:'t1',threadTitle:'Inbox brief',label:'Inbox brief'}]])
+})

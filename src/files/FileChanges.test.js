@@ -29,3 +29,9 @@ it('shows only the nonzero side of a file count', () => {
   expect(chip).toHaveTextContent('+1 file')
   expect(chip).not.toHaveTextContent('0 files')
 })
+
+it('sits one layer under the composer panels, so an open model picker covers the chip', async () => {
+  const fs = await import('node:fs')
+  const zIndex = (file, selector) => Number(fs.readFileSync(file, 'utf8').match(new RegExp(`${selector.replace(/[[\]]/g, '\\$&')} \\{[^}]*z-index: (\\d+)`))[1])
+  expect(zIndex('src/App.svelte', '.composer-chips')).toBeLessThan(zIndex('src/styles/base.css', '[data-composer-panel]'))
+})

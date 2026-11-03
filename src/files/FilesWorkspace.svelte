@@ -187,7 +187,7 @@
     const title = workspaceContext?.threadTitle
     if (!workspaceContext?.threadId || !title || title === shownTitle) return
     shownTitle = title
-    untrack(() => { void follow() })
+    if (started) untrack(() => { void follow() })
   })
   async function follow() {
     let result
@@ -218,7 +218,14 @@
     if (entry.directory) return toggle(entry)
     onfile?.(entry)
   }
-  onMount(() => {
+  // A thread's folder comes into being as its folders are read, so a hidden
+  // view reads them only once it shows. A chat the user never opens Files on
+  // leaves no folder before its first turn.
+  let started = false
+  $effect(() => { if (!hidden && !started) untrack(start) })
+  function start() {
+    started = true
+    shownTitle = workspaceContext?.threadTitle
     void tauri.invoke('workspace_folders', workspaceContext || { threadId, projectId }).then(result => {
       if (closed) return
       folders = result
@@ -234,6 +241,8 @@
       })
       loading = false
     }).catch(e => { if (closed) return; error = String(e); loading = false })
+  }
+  onMount(() => {
     return () => { closed = true; if (listing) { try { localStorage.setItem(storageKey,JSON.stringify({path:listing.path,expanded:[...expanded]})) } catch { /* Storage may be unavailable. */ } }; version += 1 }
   })
 </script>

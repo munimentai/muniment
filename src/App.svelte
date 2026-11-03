@@ -1715,7 +1715,7 @@
   let viewedFile = $state(null)
   let filePanelOpen = $derived(railOccupant === 'files')
   const readChangedFiles = createChangedFiles()
-  const changed = $derived(readChangedFiles(messages))
+  const changed = $derived(readChangedFiles(messages, savedTurns))
   // Review changes and a rewind open over the thread. A rewind's report stays
   // above the composer until it is dismissed or the thread changes.
   let reviewing = $state(null)
@@ -1736,11 +1736,17 @@
   // with no saved files asks again a few times.
   const reviewable = $derived(!threadGroup && !currentSummary?.replica)
   let savedChanges = $state({})
+  // Each asked turn's answer from core, which the changed-files chip lists
+  // in place of the turn's tool calls.
+  let savedTurns = $state.raw({})
   const savedChangesRetries = [500, 1500, 4500]
   const turnChanged = (run) => reviewable && savedChanges[run.id] > 0 && reviewTurns.some((turn) => turn.runId === run.id)
   function askSavedChanges(threadId, runId, attempt = 0) {
     agentRequest(tauri, composerRuntime, 'run.changes', { thread_id: threadId, run_id: runId }).then((value) => {
-      if (value?.available) savedChanges[runId] = value.files?.length ?? 0
+      if (value?.available) {
+        savedChanges[runId] = value.files?.length ?? 0
+        savedTurns = { ...savedTurns, [runId]: value }
+      }
       else if (attempt < savedChangesRetries.length) setTimeout(() => askSavedChanges(threadId, runId, attempt + 1), savedChangesRetries[attempt])
     }, () => {})
   }
@@ -5210,7 +5216,8 @@
   /* The transcript fades into the surface at both ends: a short fade under the top edge, and one above the composer that reaches the surface at the composer's midpoint, so text stays readable halfway under it. */
   /* Responses run the panel's full width inside a 36px gutter. The bottom padding is the composer and the fade, so the last line scrolls clear of both. */
   .thread { width: 100%; height: 100%; margin: 0; padding: 42px 36px calc(var(--composer-height, 120px) + var(--file-chip-height, 0px) + 64px); overflow-y: auto; }
-  .composer-chips { position: absolute; z-index: 5; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 6px; max-width: 100%; }
+  /* The chips share the composer panels' anchor and sit one layer under them, so an open panel such as the model picker covers them. */
+  .composer-chips { position: absolute; z-index: 4; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 6px; max-width: 100%; }
   .latest { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-chip); background: var(--faint); color: var(--ink); cursor: pointer; }
   .empty { color: var(--muted); text-align: center; margin-top: 18vh; }
   /* The two edges bracket the rendered window of the transcript. src/lib/transcript-window.js anchors on them. */

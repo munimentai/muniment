@@ -9361,6 +9361,38 @@ describe('provenance line', () => {
     expect(offers('Wrote the notes.')).toBe(false)
   })
 
+  // A turn names one file in several path forms, and the thread folder takes
+  // its title between turns. The chip lists the file once from core's saved
+  // turns, with the line counts of the stored diff.
+  it('lists a file the turns created and edited once in the changed-files chip', async () => {
+    const folder = '/home/sessions/Live36-c3fa5c5a'
+    invoke.mockImplementation(async (command, args) => {
+      if (command === 'project_list') return { projects: {}, threads: {} }
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_thread_open') return [
+        { runId: 'run-first', phase: 'complete', text: 'Wrote the file.', prompt: 'Write', receipt: { time: '2s' },
+          toolActivity: [
+            { effectId: 'w1', displayName: 'write', status: 'completed', input: JSON.stringify({ path: '/home/sessions/Untitled-c3fa5c5a/live36.txt', content: 'one\n' }) },
+            { effectId: 'e1', displayName: 'edit', status: 'completed', input: JSON.stringify({ path: 'live36.txt', edits: [{ oldText: 'one', newText: 'one\ntwo' }] }) },
+          ] },
+        { runId: 'run-second', phase: 'complete', text: 'Edited the file.', prompt: 'Edit', receipt: { time: '2s' },
+          toolActivity: [{ effectId: 'e2', displayName: 'edit', status: 'completed', input: JSON.stringify({ path: `${folder}/live36.txt`, edits: [{ oldText: 'two', newText: 'three' }] }) }] },
+      ]
+      if (command === 'agent_request' && args.operation === 'run.changes') return { run_id: args.body.run_id, folder, available: true, more: 0,
+        files: [args.body.run_id === 'run-first' ? { path: 'live36.txt', status: 'added', additions: 2, deletions: 0, binary: false } : { path: 'live36.txt', status: 'modified', additions: 1, deletions: 1, binary: false }] }
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'chat_select_thread') return undefined
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    expect(await screen.findByText('Edited the file.')).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: '1 file changed, 3 lines added, 1 line removed' })).toBeInTheDocument()
+    await fireEvent.pointerEnter(screen.getByRole('group', { name: 'Changed files' }), { pointerType: 'mouse' })
+    expect(screen.getAllByRole('button', { name: `${folder}/live36.txt` })).toHaveLength(1)
+    expect(screen.queryByText('Some line counts are unavailable.')).toBeNull()
+  })
+
   // A turn's dialogs sit over the thread. Escape in one closes it alone: the
   // side panel beside the thread stays open and the thread stays in view.
   it.each([
