@@ -68,3 +68,23 @@ it('keeps the start of an artifact name and ends a long one in an ellipsis with 
   view.unmount()
   vi.unstubAllGlobals()
 })
+it('names the Files tab after the open thread\'s folder, never the folder of a thread it passed while that folder still loaded', async () => {
+  const answers = {}
+  const invoke = vi.fn((command, args) => {
+    if (command === 'workspace_folders') return new Promise(resolve => { answers[args.threadId] = () => resolve([{label: 'Thread workspace', path: `/home/sessions/${args.threadId === 't1' ? 'New_thread-c3fa5c5a' : 'New_agent-0b3e9d21'}`}]) })
+    if (command === 'workspace_list') return Promise.resolve({path: args.path, entries: []})
+  })
+  const onfolder = vi.fn()
+  const view = render(WorkspacePanel, {props: {tauri: {invoke}, selected: 'files', context: {threadId: 't1', threadTitle: 'New thread'}, threadId: 't1', onselect: vi.fn(), onfolder}})
+  await waitFor(() => expect(answers.t1).toBeTypeOf('function'))
+  // An agent creation chat opens before the earlier thread's folder answers.
+  await view.rerender({props: {context: {threadId: 't2', threadTitle: 'New agent'}, threadId: 't2'}})
+  await waitFor(() => expect(answers.t2).toBeTypeOf('function'))
+  answers.t2()
+  await waitFor(() => expect(screen.getByRole('tab', {name: 'New agent'})).toHaveAttribute('title', '/home/sessions/New_agent-0b3e9d21'))
+  answers.t1()
+  await new Promise(resolve => setTimeout(resolve, 20))
+  expect(screen.getByRole('tab', {name: 'New agent'})).toHaveAttribute('title', '/home/sessions/New_agent-0b3e9d21')
+  expect(screen.queryByRole('tab', {name: 'New thread'})).toBeNull()
+  expect(onfolder).not.toHaveBeenCalledWith('/home/sessions/New_thread-c3fa5c5a')
+})

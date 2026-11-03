@@ -157,7 +157,12 @@
       void focus(next)
     }
   }
+  // A view that closed before its folders answered, such as the previous
+  // thread's while a new thread opens, loads nothing, so its folder never
+  // names the next view's tab.
+  let closed = false
   async function load(path) {
+    if (closed) return
     const request = ++version
     loading = true; error = ''; selected = null; selection = new Set(); menu = null
     children = {}; expanded = new Set(); reading = new Set(); folderErrors = {}; focused = null
@@ -188,6 +193,7 @@
   }
   onMount(() => {
     void tauri.invoke('workspace_folders', workspaceContext || { threadId, projectId }).then(result => {
+      if (closed) return
       folders = result
       let saved
       try { saved = JSON.parse(localStorage.getItem(storageKey) || 'null') } catch { /* Ignore invalid saved state. */ }
@@ -200,8 +206,8 @@
         }
       })
       loading = false
-    }).catch(e => { error = String(e); loading = false })
-    return () => { if (listing) { try { localStorage.setItem(storageKey,JSON.stringify({path:listing.path,expanded:[...expanded]})) } catch { /* Storage may be unavailable. */ } }; version += 1 }
+    }).catch(e => { if (closed) return; error = String(e); loading = false })
+    return () => { closed = true; if (listing) { try { localStorage.setItem(storageKey,JSON.stringify({path:listing.path,expanded:[...expanded]})) } catch { /* Storage may be unavailable. */ } }; version += 1 }
   })
 </script>
 <svelte:window onpointerdown={outside} />
