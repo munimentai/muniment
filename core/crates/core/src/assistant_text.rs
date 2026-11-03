@@ -563,7 +563,9 @@ fn assignment_candidate(bytes: &[u8], start: usize, complete: bool) -> RuleCandi
             RuleCandidate::None
         };
     };
-    if !is_secret_like_value(&bytes[value_start..end]) {
+    if !is_secret_like_value(&bytes[value_start..end])
+        && !is_explicit_assignment(bytes, label_end, delimiter_end, value_start, end, complete)
+    {
         return RuleCandidate::None;
     }
     if complete || end < bytes.len() {
@@ -594,6 +596,51 @@ fn assignment_label_end(bytes: &[u8], start: usize) -> Option<usize> {
             None
         }
     })
+}
+
+/// Whether a label meets `:` or `=` with nothing but spaces between, and its
+/// value is one token set apart as a value: written against the delimiter,
+/// as in `api_key=abcdefghij`, or alone up to the line's end, as in
+/// `password: correcthorsebattery`. Such a value counts whatever its letters.
+/// Prose such as "the key developments" puts words between the label and the
+/// delimiter, and "token: placeholder until" goes on past the token.
+fn is_explicit_assignment(
+    bytes: &[u8],
+    label_end: usize,
+    delimiter_end: usize,
+    value_start: usize,
+    value_end: usize,
+    complete: bool,
+) -> bool {
+    let spaces = |range: std::ops::Range<usize>| {
+        bytes[range].iter().all(|byte| matches!(byte, b' ' | b'\t'))
+    };
+    let delimiter_start = bytes[label_end..delimiter_end]
+        .iter()
+        .position(|byte| !matches!(byte, b' ' | b'\t'))
+        .map_or(delimiter_end, |offset| label_end + offset);
+    let delimiter = &bytes[delimiter_start..delimiter_end];
+    if !spaces(label_end..delimiter_start) || !matches!(delimiter, b":" | b"=" | b":=") {
+        return false;
+    }
+    let tight = delimiter_start == label_end
+        && !bytes[delimiter_end..value_start]
+            .iter()
+            .any(|byte| matches!(byte, b' ' | b'\t'));
+    if tight {
+        return true;
+    }
+    let mut after = value_end;
+    while bytes
+        .get(after)
+        .is_some_and(|byte| matches!(byte, b' ' | b'\t'))
+    {
+        after += 1;
+    }
+    match bytes.get(after) {
+        None => complete,
+        Some(byte) => matches!(byte, b'\n' | b'\r' | b'\'' | b'"' | b'`' | b';'),
+    }
 }
 
 fn assignment_delimiter_end(bytes: &[u8], start: usize) -> Option<usize> {

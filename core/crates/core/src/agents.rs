@@ -1896,7 +1896,7 @@ mod tests {
         let mut agent = Agent {
             name: "Weekly digest".into(),
             instructions: "Highlight key developments, accomplishments, and blockers. \
-                Ask for a password: never store it. Keep the token: placeholder."
+                Ask for a password: never store it. Keep the token: placeholder until the owner adds one."
                 .into(),
             ..Agent::default()
         };

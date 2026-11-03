@@ -138,12 +138,66 @@ fn prose_that_names_a_label_word_is_not_an_assignment() {
         "Ask for a password: never store it, and never repeat it back.",
         "Rotate the secret = weekly, and log the rotation.",
         "Auth: Shibboleth, then Kerberos",
-        "token=aaaaaaaaaaaa",
+        "Use the key: everything else waits until Monday.",
+        "Note the token = placeholder until the owner adds one.",
     ] {
         let result = scan(content, true);
         assert!(result.matches.is_empty(), "{content:?}");
         assert_eq!(result.withhold_from, None, "{content:?}");
     }
+}
+
+#[test]
+fn an_explicit_label_with_one_token_is_caught_whatever_its_letters() {
+    for (content, secret) in [
+        (
+            "password: correcthorsebattery",
+            "password: correcthorsebattery",
+        ),
+        ("api_key=abcdefghij", "api_key=abcdefghij"),
+        ("token: lowercaseonly", "token: lowercaseonly"),
+        (
+            "Set api_key=abcdefghij before the run.",
+            "api_key=abcdefghij",
+        ),
+        (
+            "password: correcthorsebattery\nThen sign in.",
+            "password: correcthorsebattery",
+        ),
+        ("secret = 'onlyletters';", "secret = 'onlyletters"),
+        ("TOKEN:lowercaseonly next", "TOKEN:lowercaseonly"),
+    ] {
+        let result = scan(content, true);
+        assert_eq!(result.matches.len(), 1, "{content:?}");
+        let start = content.find(secret).unwrap();
+        assert_eq!(
+            result.matches[0].range,
+            start..start + secret.len(),
+            "{content:?}"
+        );
+        assert_eq!(
+            result.matches[0].rule,
+            Rule::SecretAssignment,
+            "{content:?}"
+        );
+    }
+}
+
+#[test]
+fn a_streamed_explicit_token_waits_until_the_line_ends() {
+    assert!(scan("password: correcthorsebattery", false)
+        .matches
+        .is_empty());
+    assert!(scan("password: correcthorsebattery ", false)
+        .matches
+        .is_empty());
+    assert_eq!(
+        scan("password: correcthorsebattery\n", false).matches[0].range,
+        0..29
+    );
+    assert!(scan("password: correcthorsebattery and more", false)
+        .matches
+        .is_empty());
 }
 
 #[test]
