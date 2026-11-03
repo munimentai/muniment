@@ -9393,6 +9393,42 @@ describe('provenance line', () => {
     expect(screen.queryByText('Some line counts are unavailable.')).toBeNull()
   })
 
+  // Turn one's answer names the folder before it took the thread's title.
+  // The chip lists the file once under the titled folder, and the turn is
+  // asked again so its answer follows the rename.
+  it('lists a file once when turn one was read before the thread folder took its title', async () => {
+    const titled = '/home/sessions/Live38-c3fa5c5a'
+    const asked = []
+    invoke.mockImplementation(async (command, args) => {
+      if (command === 'project_list') return { projects: {}, threads: {} }
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_thread_open') return [
+        { runId: 'run-first', phase: 'complete', text: 'Wrote the file.', prompt: 'Write', receipt: { time: '2s' },
+          toolActivity: [{ effectId: 'w1', displayName: 'write', status: 'completed', input: JSON.stringify({ path: '/home/sessions/New_thread-c3fa5c5a/live38-a.txt', content: 'one\n' }) }] },
+        { runId: 'run-second', phase: 'complete', text: 'Edited the file.', prompt: 'Edit', receipt: { time: '2s' },
+          toolActivity: [{ effectId: 'e2', displayName: 'edit', status: 'completed', input: JSON.stringify({ path: `${titled}/live38-a.txt`, edits: [{ oldText: 'one', newText: 'two\nthree' }] }) }] },
+      ]
+      if (command === 'agent_request' && args.operation === 'run.changes') {
+        const first = args.body.run_id === 'run-first'
+        asked.push(args.body.run_id)
+        const folder = first && asked.filter((id) => id === 'run-first').length === 1 ? '/home/sessions/New_thread-c3fa5c5a' : titled
+        return { run_id: args.body.run_id, folder, available: true, more: 0,
+          files: [first ? { path: 'live38-a.txt', status: 'added', additions: 1, deletions: 0, binary: false } : { path: 'live38-a.txt', status: 'modified', additions: 2, deletions: 1, binary: false }] }
+      }
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'chat_select_thread') return undefined
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    expect(await screen.findByText('Edited the file.')).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: '1 file changed, 3 lines added, 1 line removed' })).toBeInTheDocument()
+    await waitFor(() => expect(asked.filter((id) => id === 'run-first')).toHaveLength(2))
+    await fireEvent.pointerEnter(screen.getByRole('group', { name: 'Changed files' }), { pointerType: 'mouse' })
+    expect(screen.getAllByRole('button', { name: /live38-a\.txt$/ })).toHaveLength(1)
+    expect(screen.getByRole('button', { name: `${titled}/live38-a.txt` })).toBeInTheDocument()
+  })
+
   // A turn's dialogs sit over the thread. Escape in one closes it alone: the
   // side panel beside the thread stays open and the thread stays in view.
   it.each([

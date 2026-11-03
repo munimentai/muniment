@@ -56,15 +56,30 @@ export function appliedDiffLabel(summary) {
   return `${name} +${additions} −${deletions}`
 }
 
+// A thread's own folder under Home's `sessions` keeps its id suffix, the last
+// eight letters and digits of the thread id, when it takes the thread's
+// title after a turn. So that suffix and the parent name one folder across
+// its names. Any other folder is its own key.
+export function folderKey(folder) {
+  const trimmed = String(folder).replace(/[\\/]+$/, '')
+  const parts = trimmed.split(/[\\/]/)
+  const base = parts.pop()
+  if (parts.at(-1) !== 'sessions') return trimmed
+  return `${parts.join('/')}/#${base.replace(/[^A-Za-z0-9]/g, '').slice(-8)}`
+}
+
 // A turn's files as core's checkpoints saved them: one entry per path in the
 // turn's folder, with line counts from the stored diff. Core names each path
-// relative to the folder, and the folder follows a renamed thread folder, so
-// every turn names one file the same way. A turn whose records list no file
-// keeps its tool calls, which may name a file outside the folder.
-function savedEntries(saved) {
+// relative to the folder. A turn answer read before the thread folder took
+// its title names the old folder, so `folders` maps each folder key to the
+// newest folder the turns name, and every turn names one file the same way.
+// A turn whose records list no file keeps its tool calls, which may name a
+// file outside the folder.
+function savedEntries(saved, folders) {
   if (!saved?.available || saved.more || !saved.folder || !saved.files?.length) return null
-  const separator = saved.folder.includes('\\') && !saved.folder.includes('/') ? '\\' : '/'
-  const folder = saved.folder.replace(/[\\/]+$/, '')
+  const named = folders?.get(folderKey(saved.folder)) ?? saved.folder
+  const separator = named.includes('\\') && !named.includes('/') ? '\\' : '/'
+  const folder = named.replace(/[\\/]+$/, '')
   return saved.files.map((file) => ({
     path: `${folder}${separator}${file.path.split('/').join(separator)}`,
     additions: file.additions ?? 0,
@@ -80,10 +95,15 @@ function savedEntries(saved) {
 export function changedFiles(messages = [], saved = {}) {
   const files = new Map()
   const effects = new Set()
+  const folders = new Map()
+  for (const { run } of messages) {
+    const folder = run && saved?.[run.id]?.available && saved[run.id].folder
+    if (folder) folders.set(folderKey(folder), folder)
+  }
   for (const message of messages) {
     const run = message.run
     if (!run) continue
-    const turn = savedEntries(saved?.[run.id])
+    const turn = savedEntries(saved?.[run.id], folders)
     if (turn) {
       for (const file of turn) {
         const prior = files.get(file.path)

@@ -105,7 +105,7 @@
   import FileChanges from './files/FileChanges.svelte'
   import { rewindOutcome, rewindUnavailable, runContextRows, turnSources } from './activity/run-trust.js'
   import RoutingDetails from './lib/RoutingDetails.svelte'
-  import { appliedDiffLabel, changedFiles, createChangedFiles, fileName, ranCommands } from './files/file-changes.js'
+  import { appliedDiffLabel, changedFiles, createChangedFiles, fileName, folderKey, ranCommands } from './files/file-changes.js'
   import ConfirmDialog from './lib/ConfirmDialog.svelte'
   import Onboarding from './lib/Onboarding.svelte'
   import { commitType, readStoredType, stepType, typeSizeShortcutStep } from './lib/type-state.js'
@@ -1756,11 +1756,21 @@
   let savedTurns = $state.raw({})
   const savedChangesRetries = [500, 1500, 4500]
   const turnChanged = (run) => reviewable && savedChanges[run.id] > 0 && reviewTurns.some((turn) => turn.runId === run.id)
+  // A turn answer that names a folder another answer's folder took the name
+  // of was read before the rename, so that turn is asked again, once per name.
+  const refolded = new Set()
   function askSavedChanges(threadId, runId, attempt = 0) {
     agentRequest(tauri, composerRuntime, 'run.changes', { thread_id: threadId, run_id: runId }).then((value) => {
       if (value?.available) {
         savedChanges[runId] = value.files?.length ?? 0
         savedTurns = { ...savedTurns, [runId]: value }
+        for (const [earlier, answer] of Object.entries(savedTurns)) {
+          const key = `${earlier}\n${value.folder}`
+          if (earlier === runId || !answer?.folder || answer.folder === value.folder || refolded.has(key)
+            || folderKey(answer.folder) !== folderKey(value.folder) || threadId !== currentThreadId) continue
+          refolded.add(key)
+          askSavedChanges(threadId, earlier, savedChangesRetries.length)
+        }
       }
       else if (attempt < savedChangesRetries.length) setTimeout(() => askSavedChanges(threadId, runId, attempt + 1), savedChangesRetries[attempt])
     }, () => {})
