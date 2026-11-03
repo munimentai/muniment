@@ -13,6 +13,19 @@ use serde_json::Value;
 
 use crate::window::Limits;
 
+/// The longest a discovery read waits for a TCP connection. A blackholed host
+/// never refuses, and without it a read waits for ureq's 30 s default however
+/// short its overall timeout is.
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// An agent whose reads, connection included, end within `timeout`.
+fn discovery_agent(timeout: Duration) -> ureq::Agent {
+    crate::http::agent_builder()
+        .timeout(timeout)
+        .timeout_connect(timeout.min(CONNECT_TIMEOUT))
+        .build()
+}
+
 /// Ollama's `/api/tags`: `models[].name`.
 pub fn parse_ollama_tags(value: &Value) -> Vec<String> {
     names(value.get("models"), "name")
@@ -220,8 +233,7 @@ fn remaining_fetch(url: &str, key: Option<&str>, deadline: Instant) -> Option<Op
     if remaining.is_zero() {
         return None;
     }
-    let agent = crate::http::agent_builder().timeout(remaining).build();
-    fetch(&agent, url, key).ok()
+    fetch(&discovery_agent(remaining), url, key).ok()
 }
 
 /// What an endpoint serves, by kind. A decision model answers typed
@@ -431,8 +443,10 @@ pub fn discover_endpoint_models(
 /// Why discovery found no model list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiscoveryFailure {
-    /// The server never answered, or answered with no model list.
+    /// The server answered with no model list, or the URL names no server.
     NoList,
+    /// The server never answered: no route, a refused connection or a timeout.
+    Unreachable,
     /// The model list answered 401 or 403: the server wants a key, or
     /// refused the one sent.
     KeyRefused,
@@ -444,14 +458,14 @@ pub fn discover_endpoint_models_checked(
     key: Option<&str>,
     timeout: Duration,
 ) -> Result<EndpointModels, DiscoveryFailure> {
-    use DiscoveryFailure::{KeyRefused, NoList};
+    use DiscoveryFailure::{KeyRefused, NoList, Unreachable};
     let key = key.map(str::trim).filter(|key| !key.is_empty());
     let mut origin = url::Url::parse(base_url).map_err(|_| NoList)?;
     if !matches!(origin.scheme(), "http" | "https") || origin.host().is_none() {
         return Err(NoList);
     }
     let deadline = Instant::now() + timeout;
-    let agent = crate::http::agent_builder().timeout(timeout).build();
+    let agent = discovery_agent(timeout);
     origin.set_path("/api/tags");
     origin.set_query(None);
     origin.set_fragment(None);
@@ -466,20 +480,21 @@ pub fn discover_endpoint_models_checked(
             ));
         }
         Ok(_) => {}
-        Err(()) => return Err(NoList),
+        Err(()) => return Err(Unreachable),
     }
     let remaining = deadline.saturating_duration_since(Instant::now());
     if remaining.is_zero() {
-        return Err(NoList);
+        return Err(Unreachable);
     }
-    let agent = crate::http::agent_builder().timeout(remaining).build();
+    let agent = discovery_agent(remaining);
     let models_url = format!("{}/models", base_url.trim_end_matches('/'));
     // Ollama's own list is absent or refused here, so the OpenAI list's
     // status tells a refused key from a server with no list.
     let list = match authorized(agent.get(&models_url), key).call() {
         Ok(response) => response.into_json::<Value>().ok(),
         Err(ureq::Error::Status(401 | 403, _)) => return Err(KeyRefused),
-        Err(_) => None,
+        Err(ureq::Error::Transport(_)) => return Err(Unreachable),
+        Err(ureq::Error::Status(..)) => None,
     }
     .filter(|value| value.get("data").is_some_and(Value::is_array))
     .ok_or(NoList)?;
@@ -493,6 +508,33 @@ mod tests {
     use super::*;
     use crate::test_server::{serve_routes, serve_status};
     use serde_json::json;
+
+    #[test]
+    fn a_blackholed_host_is_unreachable_within_the_discovery_timeout() {
+        // 192.0.2.1 is TEST-NET-1: no host answers it, and a connection
+        // there waits until a timeout or the OS gives up.
+        let started = Instant::now();
+        let found = discover_endpoint_models_checked(
+            "http://192.0.2.1:8000/v1",
+            None,
+            Duration::from_millis(300),
+        );
+        assert_eq!(found, Err(DiscoveryFailure::Unreachable));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "discovery took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn a_server_with_no_model_list_answers_and_is_not_unreachable() {
+        let url = serve_status("404 Not Found");
+        assert_eq!(
+            discover_endpoint_models_checked(&url, None, Duration::from_secs(2)),
+            Err(DiscoveryFailure::NoList)
+        );
+    }
 
     #[test]
     fn speech_and_embedding_models_never_list_as_chat_models() {

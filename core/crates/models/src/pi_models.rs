@@ -17,6 +17,7 @@ use serde_json::{json, Map, Value};
 
 use crate::endpoint_models::{
     discover_endpoint_models, discover_endpoint_models_checked, DiscoveryFailure, EndpointModels,
+    CONNECT_TIMEOUT,
 };
 use crate::registry::{
     key_providers, CUSTOM_PROVIDER_PREFIX, LM_STUDIO_PROVIDER, OLLAMA_DECISIONS, OLLAMA_MODEL,
@@ -58,6 +59,8 @@ const LOCK_TIMEOUT: Duration = Duration::from_secs(40);
 const LOCK_UPDATE: Duration = Duration::from_secs(5);
 const LOCK_RETRY: Duration = Duration::from_millis(20);
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(4);
+/// How many endpoints a refresh reads at once.
+const DISCOVERY_WORKERS: usize = 4;
 
 /// Pi's model file in an agent directory.
 pub fn models_file(agent: &Path) -> PathBuf {
@@ -693,7 +696,7 @@ pub fn store_ollama(
     let (model_ids, decisions, windows) = match discovered {
         Ok(found) => (found.chat, found.decisions, found.windows),
         Err(DiscoveryFailure::KeyRefused) => return Err(key_refusal(key).into()),
-        Err(DiscoveryFailure::NoList) => {
+        Err(DiscoveryFailure::NoList | DiscoveryFailure::Unreachable) => {
             (vec![OLLAMA_MODEL.to_owned()], Vec::new(), BTreeMap::new())
         }
     };
@@ -796,7 +799,7 @@ pub fn store_endpoint(
         ) {
             Ok(found) => found,
             Err(DiscoveryFailure::KeyRefused) => return Err(key_refusal(key).into()),
-            Err(DiscoveryFailure::NoList) => Default::default(),
+            Err(DiscoveryFailure::NoList | DiscoveryFailure::Unreachable) => Default::default(),
         };
         models = found.chat;
         windows = found.windows;
@@ -900,14 +903,93 @@ pub fn refresh_endpoints_with(
     agent: &Path,
     key_for: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<bool, String> {
+    refresh_endpoints_checked(agent, key_for).map(|refresh| refresh.changed)
+}
+
+/// What one endpoint refresh found.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct EndpointRefresh {
+    /// Whether any endpoint's list changed.
+    pub changed: bool,
+    /// The provider ids whose server never answered within the discovery
+    /// timeout. Each keeps its saved list.
+    pub unreachable: Vec<String>,
+}
+
+/// [`refresh_endpoints_with`], with the endpoints whose server never answered.
+pub fn refresh_endpoints_checked(
+    agent: &Path,
+    key_for: &(dyn Fn(&str) -> Option<String> + Sync),
+) -> Result<EndpointRefresh, String> {
+    refresh_endpoints_within(agent, key_for, DISCOVERY_TIMEOUT)
+}
+
+/// Reads every endpoint at once, at most [`DISCOVERY_WORKERS`] at a time, so
+/// one server that never answers delays no other. Each read ends within
+/// `timeout`. A read still running at the refresh deadline, such as one held
+/// in a name lookup, counts as unreachable, and its thread ends on its own.
+fn discover_all(
+    jobs: Vec<(String, Option<String>)>,
+    timeout: Duration,
+) -> Vec<Result<EndpointModels, DiscoveryFailure>> {
+    let count = jobs.len();
+    let mut results = vec![Err(DiscoveryFailure::Unreachable); count];
+    if count == 0 {
+        return results;
+    }
+    let workers = count.min(DISCOVERY_WORKERS);
+    let queue = Arc::new(Mutex::new(
+        jobs.into_iter()
+            .enumerate()
+            .collect::<std::collections::VecDeque<_>>(),
+    ));
+    let (send, receive) = mpsc::channel();
+    for _ in 0..workers {
+        let queue = Arc::clone(&queue);
+        let send = send.clone();
+        std::thread::spawn(move || loop {
+            let job = queue
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .pop_front();
+            let Some((index, (base_url, key))) = job else {
+                break;
+            };
+            let found = discover_endpoint_models_checked(&base_url, key.as_deref(), timeout);
+            if send.send((index, found)).is_err() {
+                break;
+            }
+        });
+    }
+    drop(send);
+    // A read ends within its timeout plus one connection wait, and each
+    // worker reads its share of the endpoints in turn.
+    let rounds = u32::try_from(count.div_ceil(workers)).unwrap_or(u32::MAX);
+    let deadline = Instant::now() + (timeout + timeout.min(CONNECT_TIMEOUT)).saturating_mul(rounds);
+    for _ in 0..count {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match receive.recv_timeout(remaining) {
+            Ok((index, found)) => results[index] = found,
+            Err(_) => break,
+        }
+    }
+    results
+}
+
+fn refresh_endpoints_within(
+    agent: &Path,
+    key_for: &(dyn Fn(&str) -> Option<String> + Sync),
+    timeout: Duration,
+) -> Result<EndpointRefresh, String> {
     let models_file = models_file(agent);
     if !models_file.is_file() {
-        return Ok(false);
+        return Ok(EndpointRefresh::default());
     }
     // Discovery reads each server over the network, and a key command may
     // run, so it reads the file without the lock. A save never waits on it.
     let seen = read_for_update(&models_file)?;
-    let mut discovered = Vec::new();
+    let mut endpoints = Vec::new();
+    let mut jobs = Vec::new();
     for (id, entry) in seen
         .get("providers")
         .and_then(Value::as_object)
@@ -926,17 +1008,26 @@ pub fn refresh_endpoints_with(
             .and_then(Value::as_str)
             .filter(|key| !matches!(*key, "ollama" | "local"))
             .and_then(key_for);
-        // A server that answers with no chat model is still loading, as
-        // a local server does for a while after it starts, so the saved
-        // list stays until it serves one.
-        if let Some(found) = discover_endpoint_models(base_url, key.as_deref(), DISCOVERY_TIMEOUT)
-            .filter(|found| !found.chat.is_empty())
-        {
-            discovered.push((id.clone(), entry.clone(), found));
+        endpoints.push((id.clone(), entry.clone()));
+        jobs.push((base_url.to_owned(), key));
+    }
+    let mut discovered = Vec::new();
+    let mut unreachable = Vec::new();
+    for ((id, entry), found) in endpoints.into_iter().zip(discover_all(jobs, timeout)) {
+        match found {
+            // A server that answers with no chat model is still loading, as
+            // a local server does for a while after it starts, so the saved
+            // list stays until it serves one.
+            Ok(found) if !found.chat.is_empty() => discovered.push((id, entry, found)),
+            Err(DiscoveryFailure::Unreachable) => unreachable.push(id),
+            _ => {}
         }
     }
     if discovered.is_empty() {
-        return Ok(false);
+        return Ok(EndpointRefresh {
+            changed: false,
+            unreachable,
+        });
     }
     // The lock covers only the merge. An entry a save changed while
     // discovery ran keeps what the save wrote.
@@ -970,7 +1061,10 @@ pub fn refresh_endpoints_with(
             changed = true;
         }
     }
-    Ok(changed)
+    Ok(EndpointRefresh {
+        changed,
+        unreachable,
+    })
 }
 
 /// Rewrites one endpoint entry's model list from what its server serves, as
@@ -1397,6 +1491,58 @@ mod tests {
         );
         assert_eq!(root["providers"]["openai"]["models"][0]["id"], "kept");
         assert!(!refresh_endpoints(&agent).unwrap());
+        fs::remove_dir_all(agent).unwrap();
+    }
+
+    #[test]
+    fn a_dead_endpoint_neither_delays_a_live_one_nor_loses_its_list() {
+        let agent = temporary_directory();
+        let live = serve_routes(vec![(
+            "GET /v1/models",
+            json!({"data": [{"id": "served"}]}),
+        )]);
+        // 192.0.2.1 is TEST-NET-1, which no host answers.
+        let mut providers = serde_json::Map::new();
+        for index in 0..5 {
+            providers.insert(
+                format!("custom-dead{index}"),
+                json!({"baseUrl": "http://192.0.2.1:8000/v1", "apiKey": "local", "models": [{"id": "kept"}]}),
+            );
+        }
+        providers.insert(
+            "custom-live".into(),
+            json!({"baseUrl": live, "apiKey": "local", "models": [{"id": "old"}]}),
+        );
+        fs::write(
+            models_file(&agent),
+            json!({"providers": providers}).to_string(),
+        )
+        .unwrap();
+        let started = Instant::now();
+        let refresh =
+            refresh_endpoints_within(&agent, &|_| None, Duration::from_millis(300)).unwrap();
+        // Six endpoints on four workers take two rounds of at most 600 ms.
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "refresh took {:?}",
+            started.elapsed()
+        );
+        assert!(refresh.changed);
+        assert_eq!(
+            refresh.unreachable,
+            (0..5)
+                .map(|index| format!("custom-dead{index}"))
+                .collect::<Vec<_>>()
+        );
+        let root = models(&agent);
+        assert_eq!(
+            root["providers"]["custom-live"]["models"],
+            json!([{"id": "served"}])
+        );
+        assert_eq!(
+            root["providers"]["custom-dead0"]["models"],
+            json!([{"id": "kept"}])
+        );
         fs::remove_dir_all(agent).unwrap();
     }
 

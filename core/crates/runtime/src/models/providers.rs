@@ -117,6 +117,10 @@ pub(super) struct InventoryProvider {
     /// Whether a chat on the endpoint runs without tools.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     tools_off: bool,
+    /// Whether the endpoint's server never answered the last discovery, so
+    /// its models are the saved list.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    unreachable: bool,
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -667,20 +671,35 @@ pub(super) fn inventory(
     let models = std::thread::scope(|scope| {
         // `key` answers each endpoint's key for the list read, and never
         // with a keychain prompt.
-        let discovery = scope.spawn(|| pi_models::refresh_endpoints_with(agent, key));
+        let discovery = scope.spawn(|| pi_models::refresh_endpoints_checked(agent, key));
         let mut models = engine.list_models();
         let provider_changed = refresh_provider_models(agent, &models, force).unwrap_or(false);
-        if discovery.join().ok().and_then(Result::ok) == Some(true) || provider_changed {
+        let refresh = discovery
+            .join()
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or_default();
+        if refresh.changed || provider_changed {
             models = engine.list_models();
         }
-        models
+        (models, refresh.unreachable)
     });
+    let (models, unreachable) = models;
     super::router::settle_default(agent, None, false);
     let thinking = thinking.join().unwrap_or_default();
     let mut inventory = provider_inventory(agent, &models, &thinking)?;
+    mark_unreachable(&mut inventory, &unreachable);
     *listed.held() = Some((models, thinking));
     adopt_shown_default(agent, &mut inventory);
     Ok(inventory)
+}
+
+/// Marks each endpoint whose server never answered the discovery, so the page
+/// can say its list is the saved one.
+fn mark_unreachable(inventory: &mut ProviderInventory, unreachable: &[String]) {
+    for provider in &mut inventory.providers {
+        provider.unreachable = unreachable.contains(&provider.id);
+    }
 }
 
 fn provider_inventory(
@@ -721,6 +740,7 @@ fn provider_inventory_with(
             models: Vec::new(),
             decision_models: Vec::new(),
             tools_off: false,
+            unreachable: false,
         });
     }
     if let Some(endpoints) = models_file
@@ -782,6 +802,7 @@ fn provider_inventory_with(
                     .collect(),
                 decision_models: decision_models(&record, provider),
                 tools_off: pi_models::tools_off(&record, provider),
+                unreachable: false,
             });
         }
     }
@@ -805,6 +826,7 @@ fn provider_inventory_with(
             models: Vec::new(),
             decision_models: Vec::new(),
             tools_off: false,
+            unreachable: false,
         });
     }
     // A model that refuses the tools every turn sends never reaches a picker.
@@ -1667,6 +1689,33 @@ llama     qwen3              32K      16.4K    yes       no\n";
         assert!(started.elapsed() < Duration::from_secs(1));
         assert!(status.iter().any(|provider| provider.configured));
         assert_eq!(inventory.providers[0].models[0].id, "local-model");
+        fs::remove_dir_all(agent).unwrap();
+    }
+
+    #[test]
+    fn an_unreachable_endpoint_says_so_and_keeps_its_saved_models() {
+        let agent = temporary_directory();
+        fs::write(agent.join("models.json"), serde_json::json!({
+            "providers": {
+                "ollama": {"baseUrl": "http://localhost:11434/v1", "models": [{"id": "local-model"}]},
+                "custom-dead": {"baseUrl": "http://192.0.2.1:8000/v1", "models": [{"id": "kept"}]}
+            }
+        }).to_string()).unwrap();
+        let mut inventory = provider_inventory(&agent, &[], &[]).unwrap();
+        mark_unreachable(&mut inventory, &["custom-dead".to_owned()]);
+        let value = serde_json::to_value(&inventory).unwrap();
+        let provider = |id: &str| {
+            value["providers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|provider| provider["id"] == id)
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(provider("custom-dead")["unreachable"], true);
+        assert_eq!(provider("custom-dead")["models"][0]["id"], "kept");
+        assert!(provider("ollama").get("unreachable").is_none());
         fs::remove_dir_all(agent).unwrap();
     }
 
