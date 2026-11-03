@@ -7,7 +7,6 @@ use std::io;
 fn every_memory_index_error_has_a_distinct_named_failure() {
     let failures = [
         MemoryFailure::from_index_error(MemoryIndexError::InvalidToolArguments),
-        MemoryFailure::from_index_error(MemoryIndexError::LimitRaised),
         MemoryFailure::from_index_error(MemoryIndexError::QueryTooLong),
         MemoryFailure::from_index_error(MemoryIndexError::TimedOut),
         MemoryFailure::from_index_error(MemoryIndexError::SecretRejected),
@@ -21,7 +20,6 @@ fn every_memory_index_error_has_a_distinct_named_failure() {
 
     let expected = [
         ("invalid_tool_arguments", "arguments"),
-        ("limit_raised", "limit"),
         ("query_too_long", "query"),
         ("timed_out", "timed out"),
         ("secret_rejected", "secret"),

@@ -45,17 +45,17 @@ impl RetrievalLimits {
         }
     }
 
-    pub fn lowered_by(self, request: Option<Self>) -> Result<Self, MemoryIndexError> {
+    /// Lowers each configured limit to the requested value. A requested value
+    /// above its configured limit gets the configured limit.
+    pub fn lowered_by(self, request: Option<Self>) -> Self {
         let Some(request) = request else {
-            return Ok(self);
+            return self;
         };
-        if request.item_cap > self.item_cap
-            || request.character_budget > self.character_budget
-            || request.timeout > self.timeout
-        {
-            return Err(MemoryIndexError::LimitRaised);
+        Self {
+            item_cap: request.item_cap.min(self.item_cap),
+            character_budget: request.character_budget.min(self.character_budget),
+            timeout: request.timeout.min(self.timeout),
         }
-        Ok(request)
     }
 }
 
@@ -93,7 +93,6 @@ pub struct ReindexReport {
 pub enum MemoryIndexError {
     Io(io::Error),
     Sqlite(rusqlite::Error),
-    LimitRaised,
     QueryTooLong,
     TimedOut,
     SecretRejected,
@@ -169,7 +168,7 @@ impl MemoryRuntimeSession {
             index: MemoryIndex::new(home, database),
             thread: thread.into(),
             configured,
-            declaration: MemorySearchSession::default(),
+            declaration: MemorySearchSession::new(configured),
             recalls: Vec::new(),
             first_build: Arc::new(Mutex::new(false)),
         }
@@ -246,8 +245,11 @@ fn build_once(first_build: &Mutex<bool>, index: &MemoryIndex, timeout: Duration)
     }
 }
 
-impl Default for MemorySearchSession {
-    fn default() -> Self {
+impl MemorySearchSession {
+    /// Declares the tool with the session's limits as each argument's maximum,
+    /// so the model sees the caps it may lower.
+    pub fn new(limits: RetrievalLimits) -> Self {
+        let timeout_milliseconds = u64::try_from(limits.timeout.as_millis()).unwrap_or(u64::MAX);
         let definition = json!({
             "name": "memory-search",
             "description": "Search the saved facts and Markdown notes this thread recalls: the user's Home folder, or the agent's own folder in an agent's thread.",
@@ -256,9 +258,9 @@ impl Default for MemorySearchSession {
                 "additionalProperties": false,
                 "properties": {
                     "query": {"type": "string"},
-                    "itemCount": {"type": "integer", "minimum": 0},
-                    "characterBudget": {"type": "integer", "minimum": 0},
-                    "timeoutMilliseconds": {"type": "integer", "minimum": 0}
+                    "itemCount": {"type": "integer", "minimum": 0, "maximum": limits.item_cap},
+                    "characterBudget": {"type": "integer", "minimum": 0, "maximum": limits.character_budget},
+                    "timeoutMilliseconds": {"type": "integer", "minimum": 0, "maximum": timeout_milliseconds}
                 },
                 "required": ["query"]
             }
@@ -268,9 +270,7 @@ impl Default for MemorySearchSession {
             declaration_count: 1,
         }
     }
-}
 
-impl MemorySearchSession {
     pub fn tool_definition_for_turn(&self) -> &[u8] {
         &self.tool_definition
     }
@@ -306,7 +306,7 @@ impl MemoryIndex {
         {
             return Err(MemoryIndexError::QueryTooLong);
         }
-        let limits = configured.lowered_by(requested)?;
+        let limits = configured.lowered_by(requested);
         if limits.timeout.is_zero() {
             return Err(MemoryIndexError::TimedOut);
         }
@@ -1560,7 +1560,7 @@ mod tests {
 
     #[test]
     fn tool_definition_is_byte_identical_between_turns() {
-        let session = MemorySearchSession::default();
+        let session = MemorySearchSession::new(RetrievalLimits::defaults(1_000));
         let first = session.tool_definition_for_turn().to_vec();
         let second = session.tool_definition_for_turn().to_vec();
         assert_eq!(first, second);
@@ -1591,6 +1591,41 @@ mod tests {
         assert!(first.items.is_empty());
         assert_eq!(session.recall_records(), &[first.recall, second.recall]);
         assert_eq!(session.recall_records()[0].character_budget, 30);
+    }
+
+    #[test]
+    fn tool_definition_names_the_configured_limits_as_maximums() {
+        let session = MemorySearchSession::new(RetrievalLimits::defaults(1_000));
+        let definition: serde_json::Value =
+            serde_json::from_slice(session.tool_definition_for_turn()).unwrap();
+        let properties = &definition["inputSchema"]["properties"];
+        assert_eq!(properties["itemCount"]["maximum"], 5);
+        assert_eq!(properties["characterBudget"]["maximum"], 1_000);
+        assert_eq!(properties["timeoutMilliseconds"]["maximum"], 250);
+        assert!(properties["query"].get("maximum").is_none());
+    }
+
+    #[test]
+    fn session_call_above_the_configured_limits_gets_the_configured_limits() {
+        let fixture = Fixture::new();
+        fixture.file("one.md", "saffron fact");
+        let mut session = MemoryRuntimeSession::open(
+            &fixture.root,
+            fixture.root.join("cache/runtime.sqlite3"),
+            "thread-runtime",
+            ModelMemoryCapability {
+                minimum_cacheable_prefix_characters: 1_000,
+            },
+        );
+
+        let result = session
+            .call(br#"{"query":"saffron","characterBudget":2000,"itemCount":9,"timeoutMilliseconds":10000}"#)
+            .unwrap();
+
+        assert_eq!(result.items.len(), 1);
+        assert_eq!(result.recall.item_cap, 5);
+        assert_eq!(result.recall.character_budget, 1_000);
+        assert_eq!(result.recall.timeout_milliseconds, 250);
     }
 
     #[test]
@@ -1655,7 +1690,7 @@ mod tests {
     }
 
     #[test]
-    fn raised_limits_and_zero_boundaries_fail_closed() {
+    fn raised_limits_clamp_and_zero_boundaries_fail_closed() {
         assert_eq!(
             RetrievalLimits::defaults(8_192),
             RetrievalLimits {
@@ -1665,10 +1700,18 @@ mod tests {
             }
         );
         let configured = Fixture::limits(5, 100);
-        assert!(matches!(
-            configured.lowered_by(Some(Fixture::limits(6, 100))),
-            Err(MemoryIndexError::LimitRaised)
-        ));
+        assert_eq!(
+            configured.lowered_by(Some(RetrievalLimits {
+                item_cap: 6,
+                character_budget: 40,
+                timeout: Duration::from_secs(60),
+            })),
+            RetrievalLimits {
+                item_cap: 5,
+                character_budget: 40,
+                timeout: Duration::from_secs(5),
+            }
+        );
         let fixture = Fixture::new();
         fixture.file("one.md", "amber fact");
         let empty = fixture

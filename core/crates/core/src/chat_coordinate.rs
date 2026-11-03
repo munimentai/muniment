@@ -3691,11 +3691,6 @@ mod tests {
                 "The memory search arguments are invalid.",
             ),
             (
-                MemoryIndexError::LimitRaised,
-                "limit_raised",
-                "The memory search requested a limit above the configured limit.",
-            ),
-            (
                 MemoryIndexError::QueryTooLong,
                 "query_too_long",
                 "The memory search query is too long.",

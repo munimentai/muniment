@@ -8,6 +8,8 @@ The runtime reads that value for every selected model. It never substitutes a
 constant or carries another model's value across a model change. This rule also
 applies when a customer selects a model under BYOK.
 
-A request may lower the item count, character budget, or timeout. It may not
-raise any value above the configured limit. Zero items or zero characters
-returns no content, and a zero timeout expires immediately.
+The tool declaration names each configured limit as that argument's maximum. A
+request may lower the item count, character budget, or timeout. A requested
+value above its configured limit gets the configured limit, and the search runs.
+Zero items or zero characters returns no content, and a zero timeout expires
+immediately.

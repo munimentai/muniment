@@ -1603,6 +1603,14 @@ mod tests {
         assert!(source.contains("pi.registerTool"));
         assert!(source.contains("memory-search"));
         assert!(source.contains("text: JSON.stringify(result)"));
+        // The declaration names the session's caps, so the model sees each maximum.
+        for maximum in [
+            r#"\"maximum\":5"#,
+            r#"\"maximum\":100"#,
+            r#"\"maximum\":250"#,
+        ] {
+            assert!(source.contains(maximum), "missing {maximum}");
+        }
         assert!(!source
             .split("name: 'memory-save'")
             .next()

@@ -16,10 +16,6 @@ impl MemoryFailure {
                 kind: "invalid_tool_arguments",
                 message: "The memory search arguments are invalid.",
             },
-            MemoryIndexError::LimitRaised => Self {
-                kind: "limit_raised",
-                message: "The memory search requested a limit above the configured limit.",
-            },
             MemoryIndexError::QueryTooLong => Self {
                 kind: "query_too_long",
                 message: "The memory search query is too long.",
