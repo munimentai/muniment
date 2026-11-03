@@ -10832,6 +10832,33 @@ it('renames, archives, restores and deletes a pending artifact through its catal
  await waitFor(()=>expect(within(catalog).queryByRole('button',{name:'Actions for Renamed report'})).not.toBeInTheDocument())
 })
 
+// A deleted draft's folder that holds the user's files stays, and the notice
+// names it as a thread delete does. Another page takes the notice away.
+it('names a deleted agent draft\'s kept folder in the thread folder notice until another page opens',async()=>{
+ const original=invoke.getMockImplementation()
+ const folder='/Users/me/Documents/muniment/sessions/New_agent-00000099'
+ let plans=[{threadId:'01900000-0000-7000-8000-000000000099',kind:'agent',goal:'Summarize my inbox',output:'A saved agent',resultId:null}]
+ invoke.mockImplementation((command,payload)=>{
+  if(command==='creation_list') return Promise.resolve(plans)
+  if(command==='creation_delete') {plans=[];return Promise.resolve(folder)}
+  if(command==='workspace_reveal') return Promise.resolve()
+  return original(command,payload)
+ })
+ render(App)
+ await fireEvent.click(await screen.findByRole('button',{name:'Agents',exact:true}))
+ const catalog=await screen.findByRole('region',{name:'Agents',exact:true})
+ await fireEvent.click(await within(catalog).findByRole('button',{name:'Actions for Summarize my inbox'}))
+ await fireEvent.click(screen.getByRole('menuitem',{name:'Delete'}))
+ await fireEvent.click(screen.getByRole('button',{name:'Confirm delete'}))
+ const notice=await screen.findByTestId('thread-folder-kept-notice')
+ expect(notice).toHaveTextContent(`The thread's folder holds your files, so it stays. ${folder}`)
+ await fireEvent.click(within(notice).getByRole('button',{name:/^Reveal in /}))
+ await waitFor(()=>expect(invoke).toHaveBeenCalledWith('workspace_reveal',{path:folder}))
+ await fireEvent.click(screen.getByRole('button',{name:'Artifacts',exact:true}))
+ await screen.findByRole('region',{name:'Artifacts'})
+ await waitFor(()=>expect(screen.queryByTestId('thread-folder-kept-notice')).not.toBeInTheDocument())
+})
+
 it.each(['Browser','Files'])('resizes the shared %s workspace panel with keyboard controls',async(name)=>{
  render(App)
  await fireEvent.click(await screen.findByRole('button',{name:'Workspace tools'}))

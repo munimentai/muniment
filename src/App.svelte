@@ -350,7 +350,7 @@
           await tauri.invoke('artifact_edit',{id:item.resultId || item.id,name:null})
           if (requestedArtifact === (item.resultId || item.id)) { requestedArtifact=null;browserPanel=null }
         }
-        for (const plan of plans) await tauri.invoke('creation_delete',{threadId:plan.threadId})
+        for (const plan of plans) showKeptFolder(item, { folder_kept: await tauri.invoke('creation_delete',{threadId:plan.threadId}) }, 'thread')
         await Promise.all([refreshCreations(),refreshAgents()])
         await leaveThreads([...threadIds,...plans.map(plan=>plan.threadId)], { ownsView })
       } finally { settle() }
