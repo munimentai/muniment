@@ -9213,6 +9213,20 @@ describe('provenance line', () => {
       return document.body
     }],
     ['Rewind', 'Rewind to before this message', async () => { await fireEvent.click(await screen.findByRole('button', { name: 'Rewind to here' })) }],
+    // A click inside these dialogs can leave focus on the page body too.
+    ['Routing details with focus on the page body', 'Routing details', async () => {
+      await fireEvent.click(await screen.findByRole('button', { name: /^Expand receipt:/ }))
+      await fireEvent.click(screen.getByRole('button', { name: 'Routing details · 2 turns' }))
+      await fireEvent.click(await screen.findByRole('dialog', { name: 'Routing details' }))
+      document.activeElement?.blur()
+      return document.body
+    }],
+    ['Rewind with focus on the page body', 'Rewind to before this message', async () => {
+      await fireEvent.click(await screen.findByRole('button', { name: 'Rewind to here' }))
+      await fireEvent.click(await screen.findByRole('dialog', { name: 'Rewind to before this message' }))
+      document.activeElement?.blur()
+      return document.body
+    }],
   ])('closes only the %s dialog on Escape and leaves the side panel and the thread', async (_name, dialogName, openDialog) => {
     HTMLDialogElement.prototype.showModal = function () { this.open = true }
     const edit = { effectId: 'e1', displayName: 'edit', status: 'completed', input: JSON.stringify({ path: 'notes.md', oldText: 'a', newText: 'b' }) }

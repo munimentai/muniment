@@ -21,20 +21,20 @@
     document.body.appendChild(node)
     return { destroy() { node.remove() } }
   }
-  // Escape from inside the panel stops at it, before the shell's document
-  // keys close the page or the side panel under it. The window answers it
-  // from anywhere else.
+  // The window hears Escape first, in its capture phase, and stops it there,
+  // so the shell's document keys never close the page or the side panel
+  // under the dialog. A click inside the dialog can leave focus on the page
+  // body, so a listener on the panel alone misses it.
   function keydown(event) {
     if (shown && event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close() }
   }
 </script>
 
-<svelte:window onkeydown={keydown} />
+<svelte:window onkeydowncapture={keydown} />
 <button type="button" class="routing-trigger" aria-haspopup="dialog" bind:this={trigger} onclick={open}>{label}</button>
 {#if shown}
   <div class="routing-scrim" use:portal use:dialogDismiss={{ onclose: close }}>
-    <!-- svelte-ignore a11y_interactive_supports_focus -->
-    <div data-panel data-panel-variant="overlay" class="routing-panel" role="dialog" aria-modal="true" aria-label="Routing details" bind:this={panel} onkeydown={keydown}>
+    <div data-panel data-panel-variant="overlay" class="routing-panel" role="dialog" aria-modal="true" aria-label="Routing details" bind:this={panel}>
       <header data-panel-header class="routing-head">
         <h3>{label}</h3>
         <PopupClose label="Close routing details" onclick={close} />
