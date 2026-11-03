@@ -8,7 +8,6 @@
   import Button from './ui/Button.svelte'
   import SegmentedField from './ui/SegmentedField.svelte'
   import LucideIcon from './LucideIcon.svelte'
-  import AgentAvatar from './AgentAvatar.svelte'
   import PopupClose from './PopupClose.svelte'
   import { dialogDismiss } from './dialog-dismiss.js'
   import MemoryImports from './MemoryImports.svelte'
@@ -16,12 +15,12 @@
   import { formatDateTime } from './time-format.svelte.js'
   import { factThread, openThread, sourceLabel, threadTitles } from './memory-source.js'
   // `part` shows one Settings page: profile, memory, or both for an agent.
-  // `agent` is the agent whose memory shows from its profile: a new fact's
-  // source names it, and its avatar marks that source. `addInPlace` shows
+  // `agent` is the agent whose memory shows from its profile. A fact the
+  // person adds there reads Added by you, as its trust does. `addInPlace` shows
   // the Add memory form in place of the list, for a host that is already a
   // dialog, and `onadding` tells the host when the form shows.
   let { tauri, agentId = null, agent = null, part = 'all', addInPlace = false, onadding = () => {} } = $props()
-  const newSource = $derived(agent ? `Added by ${agent.name} agent` : 'Added in settings')
+  const newSource = $derived(agent ? 'Added by you' : 'Added in settings')
   const showProfile = $derived(!agentId && part !== 'memory')
   const showMemory = $derived(part !== 'profile')
   // New chats read these choices from the profile.
@@ -483,7 +482,7 @@
   <form class="fact-form" onsubmit={saveFact}>
     <label class="field">Title<input bind:this={titleInput} bind:value={draft.title} maxlength="200" required disabled={!loaded || busy} /></label>
     <label class="field">Fact<textarea bind:value={draft.content} rows="3" required disabled={!loaded || busy}></textarea></label>
-    <label class="field">Source<span class="source-value">{#if agent && draft.source === newSource}<AgentAvatar {agent} size={16} />{/if}<input bind:value={draft.source} required disabled={!loaded || busy} /></span></label>
+    <label class="field">Source<span class="source-value"><input bind:value={draft.source} required disabled={!loaded || busy} /></span></label>
     <div class="field-actions">
       <Button onclick={cancel}>{cancelLabel}</Button>
       <Button type="submit" disabled={!loaded || busy}>Save memory</Button>

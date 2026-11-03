@@ -243,7 +243,7 @@ it('runs the agent on its own machine, opens a run from its history and deletes 
   expect(requests.at(-1)).toEqual({ runtime: 'box', operation: 'agent.delete', body: { id: 'scout', remove_memory: true } })
 })
 
-it('adds a memory in the same dialog, with the agent as its source, and goes back to the list', async () => {
+it('adds a memory in the same dialog, with you as its source, and goes back to the list', async () => {
   const facts = [{ id: 'fact', title: 'Source preference', content: 'Use primary sources.', source: 'Chat', trust: 'user' }]
   const invoke = vi.fn(async (command, args) => {
     if (command !== 'agent_memory') return null
@@ -263,8 +263,9 @@ it('adds a memory in the same dialog, with the agent as its source, and goes bac
   expect(dialog).toHaveAccessibleName('Add memory')
   expect(within(dialog).queryByText('Source preference')).not.toBeInTheDocument()
   await waitFor(() => expect(within(dialog).getByRole('textbox', { name: 'Title' })).toHaveFocus())
-  expect(within(dialog).getByRole('textbox', { name: 'Source' })).toHaveValue('Added by Scout agent')
-  expect(within(dialog).getByRole('textbox', { name: 'Source' }).parentElement.querySelector('.agent-avatar')).not.toBeNull()
+  // A fact the person adds reads Added by you, as its trust does.
+  expect(within(dialog).getByRole('textbox', { name: 'Source' })).toHaveValue('Added by you')
+  expect(within(dialog).queryByText(/Added by Scout/)).toBeNull()
 
   // Escape on the form goes back to the list and Add memory.
   await fireEvent.keyDown(window, { key: 'Escape' })
@@ -282,7 +283,7 @@ it('adds a memory in the same dialog, with the agent as its source, and goes bac
   await fireEvent.input(within(dialog).getByRole('textbox', { name: 'Title' }), { target: { value: 'Tone' } })
   await fireEvent.input(within(dialog).getByRole('textbox', { name: 'Fact' }), { target: { value: 'Use short answers.' } })
   await fireEvent.click(within(dialog).getByRole('button', { name: 'Save memory' }))
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_memory', expect.objectContaining({ id: 'scout', action: 'memory_fact_save', fact: expect.objectContaining({ title: 'Tone', source: 'Added by Scout agent' }) })))
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_memory', expect.objectContaining({ id: 'scout', action: 'memory_fact_save', fact: expect.objectContaining({ title: 'Tone', source: 'Added by you' }) })))
   expect(await within(dialog).findByText('Tone')).toBeInTheDocument()
   expect(dialog).toHaveAccessibleName('Agent memory')
 
