@@ -879,3 +879,274 @@ fn the_start_pass_removes_day_old_folders_unsent_chats_left_and_keeps_the_users_
     assert!(names.contains(&leaf(&mine)));
     std::fs::remove_dir_all(root).unwrap();
 }
+
+/// Deletes agent `id` the way the app does: core's delete, then its creation
+/// chats, then, with "Also delete its threads", each thread the agent holds.
+fn delete_agent_as_the_app_does(
+    journal: &mut RunJournal,
+    profile: &std::path::Path,
+    id: &str,
+    remove_memory: bool,
+    remove_threads: bool,
+) {
+    let creation_threads = muniment_core::agents::creation_threads(profile, id);
+    let agent_threads: Vec<String> = muniment_core::agents::state(profile)
+        .unwrap()
+        .threads
+        .into_iter()
+        .filter(|(_, agent)| agent == id)
+        .map(|(thread, _)| thread)
+        .collect();
+    muniment_core::agents::operation(
+        profile,
+        "agent.delete",
+        json!({"id": id, "remove_memory": remove_memory}),
+    )
+    .unwrap();
+    delete_agent_creation_threads_now(journal, profile, &creation_threads, &provenance(None))
+        .unwrap();
+    if remove_threads {
+        for thread in agent_threads {
+            delete_thread_with_creation_now(
+                journal,
+                profile,
+                Some("owner"),
+                &thread,
+                &provenance(Some("owner")),
+            )
+            .unwrap();
+        }
+    }
+}
+
+#[test]
+fn an_agent_saved_in_an_ordinary_thread_leaves_the_thread_and_its_delete_keeps_it() {
+    use muniment_core::journal::thread_mutation::repair_taken_over_threads;
+    let root = muniment_core::state_root::test_root()
+        .join(format!("muniment-agent-save-thread-{}", Uuid::new_v4()));
+    let profile = root.join("profile");
+    std::fs::create_dir_all(&profile).unwrap();
+    muniment_core::home::confirm_home(&profile, &root.join("muniment")).unwrap();
+    let mut journal = RunJournal::open(profile.join("runs.sqlite3")).unwrap();
+    // An ordinary thread holds the user's messages before the agent exists.
+    let thread = journal
+        .append_new_run("workspace-a", &run_started(Some("owner")))
+        .unwrap();
+    let runtime = muniment_core::memory_runtime::ApplicationMemoryRuntime::new(
+        profile.clone(),
+        profile.join("memory"),
+    );
+    let combinations = [(false, false), (true, false), (false, true), (true, true)];
+    for (index, (remove_memory, remove_threads)) in combinations.into_iter().enumerate() {
+        // The user asks the model for an agent in a later reply.
+        journal
+            .append_new_run_in_thread("workspace-a", &thread, &run_started(Some("owner")))
+            .unwrap();
+        let session = format!("run-{index}");
+        runtime
+            .open_session(
+                &session,
+                &thread,
+                muniment_core::memory_index::ModelMemoryCapability {
+                    minimum_cacheable_prefix_characters: 8192,
+                },
+            )
+            .unwrap();
+        let saved = runtime
+            .agent_tool(
+                &session,
+                "agent-save",
+                &json!({"name": "Reply Time Check", "instructions": "Check reply times."})
+                    .to_string(),
+            )
+            .unwrap();
+        let agent = saved["agent"]["id"].as_str().unwrap().to_owned();
+        // The routine tools still name the agent the reply made.
+        let routines = runtime
+            .agent_tool(&session, "routine-list", &json!({}).to_string())
+            .unwrap();
+        assert_eq!(routines["agent_id"], agent.as_str());
+        runtime.close_session(&session);
+        // The thread gets no creation record and stays out of the agent.
+        assert!(muniment_core::creations::read(&profile, &thread)
+            .unwrap()
+            .is_none());
+        let state = muniment_core::agents::state(&profile).unwrap();
+        assert!(!state.threads.contains_key(&thread));
+        assert!(!state.primary_threads.contains_key(&agent));
+        assert!(muniment_core::agents::creation_threads(&profile, &agent).is_empty());
+
+        delete_agent_as_the_app_does(
+            &mut journal,
+            &profile,
+            &agent,
+            remove_memory,
+            remove_threads,
+        );
+        assert!(!muniment_core::agents::exists(&profile, &agent));
+        assert!(
+            !thread_deleted(&mut journal, &thread),
+            "memory={remove_memory} threads={remove_threads}"
+        );
+    }
+
+    // A thread an older save took over carries the agent's record and
+    // binding. The start repair gives it back, and each delete keeps it.
+    for (index, (remove_memory, remove_threads)) in combinations.into_iter().enumerate() {
+        let taken = journal
+            .append_new_run("workspace-a", &run_started(Some("owner")))
+            .unwrap();
+        let agent = muniment_core::agents::save(
+            &profile,
+            muniment_core::agents::Agent {
+                name: format!("Reply Time Check {index}"),
+                instructions: "Check reply times.".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        muniment_core::agents::assign(&profile, &taken, &agent.id).unwrap();
+        muniment_core::creations::save(
+            &profile,
+            muniment_core::creations::Creation {
+                thread_id: taken.clone(),
+                kind: "agent".into(),
+                goal: format!("Create {}", agent.name),
+                output: format!("Saved agent: {}", agent.name),
+                result_id: Some(agent.id.clone()),
+                turns: Vec::new(),
+                title: Some("Reply Time Check".into()),
+            },
+        )
+        .unwrap();
+        // Before the repair, the agent's delete already leaves the thread.
+        assert!(muniment_core::agents::creation_threads(&profile, &agent.id).is_empty());
+        // A creation chat with its own record stays the agent's.
+        let chat = journal
+            .append_new_run("workspace-a", &run_started(Some("owner")))
+            .unwrap();
+        save_creation(&profile, &chat, &agent.id);
+
+        assert_eq!(
+            repair_taken_over_threads(&mut journal, &profile).unwrap(),
+            vec![taken.clone()]
+        );
+        assert!(muniment_core::creations::read(&profile, &taken)
+            .unwrap()
+            .is_none());
+        assert!(muniment_core::creations::read(&profile, &chat)
+            .unwrap()
+            .is_some());
+        let state = muniment_core::agents::state(&profile).unwrap();
+        assert!(!state.threads.contains_key(&taken));
+        assert!(!state.primary_threads.contains_key(&agent.id));
+        assert!(repair_taken_over_threads(&mut journal, &profile)
+            .unwrap()
+            .is_empty());
+
+        delete_agent_as_the_app_does(
+            &mut journal,
+            &profile,
+            &agent.id,
+            remove_memory,
+            remove_threads,
+        );
+        assert!(
+            !thread_deleted(&mut journal, &taken),
+            "memory={remove_memory} threads={remove_threads}"
+        );
+        assert!(thread_deleted(&mut journal, &chat));
+    }
+    assert!(!thread_deleted(&mut journal, &thread));
+    drop(journal);
+    drop(runtime);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while root.exists() && std::time::Instant::now() < deadline {
+        let _ = std::fs::remove_dir_all(&root);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn a_deleted_threads_pi_transcripts_go_and_a_live_threads_stay() {
+    use muniment_core::journal::thread_mutation::remove_deleted_thread_sessions;
+    let root = muniment_core::state_root::test_root()
+        .join(format!("muniment-thread-transcripts-{}", Uuid::new_v4()));
+    let profile = root.join("profile");
+    let sessions = profile.join("sessions");
+    std::fs::create_dir_all(&sessions).unwrap();
+    muniment_core::home::confirm_home(&profile, &root.join("muniment")).unwrap();
+    let mut journal = RunJournal::open(profile.join("runs.sqlite3")).unwrap();
+    // A thread whose runs bound `locators`, each written in the sessions folder.
+    let thread_with = |journal: &mut RunJournal, locators: &[&str]| {
+        let first = run_started(Some("owner"));
+        let thread = journal.append_new_run("workspace-a", &first).unwrap();
+        journal.append(1, &bound(&first, locators[0])).unwrap();
+        for locator in &locators[1..] {
+            let run = run_started(Some("owner"));
+            journal
+                .append_new_run_in_thread("workspace-a", &thread, &run)
+                .unwrap();
+            journal.append(1, &bound(&run, locator)).unwrap();
+        }
+        for locator in locators {
+            std::fs::write(sessions.join(locator), "{}\n").unwrap();
+        }
+        thread
+    };
+    let deleted = thread_with(&mut journal, &["a_deleted.jsonl", "b_deleted.jsonl"]);
+    let live = thread_with(&mut journal, &["c_live.jsonl"]);
+    // A transcript a live thread also binds stays.
+    let shared = thread_with(&mut journal, &["d_shared.jsonl"]);
+    let sharer = run_started(Some("owner"));
+    journal
+        .append_new_run_in_thread("workspace-a", &live, &sharer)
+        .unwrap();
+    journal
+        .append(1, &bound(&sharer, "d_shared.jsonl"))
+        .unwrap();
+    std::fs::write(sessions.join("unrelated.jsonl"), "{}\n").unwrap();
+
+    for thread in [&deleted, &shared] {
+        delete_thread_with_creation_now(
+            &mut journal,
+            &profile,
+            Some("owner"),
+            thread,
+            &provenance(Some("owner")),
+        )
+        .unwrap();
+    }
+    assert!(!sessions.join("a_deleted.jsonl").exists());
+    assert!(!sessions.join("b_deleted.jsonl").exists());
+    for kept in ["c_live.jsonl", "d_shared.jsonl", "unrelated.jsonl"] {
+        assert!(sessions.join(kept).is_file(), "{kept}");
+    }
+
+    // A delete on another path leaves its transcript, and the start pass
+    // removes it. A locator that names a path never reaches outside.
+    let elsewhere = thread_with(&mut journal, &["e_elsewhere.jsonl", "../outside.jsonl"]);
+    append_thread_delete_now(
+        &mut journal,
+        Some("owner"),
+        &elsewhere,
+        &provenance(Some("owner")),
+    )
+    .unwrap();
+    assert!(sessions.join("e_elsewhere.jsonl").is_file());
+    assert_eq!(
+        remove_deleted_thread_sessions(&mut journal, &profile).unwrap(),
+        1
+    );
+    assert!(!sessions.join("e_elsewhere.jsonl").exists());
+    assert!(profile.join("outside.jsonl").is_file());
+    for kept in ["c_live.jsonl", "d_shared.jsonl", "unrelated.jsonl"] {
+        assert!(sessions.join(kept).is_file(), "{kept}");
+    }
+    assert_eq!(
+        remove_deleted_thread_sessions(&mut journal, &profile).unwrap(),
+        0
+    );
+    drop(journal);
+    std::fs::remove_dir_all(root).unwrap();
+}

@@ -19,6 +19,9 @@ pub struct ApplicationMemoryRuntime {
     sessions: Mutex<BTreeMap<String, Arc<Mutex<MemoryRuntimeSession>>>>,
     /// The sessions whose model saved a fact through memory-save.
     saved: Mutex<std::collections::BTreeSet<String>>,
+    /// The agent each open run session's model created through agent-save,
+    /// which the routine tools name when the call names no agent.
+    created_agents: Mutex<BTreeMap<String, String>>,
     extractor: Arc<crate::memory_extract::Extractor>,
     extraction_model: Option<crate::memory_extract::Model>,
 }
@@ -34,6 +37,7 @@ impl ApplicationMemoryRuntime {
             database_root,
             sessions: Mutex::new(BTreeMap::new()),
             saved: Mutex::new(Default::default()),
+            created_agents: Default::default(),
             extractor: Default::default(),
             extraction_model: None,
         }
@@ -526,22 +530,22 @@ impl ApplicationMemoryRuntime {
                 let creating = agent.id.is_empty();
                 let agent = crate::agents::save(&self.config, agent)?;
                 if creating {
-                    crate::agents::assign(&self.config, &thread, &agent.id)?;
-                    let mut plan = crate::creations::read(&self.config, &thread)?.unwrap_or(
-                        crate::creations::Creation {
-                            thread_id: thread.clone(),
-                            kind: "agent".into(),
-                            goal: format!("Create {}", agent.name),
-                            output: format!("Saved agent: {}", agent.name),
-                            result_id: None,
-                            turns: Vec::new(),
-                            title: None,
-                        },
-                    );
-                    if plan.kind == "agent" {
+                    // An agent's creation chat holds its creation record
+                    // before the save, and the agent takes that chat. An
+                    // ordinary thread stays the user's: it gets no record
+                    // and never becomes the agent's thread, so a delete of
+                    // the agent leaves it.
+                    if let Some(mut plan) = crate::creations::read(&self.config, &thread)?
+                        .filter(|plan| plan.kind == "agent")
+                    {
+                        crate::agents::assign(&self.config, &thread, &agent.id)?;
                         plan.result_id = Some(agent.id.clone());
                         crate::creations::save(&self.config, plan)?;
                     }
+                    self.created_agents
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .insert(session.to_owned(), agent.id.clone());
                 }
                 let path = crate::agents::folder(&self.config, &agent.id)?.join("agent.md");
                 Ok(serde_json::json!({"saved": true, "agent": agent, "path": path}))
@@ -571,6 +575,13 @@ impl ApplicationMemoryRuntime {
                         .threads
                         .get(&thread)
                         .cloned()
+                        .or_else(|| {
+                            self.created_agents
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                .get(session)
+                                .cloned()
+                        })
                         .ok_or("Name the agent: this thread belongs to no agent.")?,
                 };
                 match tool {
@@ -747,6 +758,10 @@ impl ApplicationMemoryRuntime {
 
     fn forget_session(&self, session: &str) {
         self.saved
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(session);
+        self.created_agents
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(session);
@@ -1310,11 +1325,13 @@ mod tests {
         let tool = |name: &str, arguments: serde_json::Value| {
             runtime.agent_tool("run-two", name, &arguments.to_string())
         };
-        tool(
+        let planner = tool(
             "agent-save",
             serde_json::json!({"name": "Planner", "instructions": "Plan the work."}),
         )
         .unwrap();
+        // The thread is the planner's own, as its runs are.
+        crate::agents::assign(&config, thread, planner["agent"]["id"].as_str().unwrap()).unwrap();
         let analyst = crate::agents::save(
             &config,
             crate::agents::Agent {

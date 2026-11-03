@@ -119,7 +119,9 @@ fn tidy_home(profile: &Path) -> Result<(), String> {
     muniment_core::projects::migrate_session_names(profile)
 }
 
-/// Deletes the creation chats that deleted agents left, which hold no run.
+/// Gives back each ordinary thread an `agent-save` took over, deletes the
+/// creation chats that deleted agents left, which hold no run, and removes
+/// the Pi transcripts only deleted threads bound.
 fn remove_orphan_creation_threads(
     storage: &muniment_core::run_events::SharedStorage,
     profile: &Path,
@@ -128,6 +130,19 @@ fn remove_orphan_creation_threads(
     let Ok(mut storage) = storage.lock() else {
         return;
     };
+    match muniment_core::journal::thread_mutation::repair_taken_over_threads(
+        &mut storage.journal,
+        profile,
+    ) {
+        Ok(repaired) if !repaired.is_empty() => muniment_core::runtime_eprintln!(
+            "muniment-runtime: taken_over_threads repaired={}",
+            repaired.len()
+        ),
+        Ok(_) => {}
+        Err(error) => muniment_core::runtime_eprintln!(
+            "muniment-runtime: taken_over_threads outcome=failed error={error}"
+        ),
+    }
     match muniment_core::journal::thread_mutation::remove_orphan_creation_threads(
         &mut storage.journal,
         profile,
@@ -140,6 +155,18 @@ fn remove_orphan_creation_threads(
         Ok(_) => {}
         Err(error) => muniment_core::runtime_eprintln!(
             "muniment-runtime: creation_threads outcome=failed error={error}"
+        ),
+    }
+    match muniment_core::journal::thread_mutation::remove_deleted_thread_sessions(
+        &mut storage.journal,
+        profile,
+    ) {
+        Ok(0) => {}
+        Ok(removed) => muniment_core::runtime_eprintln!(
+            "muniment-runtime: deleted_thread_transcripts removed={removed}"
+        ),
+        Err(error) => muniment_core::runtime_eprintln!(
+            "muniment-runtime: deleted_thread_transcripts outcome=failed error={error}"
         ),
     }
 }

@@ -1456,12 +1456,18 @@ fn remove_agent(profile: &Path, id: &str, remove_memory: bool) -> Result<Deleted
     Ok(Deleted { folder_kept })
 }
 /// The creation chats of one agent: the threads whose creation record
-/// made it. Read them before [`delete_agent`], which removes the records.
+/// made it. A thread an `agent-save` took over holds the user's earlier
+/// messages and is not one. Read them before [`delete_agent`], which
+/// removes the records.
 pub fn creation_threads(profile: &Path, id: &str) -> Vec<String> {
     crate::creations::list(profile)
         .unwrap_or_default()
         .into_iter()
-        .filter(|creation| creation.kind == "agent" && creation.result_id.as_deref() == Some(id))
+        .filter(|creation| {
+            creation.kind == "agent"
+                && creation.result_id.as_deref() == Some(id)
+                && !creation.taken_over()
+        })
         .map(|creation| creation.thread_id)
         .collect()
 }

@@ -126,13 +126,30 @@ pub fn delete_thread_with_creation_now(
     if creation {
         crate::creations::remove(profile, thread_id).map_err(ThreadMutationError::Creation)?;
     }
-    Ok(tidy_deleted_thread(profile, thread_id))
+    Ok(tidy_deleted_thread(journal, profile, thread_id))
 }
 
-/// Removes what a deleted thread leaves outside the journal: its session
-/// folder when that holds only Muniment's files, and its place in the agent
-/// state. Answers the folder when it stays because it holds the user's files.
-fn tidy_deleted_thread(profile: &std::path::Path, thread_id: &str) -> Option<std::path::PathBuf> {
+/// Removes what a deleted thread leaves outside the journal: its Pi
+/// transcripts, its session folder when that holds only Muniment's files,
+/// and its place in the agent state. Answers the folder when it stays
+/// because it holds the user's files.
+fn tidy_deleted_thread(
+    journal: &mut RunJournal,
+    profile: &std::path::Path,
+    thread_id: &str,
+) -> Option<std::path::PathBuf> {
+    // The delete is committed, so a transcript that fails to go only logs,
+    // and the pass at start removes it later.
+    match journal.session_bindings() {
+        Ok(bindings) => {
+            for locator in unbound_locators(&bindings, |thread| thread == thread_id) {
+                remove_session_file(profile, &locator);
+            }
+        }
+        Err(error) => crate::runtime_eprintln!(
+            "thread_delete: transcripts not removed thread={thread_id} error={error:?}"
+        ),
+    }
     // The thread's own session folder goes when it holds only Muniment's
     // files. A folder with the user's files stays, and the answer names it.
     let folder_kept = match crate::projects::remove_thread_folder(profile, thread_id) {
@@ -228,7 +245,7 @@ pub fn delete_agent_creation_threads_now(
             deleted.push(thread_id.clone());
         }
         crate::creations::remove(profile, thread_id).map_err(ThreadMutationError::Creation)?;
-        tidy_deleted_thread(profile, thread_id);
+        tidy_deleted_thread(journal, profile, thread_id);
     }
     Ok(deleted)
 }
@@ -237,7 +254,165 @@ pub fn delete_agent_creation_threads_now(
 /// sweep may delete it, so a fresh thread the user is about to write in stays.
 const ORPHAN_THREAD_MIN_AGE: chrono::TimeDelta = chrono::TimeDelta::days(1);
 
+/// One Pi transcript a run of a thread bound.
+struct SessionBinding {
+    thread_id: String,
+    locator: String,
+    thread_deleted: bool,
+}
+
+/// The transcripts the threads `chosen` picks bound that no live thread
+/// outside them binds.
+fn unbound_locators(
+    bindings: &[SessionBinding],
+    chosen: impl Fn(&str) -> bool,
+) -> std::collections::BTreeSet<String> {
+    let live: std::collections::BTreeSet<&str> = bindings
+        .iter()
+        .filter(|binding| !binding.thread_deleted && !chosen(&binding.thread_id))
+        .map(|binding| binding.locator.as_str())
+        .collect();
+    bindings
+        .iter()
+        .filter(|binding| chosen(&binding.thread_id) && !live.contains(binding.locator.as_str()))
+        .map(|binding| binding.locator.clone())
+        .collect()
+}
+
+/// Removes one Pi transcript from the profile's sessions folder. A locator
+/// that names a path, a link or anything but a `.jsonl` file stays.
+/// Answers whether the file went.
+fn remove_session_file(profile: &std::path::Path, locator: &str) -> bool {
+    if locator.is_empty()
+        || locator.starts_with('.')
+        || locator.contains(['/', '\\'])
+        || !locator.ends_with(".jsonl")
+    {
+        return false;
+    }
+    let path = profile
+        .join(crate::state_root::SESSIONS_DIRECTORY_NAME)
+        .join(locator);
+    if !std::fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_file()) {
+        return false;
+    }
+    match std::fs::remove_file(&path) {
+        Ok(()) => true,
+        Err(error) => {
+            crate::runtime_eprintln!("thread_delete: transcript not removed error={error}");
+            false
+        }
+    }
+}
+
+/// Removes, at start, each Pi transcript that only deleted threads bound,
+/// as a delete on another path or a failed removal leaves. Answers how many
+/// files went.
+pub fn remove_deleted_thread_sessions(
+    journal: &mut RunJournal,
+    profile: &std::path::Path,
+) -> Result<usize, String> {
+    let bindings = journal
+        .session_bindings()
+        .map_err(|error| format!("{error:?}"))?;
+    let deleted: std::collections::BTreeSet<&str> = bindings
+        .iter()
+        .filter(|binding| binding.thread_deleted)
+        .map(|binding| binding.thread_id.as_str())
+        .collect();
+    Ok(
+        unbound_locators(&bindings, |thread| deleted.contains(thread))
+            .iter()
+            .filter(|locator| remove_session_file(profile, locator))
+            .count(),
+    )
+}
+
+/// Repairs, at start, each ordinary thread an `agent-save` call took over:
+/// the thread holds a run and its creation record is one that call wrote.
+/// The record goes and the thread leaves the agent, so the thread stays
+/// the user's and a delete of the agent leaves it. Answers the threads it
+/// repaired.
+pub fn repair_taken_over_threads(
+    journal: &mut RunJournal,
+    profile: &std::path::Path,
+) -> Result<Vec<String>, String> {
+    let mut repaired = Vec::new();
+    for creation in crate::creations::list(profile)? {
+        if !creation.taken_over() {
+            continue;
+        }
+        let ran = !journal
+            .thread_run_ids(&creation.thread_id, 1, None)
+            .map_err(|error| format!("{error:?}"))?
+            .run_ids
+            .is_empty();
+        if !ran {
+            continue;
+        }
+        if let Some(agent) = creation.result_id.as_deref() {
+            crate::agents::with_state(profile, |state| {
+                if state.threads.get(&creation.thread_id).map(String::as_str) == Some(agent) {
+                    state.threads.remove(&creation.thread_id);
+                }
+                if state.primary_threads.get(agent) == Some(&creation.thread_id) {
+                    state.primary_threads.remove(agent);
+                }
+                Ok(())
+            })?;
+        }
+        crate::creations::remove(profile, &creation.thread_id)?;
+        repaired.push(creation.thread_id);
+    }
+    Ok(repaired)
+}
+
 impl RunJournal {
+    /// Every Pi transcript a run bound, with its thread and whether the
+    /// thread is deleted.
+    fn session_bindings(&mut self) -> Result<Vec<SessionBinding>, JournalError> {
+        let coordination = self.coordination.clone();
+        let _operation = coordination
+            .as_ref()
+            .map(|state| state.operation.lock().unwrap());
+        self.refresh_after_compaction()?;
+        let connection = self
+            .connection
+            .as_ref()
+            .expect("journal connection is always present outside compaction");
+        let mut statement = connection.prepare(
+            "SELECT runs.thread_id, e.envelope_json, EXISTS(SELECT 1 FROM thread_events deleted \
+                 WHERE deleted.thread_id=runs.thread_id AND deleted.event_type='thread.deleted') \
+             FROM run_threads runs JOIN events e ON e.run_id=runs.run_id \
+             WHERE e.event_type='runtime.pi_session.bound'",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, bool>(2)?,
+            ))
+        })?;
+        let mut bindings = Vec::new();
+        for row in rows {
+            let (thread_id, raw, thread_deleted) = row?;
+            let envelope: super::EventEnvelope = serde_json::from_str(&raw).map_err(|error| {
+                JournalError::Corrupt(format!("invalid stored envelope JSON: {error}"))
+            })?;
+            let super::EventPayload::Inline { payload_json } = envelope.payload else {
+                continue;
+            };
+            if let Some(locator) = payload_json.get("locator").and_then(|v| v.as_str()) {
+                bindings.push(SessionBinding {
+                    thread_id,
+                    locator: locator.to_owned(),
+                    thread_deleted,
+                });
+            }
+        }
+        Ok(bindings)
+    }
+
     /// The threads this runtime created that hold nothing but their
     /// creation, no run and no other event, each with its creation time. A
     /// replica of another member's thread is left out.

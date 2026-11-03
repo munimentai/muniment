@@ -24,6 +24,18 @@ pub struct Creation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
 }
+impl Creation {
+    /// Whether an `agent-save` call in an ordinary thread wrote this record:
+    /// an agent record with no turns, the goal `Create <name>` and the
+    /// output `Saved agent: <name>`. That thread held the user's messages
+    /// before the agent existed, so it is never the agent's creation chat.
+    pub fn taken_over(&self) -> bool {
+        self.kind == "agent"
+            && self.turns.is_empty()
+            && self.goal.starts_with("Create ")
+            && self.output.starts_with("Saved agent: ")
+    }
+}
 /// One message of an agent's creation chat and the draft `agent.draft`
 /// answered it with.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
