@@ -97,3 +97,28 @@ it('names the Files tab after a creation chat\'s title, not its folder', async (
   expect(screen.getByRole('tab', {name: 'Scout'})).toBeInTheDocument()
   expect(invoke.mock.calls.filter(([command]) => command === 'workspace_folders')).toHaveLength(1)
 })
+// A file tab belongs to the view that opened it. A deleted draft's tab
+// closes, another thread's tab stays, and a Files tab whose hidden view has
+// not read its folder takes the thread's title.
+it('closes a deleted draft\'s file tabs and names a hidden Files tab after the thread', async () => {
+  vi.stubGlobal('ResizeObserver', class {observe() {} disconnect() {}})
+  vi.stubGlobal('matchMedia', () => ({matches: false, addEventListener() {}, removeEventListener() {}}))
+  const invoke = vi.fn(async (command, args) => command === 'workspace_folders' ? [{label: 'Thread workspace', path: `/home/sessions/${args.threadId}`}] : command === 'workspace_list' ? {path: args.path, entries: []} : '')
+  const onselect = vi.fn()
+  const draftFile = {path: '/home/sessions/New_agent-0b3e9d21/live37-draft.txt', name: 'live37-draft.txt', directory: false}
+  const threadFile = {path: '/home/sessions/Plan-c3fa5c5a/plan.md', name: 'plan.md', directory: false}
+  const view = render(WorkspacePanel, {props: {tauri: {invoke}, selected: 'files', context: {threadId: 'draft', label: 'New agent'}, threadId: 'draft', onselect}})
+  await view.rerender({props: {requestedFile: draftFile}})
+  expect(onselect).toHaveBeenLastCalledWith(`file:${draftFile.path}`)
+  await view.rerender({props: {selected: `file:${draftFile.path}`, context: {threadId: 't2', threadTitle: 'Plan'}, threadId: 't2'}})
+  await view.rerender({props: {requestedFile: threadFile}})
+  await view.rerender({props: {selected: `file:${threadFile.path}`}})
+  expect(screen.getByRole('tab', {name: 'live37-draft.txt'})).toBeInTheDocument()
+  expect(screen.getByRole('tab', {name: 'Plan'})).toBeInTheDocument()
+  await view.rerender({props: {gone: {ids: ['draft']}}})
+  await waitFor(() => expect(screen.queryByRole('tab', {name: 'live37-draft.txt'})).toBeNull())
+  expect(screen.getByRole('tab', {name: 'plan.md'})).toHaveAttribute('aria-selected', 'true')
+  expect(screen.getByRole('tab', {name: 'Plan'})).toBeInTheDocument()
+  expect(invoke.mock.calls.filter(([command, args]) => command === 'workspace_folders' && args.threadId === 't2')).toHaveLength(0)
+  vi.unstubAllGlobals()
+})

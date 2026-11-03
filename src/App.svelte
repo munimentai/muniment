@@ -345,6 +345,7 @@
         const ownsView = kind === 'agent' && (selectedAgent === item.id || threadIds.includes(currentThreadId))
         if (kind === 'agent') {
           showKeptFolder(item, await agentRequest(tauri, item.runtimeId, 'agent.delete', { id: item.id, remove_memory: false }))
+          closeOwnedTabs([item.id])
           if (selectedAgent===item.id) { selectedAgent=null;agentProfileOpen=false }
         } else if (kind === 'artifact' && (item.resultId || item.id)) {
           await tauri.invoke('artifact_edit',{id:item.resultId || item.id,name:null})
@@ -363,8 +364,15 @@
   // starts for an agent with no thread yet. A thread that fails to open
   // gives way to the next one.
   const leftThreads = new Set()
+  // The threads, drafts and agents just deleted. The workspace panel closes
+  // the file tabs their views opened.
+  let workspaceGone = $state.raw(null)
+  function closeOwnedTabs(ids) {
+    if (ids.length) workspaceGone = { ids: [...(workspaceGone?.ids ?? []), ...ids].slice(-64) }
+  }
   async function leaveThreads(threadIds, { ownsView = false } = {}) {
     const gone = threadIds.filter(Boolean)
+    closeOwnedTabs(gone)
     if (ownsView && currentThreadId && !gone.includes(currentThreadId)) gone.push(currentThreadId)
     for (const id of gone) leftThreads.add(id)
     forgetOpenThread(gone)
@@ -817,6 +825,7 @@
   let keptFolderDeletes = 0
   const noticeThreadView = () => `${currentThreadId ?? ''}|${freshThread}|`
   const noticeView = () => noticeThreadView() + (settingsOpen ? 'settings' : agentsOpen ? 'agents' : artifactsOpen ? 'artifacts' : projectsOpen ? `projects:${settingsProject ?? ''}` : fullPage ?? '')
+  const keptFolderNotice = (notice) => Object.values(KEPT_FOLDER).some(words => words.id === notice.id)
   function withdrawKeptFolders() {
     keptFolderViews = null
     for (const words of Object.values(KEPT_FOLDER)) composerNotices.withdraw(words.id)
@@ -852,6 +861,7 @@
     if (selectedAgent === agent.id) selectedAgent = null
     if (profileOnlyAgent === agent.id) profileOnlyAgent = null
     agentProfileOpen = false
+    closeOwnedTabs([agent.id])
     await Promise.all([refreshCreations(), refreshAgents()])
     await leaveThreads([...threadIds, ...chats], { ownsView })
     if (toAgents) await showAgents()
@@ -1226,7 +1236,12 @@
   // in the folder, Files and Terminal send no title, so they never rename it
   // under the run. A creation chat's tabs carry the chat's title.
   const threadInFlight = $derived(!!currentThreadId && (currentThreadId === runningThreadId || sidebarRuns.working.has(currentThreadId)))
-  const fileContext = $derived(folderAgent ? {agentId:folderAgent} : agentsOpen ? {catalog:'agents'} : artifactsOpen ? {catalog:'artifacts'} : projectsOpen ? (settingsProject && sidebarProjectById[settingsProject]?.kind === 'project' ? {projectId:settingsProject} : catalogProject ? {projectId:catalogProject} : {catalog:'projects'}) : selectedAgent ? {agentId:selectedAgent} : currentCreation?.kind === 'artifact' && currentCreation.resultId ? {artifactId:currentCreation.resultId} : {threadId:currentThreadId, projectId:projectCatalog.threads[currentThreadId] || null, threadTitle:threadInFlight ? undefined : currentThreadTitle, ...(agentChat || currentCreation ? {label:currentThreadTitle} : {})})
+  const fileContext = $derived(folderAgent ? {agentId:folderAgent} : agentsOpen ? {catalog:'agents'} : artifactsOpen ? {catalog:'artifacts'} : projectsOpen ? (settingsProject && sidebarProjectById[settingsProject]?.kind === 'project' ? {projectId:settingsProject} : catalogProject ? {projectId:catalogProject} : {catalog:'projects'}) : selectedAgent ? {agentId:selectedAgent} : currentCreation?.kind === 'artifact' && currentCreation.resultId ? {artifactId:currentCreation.resultId} : {threadId:currentThreadId, projectId:projectCatalog.threads[currentThreadId] || null, threadTitle:threadInFlight ? undefined : currentThreadTitle, ...(agentChat || currentCreation ? {label:currentThreadTitle} : {}), ...(unsentChat ? {unsent:true} : {})})
+  // A page such as Agents covers the thread and its composer.
+  const pageShown = $derived(agentsOpen || artifactsOpen || projectsOpen || !!fullPage)
+  // A chat with no sent message has no folder yet. Its Files view waits for
+  // the first message, so a chat left unsent leaves no folder behind.
+  const unsentChat = $derived(freshThread && !messages.length && !threadInFlight && !agentChat?.record && !agentChatPending)
   let expandedProjects = $state(new Set())
   let projectForm = $state(null)
   let revealProject = $state(null)
@@ -4216,7 +4231,7 @@
       </section>
     {/if}
     {#if workspaceMode() && desktopClientStatus}
-      <section class="workspace" inert={auth.name === 'signing-in' || !!deletingThreadId} data-testid={auth.name === 'local' ? 'local-mode' : undefined} class:macos={macOS} class:sidebar-collapsed={sidebarCollapsed} class:rail-open={railOccupant !== null} class:agents-open={agentsOpen || artifactsOpen || projectsOpen || !!fullPage} class:tools-open={!!browserPanel} class:agent-profile-open={launchSettled && agentProfileOpen && !!profileAgent && (!agentsOpen || profileOnPage)} class:record-maximized={(recordPanelOpen || filePanelOpen) && recordMaximized} class:artifact-resizing={artifactRailPointer !== undefined || workspacePanelPointer !== undefined} class:sidebar-resizing={sidebarPointer !== undefined} class:settings-open={settingsOpen} style:--workspace-panel-width={`${workspacePanelWidth}px`} style:--agent-panel-width={`${agentPanelWidth}px`} style:--artifact-rail-width={`${artifactRailWidth}px`} style:--sidebar-column={`${sidebarCollapsed ? 0 : sidebarWidth}px`} bind:this={workspace}>
+      <section class="workspace" inert={auth.name === 'signing-in' || !!deletingThreadId} data-testid={auth.name === 'local' ? 'local-mode' : undefined} class:macos={macOS} class:sidebar-collapsed={sidebarCollapsed} class:rail-open={railOccupant !== null} class:agents-open={pageShown} class:tools-open={!!browserPanel} class:agent-profile-open={launchSettled && agentProfileOpen && !!profileAgent && (!agentsOpen || profileOnPage)} class:record-maximized={(recordPanelOpen || filePanelOpen) && recordMaximized} class:artifact-resizing={artifactRailPointer !== undefined || workspacePanelPointer !== undefined} class:sidebar-resizing={sidebarPointer !== undefined} class:settings-open={settingsOpen} style:--workspace-panel-width={`${workspacePanelWidth}px`} style:--agent-panel-width={`${agentPanelWidth}px`} style:--artifact-rail-width={`${artifactRailWidth}px`} style:--sidebar-column={`${sidebarCollapsed ? 0 : sidebarWidth}px`} bind:this={workspace}>
         <header class="titlebar" data-tauri-drag-region use:overflowLabels={'.agent-chat-title span'}>
           <div class="titlebar-sidebar" data-tauri-drag-region>
             <button type="button" class="quiet side-toggle" aria-controls="sidebar" aria-expanded={!sidebarCollapsed} aria-keyshortcuts={sidebarKeyShortcut} aria-label={`${sidebarCollapsed ? 'Expand' : 'Collapse'} sidebar`} onclick={toggleSidebar}>
@@ -4656,7 +4671,7 @@
               {#if !pinned && hasContentBelow}<button type="button" class="latest" aria-label="Jump to latest" onclick={jumpToLatest}><LucideIcon name="arrow-down" variant="action" size={14} /></button>{/if}
             </div>
           {/if}
-          <ComposerNotice notices={composerNotices} />
+          {#if !pageShown}<ComposerNotice notices={composerNotices} />{/if}
           {#if pendingCreation}
             <div class="creation-chip" role="group" aria-label="Template" data-tooltip={`Goal: ${pendingCreation.goal}`}>
               <LucideIcon name={pendingCreation.kind === 'agent' ? 'bot' : 'file-code'} size={14} />
@@ -4822,7 +4837,7 @@
         onopen={(id) => showThread(id)} onopenrun={(run) => openRunThread(run).catch(error => { submitError = String(error) })} onopenfolder={openAgentFolder} />{/key}
     {/if}
   {#if browserPanel}<div class="artifact-divider workspace-divider" role="separator" aria-label="Workspace panel width" aria-orientation="vertical" aria-valuemin="340" aria-valuemax={workspacePanelMaximum} aria-valuenow={workspacePanelWidth} tabindex="0" onpointerdown={workspaceResize.pointerDown} onpointermove={workspaceResize.pointerMove} onpointerup={workspaceResize.pointerEnd} onpointercancel={workspaceResize.pointerEnd} onkeydown={workspaceResize.keydown}><span class="divider-grip" aria-hidden="true"><LucideIcon name="ellipsis-vertical" size={14} variant="action" /></span></div>{/if}
-  <WorkspacePanel ondirty={value => { workspaceDirty = value }} context={fileContext} {requestedArtifact} {tauri} onfolder={path => { workspaceDirectory = path; if (mention) updateMention() }} navigation={requestedNavigation} onnavigationhandled={request => { if (requestedNavigation === request) requestedNavigation = null }} selected={browserPanel} onselect={showBrowser} threadId={currentThreadId} projectId={selectedProject} requestedFile={requestedWorkspaceFile} suspended={!!deletingThreadId} />
+  <WorkspacePanel ondirty={value => { workspaceDirty = value }} context={fileContext} {requestedArtifact} {tauri} onfolder={path => { workspaceDirectory = path; if (mention) updateMention() }} navigation={requestedNavigation} onnavigationhandled={request => { if (requestedNavigation === request) requestedNavigation = null }} selected={browserPanel} onselect={showBrowser} threadId={currentThreadId} projectId={selectedProject} requestedFile={requestedWorkspaceFile} gone={workspaceGone} suspended={!!deletingThreadId} />
   {#if fullPage === 'usage'}<UsagePage {tauri} {runtimeList} {folderAccess} {inventory} onconnect={() => openSettings('providers')} />{/if}
   {#if fullPage === 'notifications'}<NotificationsPage {tauri} {runtimeList} agents={roster} {swarm} refreshKey={notificationsKey} read={readState.read} onmodels={() => openSettings('providers')} onread={() => { void refreshNeedsYou() }} onopen={(run) => openRunThread(run).catch(error => { submitError = String(error) })}
     onapprovalopen={(approval) => openRunThread(approval).catch(error => { submitError = String(error) })} />{/if}
@@ -4841,6 +4856,8 @@
       onopenrun={(run) => openRunThread(run).catch(error => { submitError = String(error) })} onrun={(run) => { startedRuns.add(run.id); activityRuns = applyRunUpdate(activityRuns, { runtimeId: run.runtimeId, run }) }} />
   {:else if projectsOpen}<ProjectCatalog bind:selected={catalogProject} projects={projectRows} remote={remoteProjectRows} threads={regularThreads.filter(thread => !threadOrganization[thread.threadId]?.archived)} assignments={projectCatalog.threads} busy={switchLocked || projectBusy} error={projectError} loading={moreThreads || loadingOlderThreads} oncreate={createCatalogProject} onrename={async (id, name) => { await tauri.invoke('project_rename', {projectId:id,name}); await refreshProjects() }} onopen={openProjectFolder} onthread={id => threadRowClick({}, id)} onnewthread={newProjectThread} />{/if}
   {#if artifactsOpen}<ArtifactCatalog items={artifactChats} isArchived={catalogArchived} onaction={catalogAction} onopen={openCreation} oncreate={(chosen)=>startCreation('artifact', chosen)}/>{/if}
+  <!-- A page covers the thread and its composer, so a delete's kept-folder notice shows on the page where the delete happened. -->
+  {#if pageShown}<div class="page-notice" data-page-notice><ComposerNotice notices={composerNotices} only={keptFolderNotice} /></div>{/if}
         <!-- Settings sits in the workspace grid: its section list takes the sidebar column. -->
         {#if settingsOpen}
           {#await loadSettings() then module}
@@ -5018,6 +5035,9 @@
   .workspace.record-maximized { grid-template-columns: minmax(0, var(--sidebar-column)) minmax(0, 1fr); grid-template-areas: "title title" "side rail"; }
   .workspace.record-maximized .thread-panel { display: none; }
   .workspace.agents-open .thread-panel { display: none; }
+  /* The page's notice sits over the page's foot, centered, where the composer's notice sits in a thread. */
+  .page-notice { grid-area: thread; align-self: end; justify-self: center; z-index: 6; max-width: calc(100% - 72px); margin-bottom: 24px; }
+  .page-notice :global([data-composer-notice]) { position: static; }
   .drop-affordance { position: absolute; z-index: 4; inset: 0; display: grid; place-content: center; gap: 5px; background: color-mix(in srgb, var(--paper) 92%, transparent); border: 1px dashed var(--muted); border-radius: var(--radius-panel); color: var(--ink); text-align: center; pointer-events: none; }
   .drop-affordance span { color: var(--muted); font: var(--text-12) var(--font-mono); }
   /* The row ends where its 24px controls end, so the paper under them is the rest of the band. */

@@ -11,7 +11,7 @@
   import { fileTreeRows } from './file-tree.js'
   let { context: workspaceContext = null, tauri, threadId = null, projectId = null, initialPath = '', onfolder, onfile, hidden = false, onwillchange = () => true, onchanged } = $props()
   let showHidden = $state(false)
-  const contextKey = JSON.stringify(workspaceContext ? Object.fromEntries(Object.entries(workspaceContext).filter(([key]) => key !== 'threadTitle' && key !== 'label')) : {threadId,projectId})
+  const contextKey = JSON.stringify(workspaceContext ? Object.fromEntries(Object.entries(workspaceContext).filter(([key]) => key !== 'threadTitle' && key !== 'label' && key !== 'unsent')) : {threadId,projectId})
   const storageKey = `muniment.files:${contextKey}`
   let folders = $state([])
   let listing = $state(null)
@@ -219,19 +219,23 @@
     onfile?.(entry)
   }
   // A thread's folder comes into being as its folders are read, so a hidden
-  // view reads them only once it shows. A chat the user never opens Files on
-  // leaves no folder before its first turn.
-  let started = false
-  $effect(() => { if (!hidden && !started) untrack(start) })
+  // view reads them only once it shows, and the view of a chat with no sent
+  // message reads them only after the first message. A chat left unsent
+  // leaves no folder.
+  let started = $state(false)
+  const unsent = $derived(!!workspaceContext?.unsent)
+  $effect(() => { if (!hidden && !started && !unsent) untrack(start) })
   function start() {
     started = true
     shownTitle = workspaceContext?.threadTitle
-    void tauri.invoke('workspace_folders', workspaceContext || { threadId, projectId }).then(result => {
+    const { unsent: _, ...context } = workspaceContext || { threadId, projectId }
+    void tauri.invoke('workspace_folders', context).then(result => {
       if (closed) return
       folders = result
       let saved
       try { saved = JSON.parse(localStorage.getItem(storageKey) || 'null') } catch { /* Ignore invalid saved state. */ }
-      const path = initialPath || saved?.path || result.at(-1)?.path
+      // A folder the person chose before the first message stays.
+      const path = listing?.path || initialPath || saved?.path || result.at(-1)?.path
       if (path) return load(path).then(async () => {
         if (!listing && result.at(-1)?.path !== path) await load(result.at(-1).path)
         for (const entry of saved?.expanded || []) {
@@ -266,7 +270,8 @@
       <label class="hidden-toggle"><input type="checkbox" bind:checked={showHidden} />Show hidden files</label>
       {#if status}<p role="status">{status}</p>{/if}
       {#if selection.size > 1}<p>{selection.size} selected</p>{/if}
-      {#if loading}<p role="status">Reading folder…</p>
+      {#if unsent && !started && !listing}<p>Files appear here after the first message.</p>
+      {:else if loading}<p role="status">Reading folder…</p>
       {:else if !entries.length}<p>{filter ? "No matching files." : "No files here yet. Create a file or choose a folder."}</p>
       {:else}<div role="tree" aria-label="Files and folders" aria-multiselectable="true" bind:this={tree}>{#each entries as entry (entry.path)}
         <button class="tree-row" disabled={busy} type="button" role="treeitem" data-path={entry.path} aria-label={entry.name} aria-level={entry.depth+1} aria-expanded={entry.directory ? expanded.has(entry.path) : undefined} aria-selected={selection.has(entry.path)} tabindex={tabStop === entry.path ? 0 : -1} style:padding-left={`${6+entry.depth*18}px`} oncontextmenu={event => context(event,entry)} onclick={event => select(entry,event)} onkeydown={event => keys(event,entry)}>

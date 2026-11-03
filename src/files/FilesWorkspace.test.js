@@ -156,3 +156,17 @@ it('reads a hidden view folders only once it shows, so a chat leaves no folder u
   expect(await screen.findByRole('treeitem',{name:'notes.md'})).toBeInTheDocument()
   expect(invoke.mock.calls.filter(([command]) => command === 'workspace_folders')).toEqual([['workspace_folders',{threadId:'t1',threadTitle:'Inbox brief',label:'Inbox brief'}]])
 })
+
+it('reads an unsent chat\'s folders only after its first message, so a chat left unsent leaves no folder', async () => {
+  const invoke = vi.fn(async (command,args) => command === 'workspace_folders'
+    ? [{label:'Muniment folder',path:'/home'},{label:'Thread workspace',path:'/home/sessions/Plan-0b3e9d21'}]
+    : {path:args.path,entries:[{name:'notes.md',path:`${args.path}/notes.md`,directory:false}]})
+  const view = render(FilesWorkspace,{props:{tauri:{invoke},context:{threadId:'t1',threadTitle:'New thread',unsent:true}}})
+  expect(screen.getByText('Files appear here after the first message.')).toBeInTheDocument()
+  await new Promise(resolve => setTimeout(resolve))
+  expect(invoke).not.toHaveBeenCalled()
+  await view.rerender({props:{context:{threadId:'t1',threadTitle:'Plan'}}})
+  expect(await screen.findByRole('treeitem',{name:'notes.md'})).toBeInTheDocument()
+  expect(screen.queryByText('Files appear here after the first message.')).toBeNull()
+  expect(invoke.mock.calls.filter(([command]) => command === 'workspace_folders')).toEqual([['workspace_folders',{threadId:'t1',threadTitle:'Plan'}]])
+})

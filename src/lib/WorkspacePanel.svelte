@@ -13,7 +13,7 @@
   import WorkspaceFile from '../files/WorkspaceFile.svelte'
   import FileIcon from '../files/FileIcon.svelte'
   import ConfirmDialog from './ConfirmDialog.svelte'
-  let { context = null, tauri, selected = null, onselect, threadId = null, projectId = null, suspended = false, requestedFile = null, requestedArtifact = null, navigation = null, onnavigationhandled, onfolder, ondirty } = $props()
+  let { context = null, tauri, selected = null, onselect, threadId = null, projectId = null, suspended = false, requestedFile = null, requestedArtifact = null, navigation = null, onnavigationhandled, onfolder, ondirty, gone = null } = $props()
   let tabs = $state([])
   let browserUrl = $state('')
   let artifactName = $state('')
@@ -23,7 +23,9 @@
   function tabName(tab) {
     if (tab.id === 'browser' && browserUrl) return browserLabel(browserUrl)
     // A context with a label, such as a creation chat, names its tabs with it.
-    if (tab.id === 'files') return context?.label || workspaceLabel(folderPaths[contextKey], context || {threadId}) || tab.name
+    // A thread's Files tab whose view has not read its folder yet, such as one
+    // behind an open file's tab, takes the thread's title.
+    if (tab.id === 'files') return context?.label || workspaceLabel(folderPaths[contextKey], context || {threadId}) || context?.threadTitle || tab.name
     if (tab.id === 'terminal') return context?.label || workspaceLabel(terminalPaths[contextKey], context || {threadId}) || tab.name
     if (tab.id === 'artifacts' && artifactName) return artifactName
     return tab.name
@@ -32,7 +34,7 @@
   $effect(() => { ondirty?.(dirtyFiles.size > 0) })
   let closing = $state(null)
   function markDirty(id, dirty) { const next = new Set(dirtyFiles); if (dirty) next.add(id); else next.delete(id); dirtyFiles = next }
-  const contextKey = $derived(JSON.stringify(context ? Object.fromEntries(Object.entries(context).filter(([key]) => key !== 'threadTitle' && key !== 'label')) : {threadId, projectId}))
+  const contextKey = $derived(JSON.stringify(context ? Object.fromEntries(Object.entries(context).filter(([key]) => key !== 'threadTitle' && key !== 'label' && key !== 'unsent')) : {threadId, projectId}))
   let terminalSessions = $state([])
   $effect(() => {
     const key = contextKey
@@ -61,11 +63,19 @@
     if (!['rename','trash'].includes(action)) return
     for (const tab of [...tabs]) if (paths.some(path => tab.file?.path === path || tab.file?.path.startsWith(path + '/') || tab.file?.path.startsWith(path + '\\'))) close(tab.id)
   }
+  // A file tab belongs to the thread, draft or agent whose view opened it.
+  // When `gone` names that owner, deleted with its folder, the tab closes,
+  // unless it holds unsaved edits.
+  const owner = () => context?.threadId || context?.agentId || context?.artifactId || (context ? null : threadId) || null
   function openFile(file) {
     const id = `file:${file.path}`
-    if (!tabs.some(t => t.id === id)) tabs = [...tabs,{id,name:file.name,file}]
+    if (!tabs.some(t => t.id === id)) tabs = [...tabs,{id,name:file.name,file,owner:owner()}]
     onselect(id)
   }
+  $effect(() => {
+    const ids = gone?.ids
+    if (ids?.length) untrack(() => { for (const tab of [...tabs]) if (tab.file && tab.owner && ids.includes(tab.owner) && !dirtyFiles.has(tab.id)) close(tab.id) })
+  })
   function close(id, discard = false) {
     if (dirtyFiles.has(id) && !discard) { closing = id; return }
     if (id === 'terminal') terminalSessions = []

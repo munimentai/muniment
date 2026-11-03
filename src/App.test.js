@@ -10043,7 +10043,9 @@ describe('dedicated creation chats', () => {
     expect(invoke.mock.calls.some(([name])=>name==='creation_save')).toBe(false)
   })
 
-  it('names an agent creation chat\'s Files tab after the chat, not its thread folder', async () => {
+  // An unsent chat has no folder yet, so its Files view waits for the first
+  // message and leaves none behind.
+  it('names an unsent agent creation chat\'s Files tab after the chat and reads no folder before the first message', async () => {
     const original=invoke.getMockImplementation()
     invoke.mockImplementation((command,payload)=>{
       if(command==='creation_list') return Promise.resolve([])
@@ -10061,8 +10063,11 @@ describe('dedicated creation chats', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Workspace tools' }))
     await fireEvent.click(screen.getByRole('menuitem', { name: 'Files', exact: true }))
     const tabs = await screen.findByRole('tablist', { name: 'Open workspace tabs' })
-    await waitFor(() => expect(within(tabs).getByRole('tab', { name: 'New agent' })).toHaveAttribute('title', '/home/sessions/New_thread-c3fa5c5a'))
+    expect(within(tabs).getByRole('tab', { name: 'New agent' })).toHaveAttribute('aria-selected', 'true')
     expect(within(tabs).queryByRole('tab', { name: 'New thread' })).toBeNull()
+    expect(await screen.findByText('Files appear here after the first message.')).toBeInTheDocument()
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(invoke.mock.calls.some(([command]) => command === 'workspace_folders')).toBe(false)
   })
 
   it('starts a new thread from its starter cards', async () => {
@@ -10386,11 +10391,13 @@ describe('agent chat', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     try {
       await fireEvent.click(within(await screen.findByRole('group', { name: 'Delete agent' })).getByRole('button', { name: 'Confirm delete' }))
-      const notice = await screen.findByTestId('agent-folder-kept-notice')
-      expect(notice).toHaveTextContent(`The agent's folder holds your files, so it stays. ${folder}`)
+      expect(await screen.findByTestId('agent-folder-kept-notice')).toHaveTextContent(`The agent's folder holds your files, so it stays. ${folder}`)
       // The path shows nowhere else, so the notice outlasts the composer notice timeout.
       await vi.advanceTimersByTimeAsync(30000)
-      expect(screen.getByTestId('agent-folder-kept-notice')).toBe(notice)
+      // The delete returns to the Agents page, and the notice shows there.
+      const notice = screen.getByTestId('agent-folder-kept-notice')
+      expect(notice).toHaveTextContent(`The agent's folder holds your files, so it stays. ${folder}`)
+      expect(notice.closest('[data-page-notice]')).not.toBeNull()
       await fireEvent.click(within(notice).getByRole('button', { name: /^Reveal in / }))
       await waitFor(() => expect(invoke).toHaveBeenCalledWith('workspace_reveal', { path: folder }))
       expect(screen.getByTestId('agent-folder-kept-notice')).toBeInTheDocument()
@@ -10834,7 +10841,7 @@ it('renames, archives, restores and deletes a pending artifact through its catal
 
 // A deleted draft's folder that holds the user's files stays, and the notice
 // names it as a thread delete does. Another page takes the notice away.
-it('names a deleted agent draft\'s kept folder in the thread folder notice until another page opens',async()=>{
+it('names a deleted agent draft\'s kept folder in a notice on the Agents page until another page opens',async()=>{
  const original=invoke.getMockImplementation()
  const folder='/Users/me/Documents/muniment/sessions/New_agent-00000099'
  let plans=[{threadId:'01900000-0000-7000-8000-000000000099',kind:'agent',goal:'Summarize my inbox',output:'A saved agent',resultId:null}]
@@ -10852,6 +10859,10 @@ it('names a deleted agent draft\'s kept folder in the thread folder notice until
  await fireEvent.click(screen.getByRole('button',{name:'Confirm delete'}))
  const notice=await screen.findByTestId('thread-folder-kept-notice')
  expect(notice).toHaveTextContent(`The thread's folder holds your files, so it stays. ${folder}`)
+ // The page covers the thread, so the notice shows on the page, once.
+ expect(notice.closest('[data-page-notice]')).not.toBeNull()
+ expect(notice.closest('.thread-panel')).toBeNull()
+ expect(screen.getAllByTestId('thread-folder-kept-notice')).toHaveLength(1)
  await fireEvent.click(within(notice).getByRole('button',{name:/^Reveal in /}))
  await waitFor(()=>expect(invoke).toHaveBeenCalledWith('workspace_reveal',{path:folder}))
  await fireEvent.click(screen.getByRole('button',{name:'Artifacts',exact:true}))

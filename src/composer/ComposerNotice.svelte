@@ -6,15 +6,17 @@
   // It carries one line, an optional progress bar, an optional action and a
   // close control. `placement: 'end'` sets it at the composer's right edge, over
   // the Voice button. A progress without `max` shows an indeterminate bar, and
-  // `alert` announces a failure at once.
+  // `alert` announces a failure at once. A view with `only` shows the notices
+  // it accepts, and the others wait covered for a view that shows them.
   import { onMount, tick } from 'svelte'
   import PopupClose from '../lib/PopupClose.svelte'
 
-  let { notices } = $props()
+  let { notices, only = null } = $props()
   let current = $state(null)
   let element = $state()
 
-  const covered = () => !!element?.parentElement?.querySelector('[data-composer-panel]:not([data-composer-notice])')
+  const accepted = (notice) => !only || only(notice)
+  const covered = () => (!!current && !accepted(current)) || !!element?.parentElement?.querySelector('[data-composer-panel]:not([data-composer-notice])')
 
   onMount(() => {
     const detach = notices.attach(covered)
@@ -40,7 +42,7 @@
   }
 </script>
 
-{#if current}
+{#if current && accepted(current)}
   {#key `${current.id}\n${current.cause}`}
     <section
       bind:this={element}
