@@ -375,6 +375,52 @@ fn a_first_turn_keeps_its_changes_after_the_thread_folder_takes_its_title() {
 }
 
 #[test]
+fn turns_list_a_created_then_edited_file_once_with_line_counts_across_a_folder_rename() {
+    const SECOND: &str = "019965a0-0000-7000-8000-0000000000b2";
+    let (root, sessions) = (TestDir::new("store"), TestDir::new("sessions"));
+    let store = store(&root, CheckpointLimits::default());
+    let untitled = TestDir(sessions.0.join("Untitled-thread"));
+    fs::create_dir_all(&untitled.0).unwrap();
+    capture(&store, &untitled, RUN, CheckpointKind::Before);
+    untitled.write("live36.txt", "one\n");
+    untitled.write("live36.txt", "one\ntwo\n");
+    let first_after = capture(&store, &untitled, RUN, CheckpointKind::After);
+    let titled = TestDir(sessions.0.join("Live36-thread"));
+    fs::rename(&untitled.0, &titled.0).unwrap();
+    store
+        .move_thread_folder(THREAD, Path::new(&first_after.folder), &titled.0)
+        .unwrap();
+    capture(&store, &titled, SECOND, CheckpointKind::Before);
+    titled.write("live36.txt", "one\nthree\n");
+    capture(&store, &titled, SECOND, CheckpointKind::After);
+
+    let turn = |run: &str| {
+        let record = |kind| store.record(THREAD, run, kind).unwrap().unwrap();
+        turn_changes(
+            &store,
+            &record(CheckpointKind::Before),
+            &record(CheckpointKind::After),
+        )
+    };
+    let (first, second) = (turn(RUN), turn(SECOND));
+    for changes in [&first, &second] {
+        assert!(changes.available, "{:?}", changes.unavailable);
+        assert_eq!(Path::new(&changes.folder), titled.0);
+        assert_eq!(changes.files.len(), 1);
+        assert_eq!(changes.files[0].path, "live36.txt");
+    }
+    assert_eq!(first.files[0].status, muniment_code_diff::DiffStatus::Added);
+    assert_eq!(
+        (first.files[0].additions, first.files[0].deletions),
+        (Some(2), Some(0))
+    );
+    assert_eq!(
+        (second.files[0].additions, second.files[0].deletions),
+        (Some(1), Some(1))
+    );
+}
+
+#[test]
 fn a_revert_refuses_a_file_that_changed_after_the_turn() {
     let (root, folder) = (TestDir::new("store"), TestDir::new("folder"));
     let store = store(&root, CheckpointLimits::default());

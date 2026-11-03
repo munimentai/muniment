@@ -230,6 +230,22 @@ pub fn remove(profile: &Path, thread: &str) -> Result<(), String> {
     }
 }
 
+/// Deletes a creation chat's record. A draft that saved no agent or artifact
+/// also loses its session folder when that holds only Muniment's own files,
+/// as a thread delete does. Answers the folder when it stays because it holds
+/// the user's files.
+pub fn delete(profile: &Path, thread: &str) -> Result<Option<PathBuf>, String> {
+    let draft = read(profile, thread)
+        .ok()
+        .flatten()
+        .is_some_and(|item| item.result_id.is_none());
+    remove(profile, thread)?;
+    if !draft {
+        return Ok(None);
+    }
+    crate::projects::remove_thread_folder(profile, thread)
+}
+
 pub fn artifact_folder(profile: &Path, id: &str) -> Result<PathBuf, String> {
     uuid::Uuid::parse_str(id).map_err(|_| "Invalid artifact.")?;
     let item: Artifact = serde_json::from_slice(
@@ -343,6 +359,66 @@ mod tests {
         assert!(list(&profile).unwrap().is_empty());
         remove(&profile, &thread).unwrap();
         assert!(remove(&profile, "../outside").is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn deleting_a_draft_removes_its_folder_unless_it_holds_the_users_files() {
+        let root = std::env::temp_dir().join(format!("creation-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let profile = root.join("profile");
+        let home = root.join("home");
+        crate::home::confirm_home(&profile, &home).unwrap();
+        let sessions = home.join("sessions");
+        let draft = |thread: &str| Creation {
+            thread_id: thread.into(),
+            kind: "agent".into(),
+            goal: "Summarize my inbox every morning".into(),
+            output: "A saved agent".into(),
+            result_id: None,
+            turns: Vec::new(),
+            title: None,
+        };
+        // The Files view of a draft chat names its folder after the chat.
+        let folder_of = |thread: &str| {
+            crate::workspace_names::resolve(&profile, &sessions, thread, Some("New agent"), None)
+                .unwrap()
+        };
+
+        let empty = uuid::Uuid::new_v4().to_string();
+        save(&profile, draft(&empty)).unwrap();
+        let folder = folder_of(&empty);
+        assert!(folder.ends_with(crate::workspace_names::basename("New agent", &empty)));
+        fs::write(folder.join(".DS_Store"), "").unwrap();
+        assert_eq!(delete(&profile, &empty).unwrap(), None);
+        assert!(!folder.exists());
+        assert!(read(&profile, &empty).unwrap().is_none());
+        assert_eq!(
+            crate::workspace_names::recorded(&profile, &sessions, &empty).unwrap(),
+            None
+        );
+
+        let kept = uuid::Uuid::new_v4().to_string();
+        save(&profile, draft(&kept)).unwrap();
+        let folder = folder_of(&kept);
+        fs::write(folder.join("notes.md"), "mine").unwrap();
+        assert_eq!(delete(&profile, &kept).unwrap(), Some(folder.clone()));
+        assert_eq!(fs::read_to_string(folder.join("notes.md")).unwrap(), "mine");
+        assert!(read(&profile, &kept).unwrap().is_none());
+
+        // A chat that saved its agent leaves its folder to the agent delete.
+        let saved = uuid::Uuid::new_v4().to_string();
+        save(
+            &profile,
+            Creation {
+                result_id: Some("agent-1".into()),
+                ..draft(&saved)
+            },
+        )
+        .unwrap();
+        let folder = folder_of(&saved);
+        assert_eq!(delete(&profile, &saved).unwrap(), None);
+        assert!(folder.exists());
+        assert!(read(&profile, &saved).unwrap().is_none());
         fs::remove_dir_all(root).unwrap();
     }
 }
