@@ -360,6 +360,7 @@ fn a_routine_run_that_replies_no_response_posts_nothing() {
         last_poll: None,
         next_fire_at: None,
         cut_short: false,
+        default_time: false,
     });
     let agent = agents::save(setup.profile(), agent).unwrap();
     setup.tick();

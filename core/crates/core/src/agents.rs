@@ -797,6 +797,16 @@ pub(crate) fn save_definition(
         if routine.enabled {
             routine.proposed = false;
         }
+        // A picked time stays marked while the routine stays the same
+        // proposal. The mark comes from the saved routine, never from the
+        // client, so accepting or editing a proposal clears it.
+        routine.default_time = routine.proposed
+            && previous
+                .into_iter()
+                .flat_map(|previous| &previous.routines)
+                .any(|saved| {
+                    saved.id == routine.id && saved.default_time && saved.trigger == routine.trigger
+                });
         // The runtime keeps fire times, results and polls; a save never sets them.
         routine.last_fired_at = None;
         routine.last_result = None;
@@ -3383,6 +3393,67 @@ mod tests {
         assert!(threads(&profile, &mut journal, "no-such-agent").is_err());
         drop(runs);
         drop(journal);
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    #[test]
+    fn a_picked_time_stays_marked_until_the_proposal_is_accepted_or_edited() {
+        let (root_dir, profile) = profile();
+        let saved = operation(
+            &profile,
+            "agent.save",
+            serde_json::json!({"agent": {"name": "Keeper",
+                "instructions": "On Fridays, back up the notes folder. Post a recap every Monday at 5pm."}}),
+        )
+        .unwrap();
+        let id = saved["agent"]["id"].as_str().unwrap().to_owned();
+        let proposals = operation(
+            &profile,
+            "agent.routine_proposals",
+            serde_json::json!({"agent_id": id}),
+        )
+        .unwrap()["proposals"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(proposals.len(), 2);
+        assert_eq!(proposals[0]["default_time"], true);
+        assert!(proposals[1].get("default_time").is_none());
+        // A save that keeps the proposal keeps the mark, and a client never sets it.
+        let mut agent = get(&profile, &id).unwrap();
+        agent.routines[1].default_time = true;
+        let agent = save(&profile, agent).unwrap();
+        assert!(agent.routines[0].default_time);
+        assert!(!agent.routines[1].default_time);
+        // An edit of the trigger clears it.
+        let mut edited = agent.routines[0].clone();
+        if let Trigger::Cron(cron) = &mut edited.trigger {
+            cron.expr = "0 18 * * 5".into();
+        }
+        assert!(!save_routine(&profile, &id, edited).unwrap().default_time);
+        // Accepting clears it too.
+        let agent = save(
+            &profile,
+            Agent {
+                instructions: "On Fridays, back up the notes folder. Be brief.".into(),
+                ..get(&profile, &id).unwrap()
+            },
+        )
+        .unwrap();
+        let picked = agent
+            .routines
+            .iter()
+            .find(|routine| routine.proposed && routine.default_time)
+            .unwrap()
+            .id
+            .clone();
+        let accepted = accept_proposal(&profile, &id, &picked).unwrap();
+        assert!(!accepted.default_time);
+        assert!(
+            !fs::read_to_string(folder(&profile, &id).unwrap().join("agent.md"))
+                .unwrap()
+                .contains("default_time")
+        );
         fs::remove_dir_all(root_dir).unwrap();
     }
 

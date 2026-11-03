@@ -106,7 +106,10 @@ pub fn propose(instructions: &str, tz: &str, tools: &[McpTool]) -> Vec<Routine> 
             }),
             None => Trigger::Cron(cron),
         };
-        let routine = proposal(&action, trigger, prompt);
+        let routine = Routine {
+            default_time: found.default_time,
+            ..proposal(&action, trigger, prompt)
+        };
         if agent_routines::validate_routine(&routine).is_ok()
             && !proposals.iter().any(|other| other.id == routine.id)
         {
@@ -244,12 +247,17 @@ pub fn propose_with_model(
             if fallback.is_empty() {
                 return proposals;
             }
+            // A model routine at a time the reader picked keeps its mark.
             proposals
                 .into_iter()
-                .filter(|proposal| {
-                    fallback
+                .filter_map(|proposal| {
+                    let found = fallback
                         .iter()
-                        .any(|found| same_named_time(&found.trigger, &proposal.trigger))
+                        .find(|found| same_named_time(&found.trigger, &proposal.trigger))?;
+                    Some(Routine {
+                        default_time: found.default_time,
+                        ..proposal
+                    })
                 })
                 .collect::<Vec<_>>()
         }) {
@@ -373,6 +381,7 @@ fn proposal(action: &str, trigger: Trigger, prompt: String) -> Routine {
         last_poll: None,
         next_fire_at: None,
         cut_short: false,
+        default_time: false,
     }
 }
 
@@ -486,6 +495,8 @@ fn sentences(text: &str) -> Vec<String> {
 struct Found {
     expr: String,
     phrases: Vec<String>,
+    /// The sentence names no time of day, so `expr` holds a picked one.
+    default_time: bool,
 }
 
 const WEEKDAYS: [(&str, u32); 7] = [
@@ -552,6 +563,7 @@ impl Parts {
     /// The cron expression and phrases, or `None` for a weekly schedule
     /// without a weekday or a period out of range.
     fn found(self) -> Option<Found> {
+        let default_time = matches!(self.period, Period::Days { .. }) && self.time.is_none();
         let expr = match self.period {
             Period::Minutes(count) => {
                 if !(5..60).contains(&count) {
@@ -587,6 +599,7 @@ impl Parts {
         Some(Found {
             expr,
             phrases: self.phrases,
+            default_time,
         })
     }
 }
@@ -1169,6 +1182,9 @@ mod tests {
             assert_eq!(proposals.len(), 1, "{text}: {proposals:?}");
             assert_eq!(cron_of(&proposals[0]), expr, "{text}");
             assert_eq!(proposals[0].name, name, "{text}");
+            // A sentence that names no time of day marks the time it got.
+            let picked = text.starts_with("On Fridays");
+            assert_eq!(proposals[0].default_time, picked, "{text}");
         }
         let failed = propose(
             "Hourly, check the build status and if it failed, open an issue.",
@@ -1402,6 +1418,22 @@ mod tests {
         let proposals = propose_with_model(instructions, TZ, &[], &friday);
         assert_eq!(proposals[0].name, "Weekly Live38 greeting");
         assert_eq!(cron_of(&proposals[0]), "0 16 * * 5");
+    }
+
+    #[test]
+    fn a_model_routine_at_a_picked_time_keeps_the_mark() {
+        use crate::memory_extract::{Answer, Model};
+        use std::sync::Arc;
+        let model: Model = Arc::new(|_: &str, _: &str| {
+            Ok(Answer {
+                text: r#"{"routines":[{"name":"Notes backup","cron":"0 9 * * 5","prompt":"Back up the notes folder.","mcp":null}]}"#.into(),
+                via: "router",
+            })
+        });
+        let proposals =
+            propose_with_model("On Fridays, back up the notes folder.", TZ, &[], &model);
+        assert_eq!(proposals[0].name, "Notes backup");
+        assert!(proposals[0].default_time);
     }
 
     #[test]
