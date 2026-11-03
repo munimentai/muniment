@@ -54,7 +54,8 @@ pub fn installed_tools() -> Vec<McpTool> {
 pub fn propose(instructions: &str, tz: &str, tools: &[McpTool]) -> Vec<Routine> {
     let mut proposals: Vec<Routine> = Vec::new();
     let mut weekly_without_day: Option<(String, Parts)> = None;
-    for sentence in sentences(instructions) {
+    let all = sentences(instructions);
+    for (index, sentence) in all.iter().cloned().enumerate() {
         let words = words(&sentence);
         let (sentence, parts) = match weekly_without_day.take() {
             Some((earlier, mut parts)) if named_weekday(&sentence, &words).is_some() => {
@@ -90,7 +91,17 @@ pub fn propose(instructions: &str, tz: &str, tools: &[McpTool]) -> Vec<Routine> 
         if agent_routines::validate_cron(&cron).is_err() {
             continue;
         }
-        let rest = remove(&sentence, &found.phrases);
+        let mut rest = remove(&sentence, &found.phrases);
+        // "Live46 Monday: every Monday at 9:00. Append a line to the log.":
+        // the sentence leaves a label, and the next sentence holds the work.
+        if rest.ends_with(':') {
+            if let Some(next) = all
+                .get(index + 1)
+                .filter(|next| schedule_parts(next).is_none())
+            {
+                rest = format!("{rest} {next}");
+            }
+        }
         let (action, condition, consequence) = split_condition(&rest);
         if action.is_empty() {
             continue;
@@ -401,11 +412,13 @@ fn capitalized(text: &str) -> String {
     text
 }
 
-/// A routine's display name: the text with a capital first letter, cut at
-/// a word boundary with an ellipsis when it runs past the name limit. The
-/// prompt keeps the full text.
+/// A routine's display name: the text's first sentence with a capital first
+/// letter and no trailing punctuation, cut at a word boundary with an
+/// ellipsis when it runs past the name limit. A short label before a colon,
+/// such as "Live46 Monday: append a line", is the name. Text with no name
+/// left after the trim keeps its words. The prompt keeps the full text.
 pub fn routine_name(text: &str) -> String {
-    let text = capitalized(text);
+    let text = capitalized(&name_text(text));
     if text.chars().count() <= MAX_NAME_CHARACTERS {
         return text;
     }
@@ -419,6 +432,39 @@ pub fn routine_name(text: &str) -> String {
     };
     let cut = cut.trim_end_matches(|c: char| c.is_whitespace() || ",;:-–—".contains(c));
     format!("{cut}…")
+}
+
+/// The words a name takes from `text`: up to the first sentence end, the
+/// label before a colon when it is at most three words, and no punctuation
+/// at either end.
+fn name_text(text: &str) -> String {
+    const ENDS: &str = ".,;:!?-–—";
+    let trim = |text: &str| -> String {
+        text.trim_matches(|c: char| c.is_whitespace() || ENDS.contains(c))
+            .to_owned()
+    };
+    let whole = trim(text);
+    let mut name = whole.as_str();
+    let mut chars = name.char_indices().peekable();
+    while let Some((at, c)) = chars.next() {
+        if matches!(c, '.' | '!' | '?' | ';')
+            && chars.peek().is_some_and(|(_, next)| next.is_whitespace())
+        {
+            name = &name[..at];
+            break;
+        }
+    }
+    if let Some((label, _)) = name.split_once(": ") {
+        if label.split_whitespace().count() <= 3 {
+            name = label;
+        }
+    }
+    let name = trim(name);
+    if name.is_empty() {
+        whole
+    } else {
+        name
+    }
 }
 
 /// Mends a routine whose name and prompt an older extraction cut at the
@@ -846,11 +892,20 @@ fn time_of_day(
             Some(split) => (&word[..split], Some(&word[split..])),
             None => (word.as_str(), None),
         };
-        let (suffix, end) = match (suffix, words.get(start + 1).map(|(next, _)| next.as_str())) {
+        let (suffix, mut end) = match (suffix, words.get(start + 1).map(|(next, _)| next.as_str()))
+        {
             (Some(suffix), _) => (Some(suffix), start),
             (None, Some(next @ ("am" | "pm" | "a" | "p"))) => (Some(next), start + 1),
             (None, _) => (None, start),
         };
+        // "9 a.m." reads as the words "9", "a" and "m".
+        if matches!(suffix, Some("a" | "p"))
+            && words.get(end + 1).is_some_and(|(next, range)| {
+                next == "m" && sentence[words[end].1.end..range.start] == *"."
+            })
+        {
+            end += 1;
+        }
         let (hour, minute) = match clock.split_once(':') {
             Some((hour, minute)) => (hour.parse::<u32>().ok(), minute.parse::<u32>().ok()),
             None => (clock.parse::<u32>().ok(), Some(0)),
@@ -915,9 +970,20 @@ fn remove(sentence: &str, phrases: &[String]) -> String {
             rest.replace_range(at..at + phrase.len(), " ");
         }
     }
-    let mut cleaned: Vec<&str> = rest.split_whitespace().collect();
-    // "of every month" leaves "of" behind when "every month" goes.
-    cleaned.retain(|word| !word.is_empty());
+    // "Friday: at 17:00., append" leaves "., " behind when "at 17:00" goes,
+    // and "Monday: at 9 AM, append" leaves "Monday:,".
+    let stray = |c: char| ".,:;".contains(c);
+    let cleaned: Vec<String> = rest
+        .split_whitespace()
+        .filter(|word| !word.chars().all(stray))
+        .map(|word| {
+            let head = word.trim_end_matches(stray);
+            match word[head.len()..].chars().next() {
+                Some(first) => format!("{head}{first}"),
+                None => head.to_owned(),
+            }
+        })
+        .collect();
     let text = cleaned.join(" ");
     let text = text
         .replace(" ,", ",")
@@ -1263,6 +1329,55 @@ mod tests {
         let at_end = format!("{} {}", "b".repeat(58), "tail of the sentence");
         assert_eq!(routine_name(&at_end), format!("B{}…", "b".repeat(57)));
         assert_eq!(routine_name("short name"), "Short name");
+    }
+
+    #[test]
+    fn a_name_drops_stray_punctuation_and_stops_at_the_sentence_end() {
+        let log = "Append one short line to live46-log.md in the project folder.";
+        for (text, name, prompt) in [
+            // The work sits in the next sentence.
+            (
+                "Live46 Monday: Every Monday at 9:00. Append one short line to live46-log.md in the project folder.",
+                "Live46 Monday",
+                format!("Live46 Monday: {log}"),
+            ),
+            (
+                "Live46 Friday: Every Friday at 17:00., Append one short line to live46-log.md in the project folder.",
+                "Live46 Friday",
+                format!("Live46 Friday: {log}"),
+            ),
+            (
+                "Live46 Monday: every Monday at 9 AM, append one short line to live46-log.md in the project folder.",
+                "Live46 Monday",
+                "Live46 Monday: append one short line to live46-log.md in the project folder.".to_owned(),
+            ),
+            (
+                "Live46 Friday: every Friday at 4 p.m., append one short line to live46-log.md in the project folder.",
+                "Live46 Friday",
+                "Live46 Friday: append one short line to live46-log.md in the project folder.".to_owned(),
+            ),
+            // With no label, the name is the action's words.
+            (
+                "Every Friday at 4pm: append one short line to live46-log.md in the project folder.",
+                "Append one short line to live46-log.md in the project folder",
+                log.to_owned(),
+            ),
+        ] {
+            let proposals = propose(text, TZ, &[]);
+            assert_eq!(proposals.len(), 1, "{text}: {proposals:?}");
+            assert_eq!(proposals[0].name, name, "{text}");
+            assert_eq!(proposals[0].prompt, prompt, "{text}");
+        }
+        assert_eq!(routine_name("Live46 Monday:"), "Live46 Monday");
+        assert_eq!(
+            routine_name("Live46 Friday: ., Append one short line to live46-log.md in"),
+            "Live46 Friday"
+        );
+        assert_eq!(
+            routine_name("Post the digest. Then rest."),
+            "Post the digest"
+        );
+        assert_eq!(routine_name("..."), "");
     }
 
     #[test]
