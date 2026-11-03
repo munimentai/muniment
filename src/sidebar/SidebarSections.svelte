@@ -30,7 +30,7 @@
   const kbd = (shortcut) => shortcut.replace('Meta+', '⌘ ').replace('Control+', 'Ctrl ')
   // The name field takes focus as it opens, after a menu or the palette that
   // opened it returns focus, with its text selected so typing replaces the name.
-  const focusField = (node) => { void tick().then(() => { node.focus(); node.select() }) }
+  const focusField = (node) => { void tick().then(() => { node.focus(); node.select(); node.closest('form')?.scrollIntoView?.({ block: 'nearest' }) }) }
   let projectList = $state()
   let marked = $state(null)
   $effect(() => {
@@ -66,13 +66,15 @@
         <!-- The tooltip sits below the button, over the name field, so it hides while the form is open. -->
         <button type="button" class="section-control" class:tipless={!!projectForm} aria-label="New project" data-tooltip="New project" disabled={disabled || projectBusy} onclick={onnewproject}><LucideIcon name="plus" size={14} /></button>
       </div>
-      {#if projectForm}{#key projectForm}
+      <!-- New project opens its field above the list. Rename opens it in place of the project's row, where the project sits. -->
+      {#snippet projectField()}{#key projectForm}
         <form class="row-rename" onsubmit={(event) => { event.preventDefault(); onsaveproject() }}>
           <input aria-label="Project name" placeholder="Project name" maxlength="80" spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" use:focusField bind:value={projectName} disabled={projectBusy} />
           <button type="submit" disabled={projectBusy || !projectName.trim()}>{projectForm === 'new' ? 'Create' : 'Save'}</button>
           <button type="button" disabled={projectBusy} onclick={oncancelproject}>Cancel</button>
         </form>
-      {/key}{/if}
+      {/key}{/snippet}
+      {#if projectForm && !sidebar.projects.some((project) => project.kind !== 'thread' && project.id === projectForm)}{@render projectField()}{/if}
       <ul class="thread-list" aria-label="Projects list" bind:this={projectList}>
         {#each sidebar.projects as project, index (project.id)}
           {#if index === freshAt}{@render fresh?.()}{/if}
@@ -80,6 +82,7 @@
             {@render row(project.threads[0])}
           {:else}
             <li class="project-entry" data-project-id={project.id}>
+              {#if projectForm === project.id}{@render projectField()}{:else}
               <ProjectItem current={marked === project.id} name={project.name} triggers={project.triggers} status={project.status} statusLabel={project.status_label} owner={owners[project.id] ?? null} expanded={expanded.has(project.id)} disabled={disabled || projectBusy}
                 ontoggle={() => ontoggleproject(project.id)} onnew={() => onnewthread(project.id)} onsettings={() => onsettings(project.id)}
                 onrename={project.kind === 'project' && !project.owner ? () => onrenameproject(project.id, project.name) : undefined}
@@ -87,6 +90,7 @@
                 ondelete={ondeleteproject && project.kind === 'project' && !project.owner ? () => ondeleteproject(project) : undefined}
                 ongroup={ongroup ? () => ongroup(project.id) : undefined}
                 {dragType} ondropthread={onmovethread && project.kind === 'project' && !project.owner ? (threadId) => onmovethread(threadId, project.id) : undefined} />
+              {/if}
               {#if expanded.has(project.id) && project.threads.length}<ul class="thread-list project-threads" aria-label={`${project.name} threads`}>{#each project.threads as item (item.thread_id)}{@render row(item)}{/each}</ul>{/if}
             </li>
           {/if}

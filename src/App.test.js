@@ -3384,16 +3384,25 @@ describe('thread name', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'New thread in Contracts' })).toBeEnabled())
     if (catalogOpen) await openSidebarPage('Projects')
     await fireEvent.contextMenu(screen.getByRole('button', { name: 'Project Contracts' }))
-    await fireEvent.click(screen.getByRole('menuitem', { name: 'Rename', exact: true }))
-    await waitFor(() => expect(screen.getByRole('textbox', { name: 'Project name' })).toHaveFocus())
-    // The old name is selected, so the first keystroke replaces it.
+    const opened = []
+    Element.prototype.scrollIntoView = function (options) { opened.push([this.className, options]) }
+    try {
+      await fireEvent.click(screen.getByRole('menuitem', { name: 'Rename', exact: true }))
+      await waitFor(() => expect(screen.getByRole('textbox', { name: 'Project name' })).toHaveFocus())
+      // The field opens in place of the project's row, however low it sits, and scrolls into view.
+      await waitFor(() => expect(opened).toContainEqual([expect.stringContaining('row-rename'), { block: 'nearest' }]))
+    } finally { delete Element.prototype.scrollIntoView }
     const renameField = screen.getByRole('textbox', { name: 'Project name' })
+    expect(renameField.closest('[data-project-id]')).toHaveAttribute('data-project-id', 'created')
+    expect(screen.queryByRole('button', { name: 'Project Contracts' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Project Research' })).toBeInTheDocument()
+    // The old name is selected, so the first keystroke replaces it.
     await waitFor(() => expect([renameField.selectionStart, renameField.selectionEnd]).toEqual([0, 'Contracts'.length]))
     // The New project tooltip sits over the name field, so it hides while the form is open.
     const newProject = () => document.querySelector('.section-control[aria-label="New project"]')
     expect(newProject()).toHaveClass('tipless')
     await fireEvent.input(screen.getByRole('textbox', { name: 'Project name' }), { target: { value: 'Agreements' } })
-    // The form sits above the list, so Save brings the renamed project back into view.
+    // Save brings the renamed project into view.
     const renamed = []
     Element.prototype.scrollIntoView = function (options) { renamed.push([this.getAttribute('aria-label'), options]) }
     try {
