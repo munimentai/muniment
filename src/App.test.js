@@ -9204,6 +9204,14 @@ describe('provenance line', () => {
       await fireEvent.click(screen.getByRole('button', { name: 'Routing details · 2 turns' }))
     }],
     ['Review changes', 'Review changes', async () => { await fireEvent.click(await screen.findByRole('button', { name: 'Review changes' })) }],
+    // A click on a file in the list leaves focus on the page body, as WebKit does.
+    ['Review changes with a file picked', 'Review changes', async () => {
+      await fireEvent.click(await screen.findByRole('button', { name: 'Review changes' }))
+      const file = await screen.findByRole('button', { name: /notes\.md/ })
+      await fireEvent.click(file)
+      document.activeElement?.blur()
+      return document.body
+    }],
     ['Rewind', 'Rewind to before this message', async () => { await fireEvent.click(await screen.findByRole('button', { name: 'Rewind to here' })) }],
   ])('closes only the %s dialog on Escape and leaves the side panel and the thread', async (_name, dialogName, openDialog) => {
     HTMLDialogElement.prototype.showModal = function () { this.open = true }
@@ -9226,11 +9234,13 @@ describe('provenance line', () => {
     const mac = navigator.platform.startsWith('Mac')
     await fireEvent.keyDown(document, { key: 'j', metaKey: mac, ctrlKey: !mac })
     await waitFor(() => expect(toggle).toHaveAttribute('aria-expanded', 'true'))
-    await openDialog()
+    let target = await openDialog()
     const dialog = await screen.findByRole('dialog', { name: dialogName })
-    const inside = dialog.querySelector('button:not(:disabled)')
-    inside.focus()
-    await fireEvent.keyDown(inside, { key: 'Escape' })
+    if (!target) {
+      target = dialog.querySelector('button:not(:disabled)')
+      target.focus()
+    }
+    await fireEvent.keyDown(target, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('dialog', { name: dialogName })).not.toBeInTheDocument())
     expect(toggle).toHaveAttribute('aria-expanded', 'true')
     expect(screen.getByText('Edited the notes.')).toBeInTheDocument()
