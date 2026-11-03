@@ -51,9 +51,10 @@ impl PiLaunchBoundaries for Boundary {
     fn prepare_pi_settings(&self, _: PiArtifactDescriptor, _: &Path) -> Result<(), PiLaunchError> {
         Ok(())
     }
-    fn name_thread_folder(&self, title: &str) {
+    fn name_thread_folder(&self, title: &str) -> Option<PathBuf> {
         NAMED.lock().unwrap().push(title.to_owned());
         STEPS.lock().unwrap().push("named".into());
+        None
     }
     fn run_ended(&self, run_id: &str) {
         STEPS.lock().unwrap().push(format!("ended {run_id}"));

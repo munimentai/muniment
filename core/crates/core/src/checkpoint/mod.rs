@@ -22,7 +22,9 @@ pub use restore::{
     plan_restore, restore, restore_conversation, FailedPath, RestoreError, RestorePlan,
     RestoreReport, Unrestorable, UnrestorableReason,
 };
-pub use run::{excluded_folders, protected_folders, shared, RunCheckpoints, CHECKPOINT_FOLDER};
+pub use run::{
+    excluded_folders, follow_folder, protected_folders, shared, RunCheckpoints, CHECKPOINT_FOLDER,
+};
 pub use turn::{
     revert_file, revert_hunk, turn_changes, RevertError, RevertOutcome, TurnChanges, TurnFile,
     TurnFileState,
@@ -444,6 +446,39 @@ impl CheckpointStore {
         }
         records.sort_by(|a, b| (a.created_at_ms, &a.id).cmp(&(b.created_at_ms, &b.id)));
         Ok(records)
+    }
+
+    /// Points a thread's records of folder `from` at the folder's new path
+    /// `to`, so its turns and rewinds follow a renamed folder. Answers how
+    /// many records moved.
+    pub fn move_thread_folder(
+        &self,
+        thread_id: &str,
+        from: &Path,
+        to: &Path,
+    ) -> Result<usize, CheckpointError> {
+        let _guard = self.lock();
+        let to = fs::canonicalize(to)?.to_string_lossy().into_owned();
+        let from = from.to_string_lossy().into_owned();
+        if from == to {
+            return Ok(0);
+        }
+        let mut moved = 0;
+        for mut record in self.thread_records(thread_id)? {
+            if record.folder == from {
+                record.folder.clone_from(&to);
+                self.write_record(&record)?;
+                moved += 1;
+            }
+        }
+        let mut recent = self
+            .recent
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(files) = recent.remove(&from) {
+            recent.insert(to, files);
+        }
+        Ok(moved)
     }
 
     /// Removes the records of a thread, as when the thread is deleted.

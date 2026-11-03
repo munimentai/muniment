@@ -952,7 +952,7 @@ fn coordinate_work(
     let (startup_timeout, working_directory, opened, launch) = opening;
     // A reply records its folder and conversation before its prompt goes,
     // and its folder again when it ends, so a rewind can return to them.
-    let _checkpoints = if compaction.is_some() {
+    let checkpoints = if compaction.is_some() {
         None
     } else if resume.is_some() {
         crate::checkpoint::RunCheckpoints::resume(&app, &run_id, working_directory.as_deref())
@@ -1973,12 +1973,21 @@ fn coordinate_work(
     }) {
         engine.park(runtime, launch);
     }
+    // The reply records its folder as it ended before the folder takes a
+    // new name, and the thread's records then follow the folder.
+    let folder_before_name = working_directory
+        .as_deref()
+        .and_then(|folder| std::fs::canonicalize(folder).ok());
+    drop(checkpoints);
     // The thread's folder takes the thread's title once the run ends, never
     // while Pi runs a turn in it. The next launch points the stored session
     // at the renamed folder, and an idle process follows it there.
     if compaction.is_none() {
         if let Some(title) = run_thread_title(&journal, &run_id) {
-            app.name_thread_folder(&title);
+            if let (Some(named), Some(from)) = (app.name_thread_folder(&title), folder_before_name)
+            {
+                crate::checkpoint::follow_folder(&app, &from, &named);
+            }
         }
     }
     if compaction.is_none()

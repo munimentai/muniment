@@ -51,6 +51,18 @@ pub fn excluded_folders(app: &impl PiLaunchBoundaries, folder: &Path) -> Vec<Pat
         .collect()
 }
 
+/// Points the thread's records at its folder's new path after the host
+/// renamed the folder from `from`, the folder's canonical path before the
+/// rename.
+pub fn follow_folder(app: &impl PiLaunchBoundaries, from: &Path, to: &Path) {
+    let (Some(store), Some(thread_id)) = (app.checkpoint_store(), app.extension_thread_id()) else {
+        return;
+    };
+    if let Err(error) = store.move_thread_folder(&thread_id, from, to) {
+        eprintln!("muniment-runtime: checkpoint_folder move_failed error={error}");
+    }
+}
+
 /// Records a run's folder as the run ends, once the run recorded it as it
 /// started.
 pub struct RunCheckpoints {

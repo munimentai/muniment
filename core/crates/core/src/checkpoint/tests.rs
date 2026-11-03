@@ -334,6 +334,47 @@ fn a_turn_lists_its_changes_and_reverts_one_hunk_at_a_time() {
 }
 
 #[test]
+fn a_first_turn_keeps_its_changes_after_the_thread_folder_takes_its_title() {
+    let (root, sessions) = (TestDir::new("store"), TestDir::new("sessions"));
+    let store = store(&root, CheckpointLimits::default());
+    let untitled = TestDir(sessions.0.join("Untitled-thread"));
+    fs::create_dir_all(&untitled.0).unwrap();
+    capture(&store, &untitled, RUN, CheckpointKind::Before);
+    untitled.write("made.txt", "new\n");
+    let after = capture(&store, &untitled, RUN, CheckpointKind::After);
+    let titled = sessions.0.join("Bubbles in water");
+    fs::rename(&untitled.0, &titled).unwrap();
+    assert_eq!(
+        store
+            .move_thread_folder(THREAD, Path::new(&after.folder), &titled)
+            .unwrap(),
+        2
+    );
+
+    let before = store
+        .record(THREAD, RUN, CheckpointKind::Before)
+        .unwrap()
+        .unwrap();
+    let after = store
+        .record(THREAD, RUN, CheckpointKind::After)
+        .unwrap()
+        .unwrap();
+    assert_eq!(Path::new(&after.folder), titled);
+    let changes = turn_changes(&store, &before, &after);
+    assert!(changes.available, "{:?}", changes.unavailable);
+    assert_eq!(changes.files.len(), 1);
+    assert_eq!(changes.files[0].path, "made.txt");
+    assert_eq!(
+        changes.files[0].status,
+        muniment_code_diff::DiffStatus::Added
+    );
+    assert_eq!(changes.files[0].state, TurnFileState::Applied);
+    let guard = store.lock();
+    revert_file(&store, &guard, &before, &after, "made.txt").unwrap();
+    assert!(!titled.join("made.txt").exists());
+}
+
+#[test]
 fn a_revert_refuses_a_file_that_changed_after_the_turn() {
     let (root, folder) = (TestDir::new("store"), TestDir::new("folder"));
     let store = store(&root, CheckpointLimits::default());
