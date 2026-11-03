@@ -14,11 +14,12 @@ pub fn creation_save(webview: tauri::Webview, creation: Creation) -> Result<Crea
 }
 
 /// A draft's folder lives in Home, so the delete runs off the main thread.
-/// Answers the draft's folder when it stays because it holds the user's files.
+/// Answers the draft's folder when it stays because it holds the user's
+/// files, and whether the draft's thread stays.
 #[tauri::command]
-pub async fn creation_delete(webview: tauri::Webview, thread_id: String) -> Result<Option<std::path::PathBuf>, String> {
+pub async fn creation_delete(webview: tauri::Webview, thread_id: String) -> Result<creations::DraftDeleted, String> {
     crate::workspace_tools::shell(&webview)?;
-    tauri::async_runtime::spawn_blocking(move || creations::delete(&profile()?, &thread_id))
+    tauri::async_runtime::spawn_blocking(move || creations::delete_draft(&profile()?, &thread_id))
         .await
         .map_err(|e| e.to_string())?
 }

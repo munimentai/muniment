@@ -23,6 +23,11 @@
   let importOpen = $state(false)
   // A draft card reads what its newest draft does, else what the person
   // asked for, else how to start it.
+  // A draft with no turns is a plan a reply kept in a thread that holds the
+  // user's messages, so its delete keeps that thread.
+  function draftDeleteNote(plan) {
+    return plan?.turns?.length ? 'Its draft chat is deleted. Files you added stay.' : 'The draft goes. Its thread and messages stay.'
+  }
   function draftDescription(plan) {
     const turns = plan?.turns ?? []
     const words = turns.findLast((turn) => turn?.reply?.draft?.instructions?.trim())?.reply.draft.instructions ?? turns.findLast((turn) => turn?.message?.trim())?.message ?? ''
@@ -86,7 +91,7 @@
       {/each}
       {#each pending.filter(plan=>isArchived('creation',plan)===archived) as plan (plan.threadId)}
         <CatalogCard onclick={()=>onopen(plan)}>
-          {#snippet menu()}<CatalogActions name={creationTitle(plan, threadSummaries)} {archived} deleteNote="Its draft chat is deleted. Files you added stay." onaction={(action,name)=>onaction('creation',plan,action,name)}/>{/snippet}
+          {#snippet menu()}<CatalogActions name={creationTitle(plan, threadSummaries)} {archived} deleteNote={draftDeleteNote(plan)} onaction={(action,name)=>onaction('creation',plan,action,name)}/>{/snippet}
           <LucideIcon name="bot" size={32}/><strong>{creationTitle(plan, threadSummaries)}</strong><span>{draftDescription(plan)}</span><small>Continue creation</small>
         </CatalogCard>
       {/each}

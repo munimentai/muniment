@@ -10913,7 +10913,7 @@ it('names a deleted agent draft\'s kept folder in a notice on the Agents page un
  let plans=[{threadId:'01900000-0000-7000-8000-000000000099',kind:'agent',goal:'Summarize my inbox',output:'A saved agent',resultId:null}]
  invoke.mockImplementation((command,payload)=>{
   if(command==='creation_list') return Promise.resolve(plans)
-  if(command==='creation_delete') {plans=[];return Promise.resolve(folder)}
+  if(command==='creation_delete') {plans=[];return Promise.resolve({folder_kept:folder,thread_kept:false})}
   if(command==='workspace_reveal') return Promise.resolve()
   return original(command,payload)
  })
@@ -10934,6 +10934,54 @@ it('names a deleted agent draft\'s kept folder in a notice on the Agents page un
  await fireEvent.click(screen.getByRole('button',{name:'Artifacts',exact:true}))
  await screen.findByRole('region',{name:'Artifacts'})
  await waitFor(()=>expect(screen.queryByTestId('thread-folder-kept-notice')).not.toBeInTheDocument())
+})
+
+// A draft a reply kept in a thread that holds the user's messages names no
+// agent and has no turns. Its delete removes the draft only: the prompt and
+// the notice say the thread stays, and the thread stays where it was.
+it('keeps a deleted agent draft\'s thread in place when core keeps it',async()=>{
+ const original=invoke.getMockImplementation()
+ const threadId='01900000-0000-7000-8000-000000000098'
+ let plans=[{threadId,kind:'agent',goal:'Report the project status',output:'A saved agent',resultId:null,title:'Muniment Project Status'}]
+ invoke.mockImplementation((command,payload)=>{
+  if(command==='creation_list') return Promise.resolve(plans)
+  if(command==='creation_delete') {plans=[];return Promise.resolve({folder_kept:null,thread_kept:true})}
+  return original(command,payload)
+ })
+ render(App)
+ await fireEvent.click(await screen.findByRole('button',{name:'Agents',exact:true}))
+ const catalog=await screen.findByRole('region',{name:'Agents',exact:true})
+ await fireEvent.click(await within(catalog).findByRole('button',{name:'Actions for Muniment Project Status'}))
+ await fireEvent.click(screen.getByRole('menuitem',{name:'Delete'}))
+ expect(screen.getByText('The draft goes. Its thread and messages stay.')).toBeInTheDocument()
+ await fireEvent.click(screen.getByRole('button',{name:'Confirm delete'}))
+ await waitFor(()=>expect(invoke).toHaveBeenCalledWith('creation_delete',{threadId}))
+ const notice=await screen.findByTestId('draft-thread-kept-notice')
+ expect(notice).toHaveTextContent('The draft goes. Its thread and messages stay.')
+ const organization=JSON.parse(localStorage.getItem('muniment.thread-organization') || '{}')
+ expect(organization[threadId]?.archived).not.toBe(true)
+ await waitFor(()=>expect(within(catalog).queryByRole('button',{name:'Actions for Muniment Project Status'})).not.toBeInTheDocument())
+})
+
+// A draft chat's delete keeps the prompt it had and moves its thread to Archived.
+it('archives a deleted agent draft chat\'s thread when core does not keep it',async()=>{
+ const original=invoke.getMockImplementation()
+ const threadId='01900000-0000-7000-8000-000000000097'
+ let plans=[{threadId,kind:'agent',goal:'Summarize my inbox',output:'A saved agent',resultId:null,title:'Inbox summary',turns:[{message:'Summarize my inbox',at:'2026-08-06T12:00:00Z',reply:{}}]}]
+ invoke.mockImplementation((command,payload)=>{
+  if(command==='creation_list') return Promise.resolve(plans)
+  if(command==='creation_delete') {plans=[];return Promise.resolve({folder_kept:null,thread_kept:false})}
+  return original(command,payload)
+ })
+ render(App)
+ await fireEvent.click(await screen.findByRole('button',{name:'Agents',exact:true}))
+ const catalog=await screen.findByRole('region',{name:'Agents',exact:true})
+ await fireEvent.click(await within(catalog).findByRole('button',{name:'Actions for Inbox summary'}))
+ await fireEvent.click(screen.getByRole('menuitem',{name:'Delete'}))
+ expect(screen.getByText('Its draft chat is deleted. Files you added stay.')).toBeInTheDocument()
+ await fireEvent.click(screen.getByRole('button',{name:'Confirm delete'}))
+ await waitFor(()=>expect(JSON.parse(localStorage.getItem('muniment.thread-organization') || '{}')[threadId]?.archived).toBe(true))
+ expect(screen.queryByTestId('draft-thread-kept-notice')).not.toBeInTheDocument()
 })
 
 it.each(['Browser','Files'])('resizes the shared %s workspace panel with keyboard controls',async(name)=>{

@@ -339,10 +339,17 @@
       const settle = keptFolderDelete()
       try {
         const threadIds = kind === 'agent' ? Object.keys(agentThreadMap).filter(id=>agentThreadMap[id]===item.id) : [item.threadId].filter(Boolean)
-        const next = {...threadOrganization}
-        for (const id of [...threadIds,...plans.map(plan=>plan.threadId)]) next[id] = {...next[id],archived:true}
-        localStorage.setItem(THREAD_ORGANIZATION_KEY,JSON.stringify(next))
-        threadOrganization = next
+        const archive = (ids) => {
+          const next = {...threadOrganization}
+          for (const id of ids) next[id] = {...next[id],archived:true}
+          localStorage.setItem(THREAD_ORGANIZATION_KEY,JSON.stringify(next))
+          threadOrganization = next
+        }
+        // A draft's delete can keep its thread, which held the user's
+        // messages before the draft, so a draft's threads move only once
+        // core answers.
+        const draft = kind === 'creation'
+        if (!draft) archive([...threadIds,...plans.map(plan=>plan.threadId)])
         const ownsView = kind === 'agent' && (selectedAgent === item.id || threadIds.includes(currentThreadId))
         if (kind === 'agent') {
           showKeptFolder(item, await agentRequest(tauri, item.runtimeId, 'agent.delete', { id: item.id, remove_memory: false }))
@@ -352,9 +359,17 @@
           await tauri.invoke('artifact_edit',{id:item.resultId || item.id,name:null})
           if (requestedArtifact === (item.resultId || item.id)) { requestedArtifact=null;browserPanel=null }
         }
-        for (const plan of plans) showKeptFolder(item, { folder_kept: await tauri.invoke('creation_delete',{threadId:plan.threadId}) }, 'thread')
+        const kept = new Set()
+        for (const plan of plans) {
+          const answer = await tauri.invoke('creation_delete',{threadId:plan.threadId})
+          showKeptFolder(item, answer, 'thread')
+          if (answer?.thread_kept) kept.add(plan.threadId)
+        }
+        const gone = [...threadIds,...plans.map(plan=>plan.threadId)].filter(id => !kept.has(id))
+        if (draft) archive(gone)
+        if (kept.size) composerNotices.show({ id: 'draft-thread-kept', cause: ++draftThreadsKept, text: DRAFT_THREAD_KEPT, testid: 'draft-thread-kept-notice', dismissLabel: 'Dismiss draft notice' })
         await Promise.all([refreshCreations(),refreshAgents()])
-        await leaveThreads([...threadIds,...plans.map(plan=>plan.threadId)], { ownsView })
+        await leaveThreads(gone, { ownsView })
       } finally { settle() }
     }
   }
@@ -804,6 +819,9 @@
   let keptFolders = 0
   // A deleted thread's folder that holds the user's files stays the same
   // way, with the same notice under its own name.
+  // A draft's delete that keeps its thread says so, as its prompt does.
+  let draftThreadsKept = 0
+  const DRAFT_THREAD_KEPT = 'The draft goes. Its thread and messages stay.'
   const KEPT_FOLDER = {
     agent: { id: 'agent-folder-kept', text: "The agent's folder holds your files, so it stays.", label: 'Agent folder kept', testid: 'agent-folder-kept-notice', dismissLabel: 'Dismiss agent folder notice' },
     thread: { id: 'thread-folder-kept', text: "The thread's folder holds your files, so it stays.", label: 'Thread folder kept', testid: 'thread-folder-kept-notice', dismissLabel: 'Dismiss thread folder notice' },
@@ -4882,7 +4900,7 @@
   {:else if projectsOpen}<ProjectCatalog bind:selected={catalogProject} projects={projectRows} remote={remoteProjectRows} threads={regularThreads.filter(thread => !threadOrganization[thread.threadId]?.archived)} assignments={projectCatalog.threads} busy={switchLocked || projectBusy} error={projectError} loading={moreThreads || loadingOlderThreads} oncreate={createCatalogProject} onrename={async (id, name) => { await tauri.invoke('project_rename', {projectId:id,name}); await refreshProjects() }} onopen={openProjectFolder} onthread={id => threadRowClick({}, id)} onnewthread={newProjectThread} />{/if}
   {#if artifactsOpen}<ArtifactCatalog items={artifactChats} isArchived={catalogArchived} onaction={catalogAction} onopen={openCreation} oncreate={(chosen)=>startCreation('artifact', chosen)}/>{/if}
   <!-- A page covers the thread and its composer, so a delete's kept-folder notice shows on the page where the delete happened. -->
-  {#if pageShown}<div class="page-notice" data-page-notice><ComposerNotice notices={composerNotices} only={keptFolderNotice} /></div>{/if}
+  {#if pageShown}<div class="page-notice" data-page-notice><ComposerNotice notices={composerNotices} only={(notice) => keptFolderNotice(notice) || notice.id === 'draft-thread-kept'} /></div>{/if}
         <!-- Settings sits in the workspace grid: its section list takes the sidebar column. -->
         {#if settingsOpen}
           {#await loadSettings() then module}
