@@ -1301,3 +1301,114 @@ fn an_unsaved_agent_draft_in_a_thread_with_runs_stays_at_start_and_its_delete_ke
     drop(journal);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn a_deleted_threads_checkpoint_records_go_and_the_start_pass_removes_the_ones_left() {
+    use muniment_core::checkpoint::{CaptureRequest, CheckpointKind};
+    use muniment_core::journal::thread_mutation::remove_deleted_thread_checkpoints;
+    let root = muniment_core::state_root::test_root()
+        .join(format!("muniment-thread-checkpoints-{}", Uuid::new_v4()));
+    let profile = root.join("profile");
+    std::fs::create_dir_all(&profile).unwrap();
+    muniment_core::home::confirm_home(&profile, &root.join("muniment")).unwrap();
+    let mut journal = RunJournal::open(profile.join("runs.sqlite3")).unwrap();
+    // A profile with no checkpoints gains no store folder from a delete or the start pass.
+    let bare = journal
+        .append_new_run("workspace-a", &run_started(Some("owner")))
+        .unwrap();
+    delete_thread_with_creation_now(
+        &mut journal,
+        &profile,
+        Some("owner"),
+        &bare,
+        &provenance(Some("owner")),
+    )
+    .unwrap();
+    assert_eq!(
+        remove_deleted_thread_checkpoints(&mut journal, &profile).unwrap(),
+        0
+    );
+    assert!(!profile.join("checkpoints").exists());
+
+    let store = muniment_core::checkpoint::shared(&profile).unwrap();
+    let records = profile.join("checkpoints/records");
+    // A thread whose run recorded a folder holding `files`.
+    let thread_with = |journal: &mut RunJournal, name: &str, files: &[(&str, &str)]| {
+        let run = run_started(Some("owner"));
+        let thread = journal.append_new_run("workspace-a", &run).unwrap();
+        let folder = root.join(name);
+        std::fs::create_dir_all(&folder).unwrap();
+        for (file, text) in files {
+            std::fs::write(folder.join(file), text).unwrap();
+        }
+        let checkpoint = store
+            .capture(&CaptureRequest {
+                thread_id: &thread,
+                run_id: &run.run_id,
+                kind: CheckpointKind::Before,
+                folder: &folder,
+                excluded: &[],
+                conversation: None,
+            })
+            .unwrap();
+        assert!(records.join(&thread).is_dir());
+        (thread, checkpoint)
+    };
+    let (deleted, _) = thread_with(
+        &mut journal,
+        "deleted",
+        &[("a.txt", "only the deleted thread\n")],
+    );
+    let (live, live_record) =
+        thread_with(&mut journal, "live", &[("shared.txt", "both threads\n")]);
+    let (elsewhere, elsewhere_record) = thread_with(
+        &mut journal,
+        "elsewhere",
+        &[
+            ("shared.txt", "both threads\n"),
+            ("b.txt", "only the other path\n"),
+        ],
+    );
+
+    delete_thread_with_creation_now(
+        &mut journal,
+        &profile,
+        Some("owner"),
+        &deleted,
+        &provenance(Some("owner")),
+    )
+    .unwrap();
+    assert!(!records.join(&deleted).exists());
+    assert!(records.join(&live).is_dir());
+    assert!(records.join(&elsewhere).is_dir());
+
+    // A delete on another path leaves its records, and the start pass
+    // removes them and the objects only they named.
+    append_thread_delete_now(
+        &mut journal,
+        Some("owner"),
+        &elsewhere,
+        &provenance(Some("owner")),
+    )
+    .unwrap();
+    assert!(records.join(&elsewhere).is_dir());
+    assert_eq!(
+        remove_deleted_thread_checkpoints(&mut journal, &profile).unwrap(),
+        1
+    );
+    assert!(!records.join(&elsewhere).exists());
+    assert_eq!(
+        store.thread_records(&live).unwrap(),
+        vec![live_record.clone()]
+    );
+    let shared = &live_record.files["shared.txt"].hash;
+    assert_eq!(store.read_object(shared).unwrap(), b"both threads\n");
+    let only_elsewhere = &elsewhere_record.files["b.txt"].hash;
+    assert!(store.read_object(only_elsewhere).is_err());
+    assert_eq!(
+        remove_deleted_thread_checkpoints(&mut journal, &profile).unwrap(),
+        0
+    );
+    drop(journal);
+    std::fs::remove_dir_all(root).unwrap();
+}

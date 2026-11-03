@@ -28,6 +28,15 @@ pub fn shared(profile: &Path) -> Option<Arc<CheckpointStore>> {
     Some(store)
 }
 
+/// The profile's store when the profile has one. Opens none, so a profile
+/// with no checkpoints gains no folder.
+pub fn existing(profile: &Path) -> Option<Arc<CheckpointStore>> {
+    if !profile.join(CHECKPOINT_FOLDER).join("records").is_dir() {
+        return None;
+    }
+    shared(profile)
+}
+
 /// The runtime's own folders, which no record holds: its profile and its
 /// state.
 pub fn protected_folders(profile: Option<&Path>) -> Vec<PathBuf> {

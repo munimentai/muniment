@@ -130,7 +130,7 @@ pub fn delete_thread_with_creation_now(
 }
 
 /// Removes what a deleted thread leaves outside the journal: its Pi
-/// transcripts, its session folder when that holds only Muniment's files,
+/// transcripts, its checkpoint records, its session folder when that holds only Muniment's files,
 /// and its place in the agent state. Answers the folder when it stays
 /// because it holds the user's files.
 fn tidy_deleted_thread(
@@ -149,6 +149,15 @@ fn tidy_deleted_thread(
         Err(error) => crate::runtime_eprintln!(
             "thread_delete: transcripts not removed thread={thread_id} error={error:?}"
         ),
+    }
+    // Its checkpoint records go. The objects they alone named go at the
+    // store's next prune, and objects other records name stay.
+    if let Some(store) = crate::checkpoint::existing(profile) {
+        if let Err(error) = store.forget_thread(thread_id) {
+            crate::runtime_eprintln!(
+                "thread_delete: checkpoints not removed thread={thread_id} error={error}"
+            );
+        }
     }
     // The thread's own session folder goes when it holds only Muniment's
     // files. A folder with the user's files stays, and the answer names it.
@@ -356,6 +365,32 @@ pub fn remove_deleted_thread_sessions(
             .filter(|locator| remove_session_file(profile, locator))
             .count(),
     )
+}
+
+/// Removes, at start, the checkpoint records of each deleted thread, as a
+/// delete on another path or a failed removal leaves, then prunes the
+/// objects no record names. Answers how many threads' records went.
+pub fn remove_deleted_thread_checkpoints(
+    journal: &mut RunJournal,
+    profile: &std::path::Path,
+) -> Result<usize, String> {
+    let Some(store) = crate::checkpoint::existing(profile) else {
+        return Ok(0);
+    };
+    let deleted: std::collections::BTreeSet<String> = journal
+        .deleted_thread_ids(usize::MAX >> 1)
+        .map_err(|error| format!("{error:?}"))?
+        .into_iter()
+        .collect();
+    let removed = store
+        .forget_threads(|thread| deleted.contains(thread))
+        .map_err(|error| error.to_string())?;
+    if removed > 0 {
+        store
+            .prune(std::time::SystemTime::now())
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(removed)
 }
 
 /// Repairs, at start, each ordinary thread a saved agent took over: an

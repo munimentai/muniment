@@ -23,7 +23,8 @@ pub use restore::{
     RestoreReport, Unrestorable, UnrestorableReason,
 };
 pub use run::{
-    excluded_folders, follow_folder, protected_folders, shared, RunCheckpoints, CHECKPOINT_FOLDER,
+    excluded_folders, existing, follow_folder, protected_folders, shared, RunCheckpoints,
+    CHECKPOINT_FOLDER,
 };
 pub use turn::{
     revert_file, revert_hunk, turn_changes, RevertError, RevertOutcome, TurnChanges, TurnFile,
@@ -492,6 +493,31 @@ impl CheckpointStore {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(error.into()),
         }
+    }
+
+    /// Removes the records of every thread `chosen` picks, as the pass at
+    /// start does for threads deleted on another path. Answers how many
+    /// threads' records went. Their objects go at the next prune.
+    pub fn forget_threads(&self, chosen: impl Fn(&str) -> bool) -> Result<usize, CheckpointError> {
+        let threads = match fs::read_dir(self.root.join("records")) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
+            Err(error) => return Err(error.into()),
+        };
+        let mut picked = Vec::new();
+        for thread in threads {
+            let thread = thread?;
+            let Some(name) = thread.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            if thread.file_type()?.is_dir() && safe_id(&name) && chosen(&name) {
+                picked.push(name);
+            }
+        }
+        for thread_id in &picked {
+            self.forget_thread(thread_id)?;
+        }
+        Ok(picked.len())
     }
 
     /// Removes records past the age and count bounds, then the oldest records

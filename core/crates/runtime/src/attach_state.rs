@@ -121,7 +121,8 @@ fn tidy_home(profile: &Path) -> Result<(), String> {
 
 /// Gives back each ordinary thread an `agent-save` took over, deletes the
 /// creation chats that deleted agents left, which hold no run, and removes
-/// the Pi transcripts only deleted threads bound.
+/// the Pi transcripts only deleted threads bound and the checkpoint records
+/// of deleted threads.
 fn remove_orphan_creation_threads(
     storage: &muniment_core::run_events::SharedStorage,
     profile: &Path,
@@ -167,6 +168,18 @@ fn remove_orphan_creation_threads(
         ),
         Err(error) => muniment_core::runtime_eprintln!(
             "muniment-runtime: deleted_thread_transcripts outcome=failed error={error}"
+        ),
+    }
+    match muniment_core::journal::thread_mutation::remove_deleted_thread_checkpoints(
+        &mut storage.journal,
+        profile,
+    ) {
+        Ok(0) => {}
+        Ok(removed) => muniment_core::runtime_eprintln!(
+            "muniment-runtime: deleted_thread_checkpoints removed={removed}"
+        ),
+        Err(error) => muniment_core::runtime_eprintln!(
+            "muniment-runtime: deleted_thread_checkpoints outcome=failed error={error}"
         ),
     }
 }
