@@ -10226,7 +10226,8 @@ describe('agent chat', () => {
     const panel = await screen.findByRole('region', { name: 'Agents' })
     await fireEvent.click(within(await within(panel).findByRole('region', { name: 'Give an agent a job' })).getByRole('button', { name: /^Weekly report/ }))
     const reply = await screen.findByRole('article', { name: 'Draft: Weekly recap' })
-    expect(screen.getByRole('heading', { level: 1, name: 'New agent' })).toBeInTheDocument()
+    // The title bar and the sidebar row name the draft as its card does.
+    await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Weekly recap' })).toBeInTheDocument())
     // The template's sentence is the chat's first message, with one draft and no chat run.
     expect(draftCalls().filter((body) => !body.draft_id)).toEqual([{ chat_id: CHAT, message: 'Every Friday at 4pm, write a recap of my week from my threads and projects.' }])
     expect(screen.getByText('Every Friday at 4pm, write a recap of my week from my threads and projects.', { selector: '.user-message p' })).toBeInTheDocument()
@@ -10236,8 +10237,9 @@ describe('agent chat', () => {
     expect(screen.getByPlaceholderText('Ask for a change')).toBeInTheDocument()
     // The chat is one row of its own in Projects, the open one.
     const list = screen.getByRole('list', { name: 'Projects list' })
-    await waitFor(() => expect(within(list).getAllByText('New agent', { selector: '.thread-row-title' })).toHaveLength(1))
-    expect(within(list).getByText('New agent', { selector: '.thread-row-title' }).closest('.thread-row')).toHaveAttribute('aria-current', 'true')
+    await waitFor(() => expect(within(list).getAllByText('Weekly recap', { selector: '.thread-row-title' })).toHaveLength(1))
+    expect(within(list).getByText('Weekly recap', { selector: '.thread-row-title' }).closest('.thread-row')).toHaveAttribute('aria-current', 'true')
+    expect(within(list).queryByText('New agent', { selector: '.thread-row-title' })).toBeNull()
     await fireEvent.click(within(reply).getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', expect.objectContaining({ operation: 'agent.save' })))
     const body = invoke.mock.calls.find(([name, args]) => name === 'agent_request' && args?.operation === 'agent.save')[1].body.agent
@@ -10263,7 +10265,7 @@ describe('agent chat', () => {
     const actions = screen.getByRole('button', { name: 'Thread actions' })
     await waitFor(() => expect(actions).toBeEnabled())
     await fireEvent.click(actions)
-    const menu = screen.getByRole('menu', { name: 'New agent actions' })
+    const menu = screen.getByRole('menu', { name: 'Weekly recap actions' })
     // The title names the agent, so Rename lives on the sidebar row alone.
     expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Pin', 'Move to project', 'Archive', 'Delete'])
     await fireEvent.click(within(menu).getByRole('menuitem', { name: /^Delete/ }))

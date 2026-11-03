@@ -444,9 +444,10 @@
     if (record) return { threadId: currentThreadId, record, fromThread: null }
     return newAgentChat?.threadId === currentThreadId ? { ...newAgentChat, record: null } : null
   })
-  // An agent chat's title: its saved agent's name, else New agent.
+  // An agent chat's title: its saved agent's name, else the name its card
+  // shows, the draft's name once it has one, else New agent.
   function agentChatTitle(record) {
-    return roster.find((agent) => agent.id === record?.resultId)?.name || 'New agent'
+    return roster.find((agent) => agent.id === record?.resultId)?.name || (record ? creationTitle(record, threadSummaries) : 'New agent')
   }
   const agentChatRows = $derived(creations.filter((item) => item.kind === 'agent' && item.turns?.length).map((item) => ({ threadId: item.threadId, title: agentChatTitle(item), updatedAt: item.turns.at(-1)?.at ?? '', agentId: item.resultId ?? null })))
   // The model an agent chat's agent runs: its own, else the default.
