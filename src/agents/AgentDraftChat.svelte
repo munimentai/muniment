@@ -47,7 +47,9 @@
 
   const latest = $derived(turns.length - 1)
   const draftKey = $derived(`${latest}:${turns[latest]?.at ?? ''}`)
-  const unchanged = $derived(savedDraft === draftKey || (!!stored && !!turns[latest]?.reply?.draft && sameAgent(draftAgent(draftForm($state.snapshot(turns[latest].reply.draft)), { saved: $state.snapshot(stored), projectId }), stored)))
+  // The routines the chat's earlier drafts named, which the newest draft may drop.
+  const earlier = $derived(turns.slice(0, latest).flatMap((turn) => turn?.reply?.draft?.routines ?? []))
+  const unchanged = $derived(savedDraft === draftKey || (!!stored && !!turns[latest]?.reply?.draft && sameAgent(draftAgent(draftForm($state.snapshot(turns[latest].reply.draft)), { saved: $state.snapshot(stored), projectId, earlier: $state.snapshot(earlier) }), stored)))
   const skillNames = (draft) => (draft?.skills ?? []).map((id) => catalog.skills.find((skill) => skill.id === id)?.name ?? id)
   const schedule = (draft) => (draft?.routines ?? []).map((routine) => triggerSummary(routine.trigger)).join(', ') || 'Runs when you ask.'
   // The test run as the window last heard of it.
@@ -65,7 +67,7 @@
     try {
       const id = saved?.id ?? agentId
       const previous = id ? await agentRequest(tauri, runtime, 'agent.read', { id }).then((answer) => answer?.agent ?? null).catch(() => null) : null
-      const answer = await agentRequest(tauri, runtime, 'agent.save', { agent: draftAgent(form, { saved: $state.snapshot(previous), test, projectId }) })
+      const answer = await agentRequest(tauri, runtime, 'agent.save', { agent: draftAgent(form, { saved: $state.snapshot(previous), test, projectId, earlier: $state.snapshot(earlier) }) })
       saved = answer.agent
       stored = answer.agent
       savedDraft = test ? null : key

@@ -153,6 +153,38 @@ it('rests Save changes on a reopened chat against the agent exactly as core save
   expect(sameAgent(draftAgent(draftForm({ ...drafted, routines: [draft.routines[0], { ...webhook, trigger: { kind: 'webhook', preset: 'github' } }] }), { saved: stored }), stored)).toBe(false)
 })
 
+it('saves a draft again over a saved agent and keeps the routines core proposed and the user added', async () => {
+  const { tauri, requests } = runtime()
+  const proposal = { id: 'extract-9f2c', name: 'List what needs a reply', enabled: false, trigger: { kind: 'cron', expr: '0 17 * * 5', tz: 'America/New_York' }, prompt: 'List what needs a reply.', created_from: 'instructions', last_fired_at: null, last_result: null, proposed: true }
+  const added = { id: '01930000-0000-7000-8000-000000000001', name: 'On push', enabled: true, trigger: { kind: 'webhook', hook_id: '01930000-0000-7000-8000-000000000002', preset: 'github' }, prompt: 'Read the pushed commits.', created_from: 'user', last_fired_at: null, last_result: null }
+  const stored = { ...draftAgent(draftForm(draft)), id: 'agent-7', permissions: { mode: 'manual' }, avatar: { style: 'muniment', seed: 'seed' }, routines: [{ ...draft.routines[0], last_fired_at: null, last_result: null, next_fire_at: 1760965200 }, proposal, added] }
+  const read = tauri.invoke.getMockImplementation()
+  tauri.invoke.mockImplementation(async (command, payload) => payload.operation === 'agent.read' ? { agent: stored } : read(command, payload))
+  const first = turn('Summarize my inbox')
+  const { rerender } = render(AgentDraftChat, { tauri, agentId: 'agent-7', turns: [first] })
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled())
+  // A rename keeps every routine.
+  await rerender({ turns: [first, { ...turn('Call it Inbox digest', { draft: { ...draft, name: 'Inbox digest' }, question: null, via: 'router' }), at: '2026-10-19T10:05:00Z' }] })
+  await fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+  await waitFor(() => expect(requests.some((request) => request.operation === 'agent.save')).toBe(true))
+  const body = requests.find((request) => request.operation === 'agent.save').body.agent
+  expect(body.name).toBe('Inbox digest')
+  expect(body.routines.map((routine) => routine.id)).toEqual(['extract-1', 'extract-9f2c', added.id])
+  expect(body.routines[1]).toMatchObject({ enabled: false, proposed: true })
+  expect(body.routines[2]).toMatchObject({ enabled: true, trigger: added.trigger })
+})
+
+it('drops a routine an earlier draft named when the newest draft changes it, and keeps the rest', () => {
+  const proposal = { id: 'extract-9f2c', name: 'List what needs a reply', enabled: false, proposed: true, trigger: { kind: 'cron', expr: '0 17 * * 5', tz: 'America/New_York' }, prompt: 'List what needs a reply.' }
+  const added = { id: 'r-user', name: 'Noon check', enabled: true, trigger: { kind: 'cron', expr: '0 12 * * *', tz: 'America/New_York' }, prompt: 'Check the inbox.' }
+  const saved = { ...draftAgent(draftForm(draft)), id: 'agent-7', routines: [{ ...draft.routines[0] }, proposal, added] }
+  const moved = { ...draft.routines[0], id: 'extract-2', trigger: { ...draft.routines[0].trigger, expr: '0 8 * * 1-5' } }
+  const body = draftAgent(draftForm({ ...draft, routines: [moved] }), { saved, earlier: draft.routines })
+  expect(body.routines.map((routine) => routine.id)).toEqual(['extract-2', 'extract-9f2c', 'r-user'])
+  expect(draftAgent(draftForm({ ...draft, routines: [] }), { saved, earlier: draft.routines }).routines.map((routine) => routine.id)).toEqual(['extract-9f2c', 'r-user'])
+  expect(sameAgent(draftAgent(draftForm(draft), { saved, earlier: draft.routines }), saved)).toBe(true)
+})
+
 it('rests Save on the draft it saved until a new message drafts a change', async () => {
   const { tauri } = runtime()
   const first = [turn('Summarize my inbox')]
@@ -198,7 +230,8 @@ it('reads an agent save body as unchanged only when every field a person sets ma
   expect(sameAgent(body({ instructions: 'List the mail.' }), saved)).toBe(false)
   expect(sameAgent(body({ skills: [] }), saved)).toBe(false)
   expect(sameAgent(body({ permission_mode: 'auto' }), saved)).toBe(false)
-  expect(sameAgent(body({ routines: [] }), saved)).toBe(false)
+  // A draft that drops the routines an earlier draft named changes them.
+  expect(sameAgent(draftAgent(draftForm({ ...draft, routines: [] }), { saved, earlier: draft.routines }), saved)).toBe(false)
   expect(sameAgent(draftAgent(draftForm(draft), { saved, test: true }), saved)).toBe(false)
   expect(sameAgent(body(), null)).toBe(false)
 })

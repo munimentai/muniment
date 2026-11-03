@@ -57,9 +57,16 @@ export function formProblem(form) {
 
 // The `agent.save` body for the form. `saved` is the agent an earlier save
 // answered, so a second save keeps its id and avatar. A test save keeps every
-// routine off, so the agent starts itself only after Save.
+// drafted routine off, so the agent starts itself only after Save.
 // A new agent with `projectId` works in that project, so the project gains its triggers.
-export function draftAgent(form, { saved = null, test = false, projectId = null } = {}) {
+// `earlier` holds the routines of the chat's earlier drafts. The saved
+// agent keeps each routine the draft does not name: the ones core proposed,
+// the ones the user or the agent added. A routine an earlier draft named
+// and the newest one drops is the chat's own change, and it goes.
+export function draftAgent(form, { saved = null, test = false, projectId = null, earlier = [] } = {}) {
+  const drafted = form.routines.map((routine) => ({ ...routine, enabled: test ? false : routine.enabled, proposed: false }))
+  const named = (routine, list) => list.some((other) => (!!routine.id && other.id === routine.id) || sameTrigger(other.trigger, routine.trigger))
+  const kept = (saved?.routines ?? []).filter((routine) => !named(routine, drafted) && (routine.proposed || !named(routine, earlier)))
   const agent = {
     ...(saved ?? { id: '', projectId }),
     name: form.name.trim(),
@@ -67,7 +74,7 @@ export function draftAgent(form, { saved = null, test = false, projectId = null 
     instructions: form.instructions.trim(),
     schedule: null,
     skills: [...form.skills],
-    routines: form.routines.map((routine) => ({ ...routine, enabled: test ? false : routine.enabled, proposed: false })),
+    routines: [...drafted, ...kept],
   }
   if (form.mode) agent.permissions = { mode: form.mode }
   return agent
@@ -80,6 +87,7 @@ export function draftAgent(form, { saved = null, test = false, projectId = null 
 // instructions, a webhook's id, secret and default sender, and an MCP
 // trigger's empty arguments.
 const routineShape = (routine) => [routine.name ?? '', routine.prompt ?? '', canonical(triggerShape(routine.trigger ?? null)), routine.enabled !== false]
+const sameTrigger = (left, right) => !!left && !!right && JSON.stringify(canonical(triggerShape(left))) === JSON.stringify(canonical(triggerShape(right)))
 function triggerShape(trigger) {
   if (trigger?.kind === 'webhook') {
     const { hook_id: _id, secret_sha256: _secret, ...rest } = trigger
