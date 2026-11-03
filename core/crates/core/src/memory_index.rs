@@ -1048,22 +1048,21 @@ pub fn write_memory_record(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::SystemTime;
 
     struct Fixture {
         root: PathBuf,
     }
     impl Fixture {
         fn new() -> Self {
-            let root = std::env::temp_dir().join(format!(
-                "muniment-memory-{}-{}",
-                std::process::id(),
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos()
-            ));
-            fs::create_dir_all(root.join("memory")).unwrap();
+            // The clock reads in microseconds here, so tests that start on
+            // parallel threads in one tick would share a root by time. A
+            // random name gives each its own, and `create_dir` refuses a root
+            // that already exists.
+            let root =
+                std::env::temp_dir().join(format!("muniment-memory-{}", uuid::Uuid::new_v4()));
+            fs::create_dir(&root).unwrap();
+            fs::create_dir(root.join("memory")).unwrap();
             Self { root }
         }
         fn file(&self, name: &str, content: &str) {
