@@ -1277,9 +1277,13 @@ fn an_unsaved_agent_draft_in_a_thread_with_runs_stays_at_start_and_its_delete_ke
 
     // The draft card's delete removes the record only: the thread keeps its
     // runs and its folder.
+    // The answer tells the window the thread stays.
     assert_eq!(
-        muniment_core::creations::delete(&profile, &thread).unwrap(),
-        None
+        muniment_core::creations::delete_draft(&profile, &thread).unwrap(),
+        muniment_core::creations::DraftDeleted {
+            folder_kept: None,
+            thread_kept: true,
+        }
     );
     assert!(muniment_core::creations::read(&profile, &thread)
         .unwrap()

@@ -259,21 +259,46 @@ pub fn remove(profile: &Path, thread: &str) -> Result<(), String> {
     }
 }
 
+/// What a draft delete left in place.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct DraftDeleted {
+    /// The draft's folder, kept because it holds the user's files.
+    pub folder_kept: Option<PathBuf>,
+    /// Whether the draft's thread stays where it is, because it held the
+    /// user's messages before the draft.
+    pub thread_kept: bool,
+}
+
 /// Deletes a creation chat's record. A draft that saved no agent or artifact
 /// also loses its session folder when that holds only Muniment's own files,
 /// as a thread delete does. An agent draft with no turns is a plan a reply
 /// kept in a thread that holds the user's messages, so only its record goes
-/// and the thread keeps its folder. Answers the folder when it stays
-/// because it holds the user's files.
-pub fn delete(profile: &Path, thread: &str) -> Result<Option<PathBuf>, String> {
-    let draft = read(profile, thread).ok().flatten().is_some_and(|item| {
-        item.result_id.is_none() && !(item.kind == "agent" && item.turns.is_empty())
-    });
+/// and the thread stays with its folder, which the answer says. A draft
+/// chat keeps its messages as turns.
+pub fn delete_draft(profile: &Path, thread: &str) -> Result<DraftDeleted, String> {
+    let (draft, thread_kept) = match read(profile, thread).ok().flatten() {
+        Some(item) if item.result_id.is_none() => {
+            let users = item.kind == "agent" && item.turns.is_empty();
+            (!users, users)
+        }
+        _ => (false, false),
+    };
     remove(profile, thread)?;
-    if !draft {
-        return Ok(None);
-    }
-    crate::projects::remove_thread_folder(profile, thread)
+    let folder_kept = if draft {
+        crate::projects::remove_thread_folder(profile, thread)?
+    } else {
+        None
+    };
+    Ok(DraftDeleted {
+        folder_kept,
+        thread_kept,
+    })
+}
+
+/// Deletes a creation chat's record as [`delete_draft`] does. Answers the
+/// folder when it stays because it holds the user's files.
+pub fn delete(profile: &Path, thread: &str) -> Result<Option<PathBuf>, String> {
+    delete_draft(profile, thread).map(|deleted| deleted.folder_kept)
 }
 
 pub fn artifact_folder(profile: &Path, id: &str) -> Result<PathBuf, String> {
@@ -426,7 +451,14 @@ mod tests {
         let folder = folder_of(&empty);
         assert!(folder.ends_with(crate::workspace_names::basename("New agent", &empty)));
         fs::write(folder.join(".DS_Store"), "").unwrap();
-        assert_eq!(delete(&profile, &empty).unwrap(), None);
+        // A draft chat's thread goes with its draft.
+        assert_eq!(
+            delete_draft(&profile, &empty).unwrap(),
+            DraftDeleted {
+                folder_kept: None,
+                thread_kept: false,
+            }
+        );
         assert!(!folder.exists());
         assert!(read(&profile, &empty).unwrap().is_none());
         assert_eq!(
