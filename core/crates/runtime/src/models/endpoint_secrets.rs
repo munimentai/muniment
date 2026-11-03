@@ -102,47 +102,74 @@ pub fn seal_with(
     if !models_file.is_file() {
         return Ok(0);
     }
+    // The store may be a keychain that prompts, so the moves read the file
+    // and write the store without the file's lock. A save never waits on it.
+    let seen = pi_models::read_json(&models_file).map_err(|_| pi_models::SAVE_ERROR.to_string())?;
+    let mut planned: Vec<(String, String, String, Option<bool>)> = Vec::new();
+    for (provider, entry) in seen
+        .get("providers")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter(|(provider, _)| provider.as_str() != ROUTER_PROVIDER)
+    {
+        let Some(key) = entry.get("apiKey").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(next) = reference(executable, provider) else {
+            continue;
+        };
+        if key == next {
+            continue;
+        }
+        let stored = if let Some((_, named)) = parse_reference(key) {
+            if named != provider {
+                continue;
+            }
+            None
+        } else {
+            if key.is_empty()
+                || STAND_INS.contains(&key)
+                || key.starts_with('!')
+                || key.starts_with('$')
+            {
+                continue;
+            }
+            match store.write(SERVICE, provider, key) {
+                Ok(()) => Some(true),
+                Err(error) => {
+                    muniment_core::runtime_eprintln!(
+                        "muniment-runtime: endpoint_key provider={provider} outcome=memory error={error}"
+                    );
+                    Some(false)
+                }
+            }
+        };
+        planned.push((provider.clone(), key.to_owned(), next, stored));
+    }
+    if planned.is_empty() {
+        return Ok(0);
+    }
+    // The lock covers only the rewrite. A key a save changed meanwhile stays
+    // for the pass after that save.
     let _lock = pi_models::lock(&models_file).map_err(|_| pi_models::SAVE_ERROR.to_string())?;
     let mut root =
         pi_models::read_json(&models_file).map_err(|_| pi_models::SAVE_ERROR.to_string())?;
     let mut changed = 0;
     if let Some(providers) = root.get_mut("providers").and_then(Value::as_object_mut) {
-        for (provider, entry) in providers
-            .iter_mut()
-            .filter(|(provider, _)| provider.as_str() != ROUTER_PROVIDER)
-        {
-            let Some(key) = entry.get("apiKey").and_then(Value::as_str) else {
+        for (provider, key, next, stored) in &planned {
+            let Some(entry) = providers.get_mut(provider) else {
                 continue;
             };
-            let Some(next) = reference(executable, provider) else {
-                continue;
-            };
-            if key == next {
+            if entry.get("apiKey").and_then(Value::as_str) != Some(key.as_str()) {
                 continue;
             }
-            if let Some((_, named)) = parse_reference(key) {
-                if named != provider {
-                    continue;
-                }
-            } else {
-                if key.is_empty()
-                    || STAND_INS.contains(&key)
-                    || key.starts_with('!')
-                    || key.starts_with('$')
-                {
-                    continue;
-                }
-                match store.write(SERVICE, provider, key) {
-                    Ok(()) => moved(provider, Sealed::Stored),
-                    Err(error) => {
-                        muniment_core::runtime_eprintln!(
-                            "muniment-runtime: endpoint_key provider={provider} outcome=memory error={error}"
-                        );
-                        moved(provider, Sealed::Refused(key));
-                    }
-                }
+            match stored {
+                Some(true) => moved(provider, Sealed::Stored),
+                Some(false) => moved(provider, Sealed::Refused(key)),
+                None => {}
             }
-            entry["apiKey"] = next.into();
+            entry["apiKey"] = next.as_str().into();
             changed += 1;
         }
     }
@@ -881,6 +908,78 @@ mod tests {
         fn remove(&self, _: &str, _: &str) -> Result<(), String> {
             Ok(())
         }
+    }
+
+    /// A keychain whose write lands while a save edits `models.json`, as a
+    /// save does while a prompt waits for the person.
+    struct SavingDuringWrite {
+        models_file: PathBuf,
+        free: std::sync::atomic::AtomicBool,
+    }
+
+    impl CredentialStore for SavingDuringWrite {
+        fn read(&self, _: &str, _: &str) -> Option<String> {
+            None
+        }
+
+        fn lookup(&self, _: &str, _: &str) -> Result<Option<String>, CredentialRefusal> {
+            Ok(None)
+        }
+
+        fn write(&self, _: &str, provider: &str, _: &str) -> Result<(), String> {
+            let started = std::time::Instant::now();
+            let save =
+                pi_models::lock_with(&self.models_file, Duration::ZERO, pi_models::LOCK_STALE);
+            self.free.store(
+                save.is_ok() && started.elapsed() < Duration::from_secs(1),
+                std::sync::atomic::Ordering::SeqCst,
+            );
+            if provider == "custom-edited" {
+                let mut root = pi_models::read_json(&self.models_file).unwrap();
+                root["providers"]["custom-edited"]["apiKey"] = "sk-newer".into();
+                pi_models::write_json(&self.models_file, &root).unwrap();
+            }
+            Ok(())
+        }
+
+        fn remove(&self, _: &str, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_seal_writes_the_store_without_the_lock_and_keeps_a_newer_save() {
+        let root = temporary("unlocked");
+        let agent = root.join("agent");
+        std::fs::create_dir_all(&agent).unwrap();
+        std::fs::write(
+            agent.join("models.json"),
+            r#"{"providers":{"custom-edited":{"baseUrl":"https://a.example/v1","apiKey":"sk-old"},"custom-proxy":{"baseUrl":"https://b.example/v1","apiKey":"sk-plain"}}}"#,
+        )
+        .unwrap();
+        let store = SavingDuringWrite {
+            models_file: pi_models::models_file(&agent),
+            free: Default::default(),
+        };
+        let executable = Path::new("/opt/runtime");
+        let mut sealed = Vec::new();
+        let mut moved = |provider: &str, _: Sealed<'_>| sealed.push(provider.to_owned());
+        assert_eq!(
+            seal_with(&agent, &store, executable, &mut moved).unwrap(),
+            1
+        );
+        // A save took the lock while the store wrote.
+        assert!(store.free.load(std::sync::atomic::Ordering::SeqCst));
+        assert_eq!(sealed, ["custom-proxy"]);
+        let saved = models(&agent);
+        assert_eq!(
+            saved["providers"]["custom-proxy"]["apiKey"],
+            "!\"/opt/runtime\" secret get custom-proxy"
+        );
+        // The key the save wrote stays for the pass after that save.
+        assert_eq!(saved["providers"]["custom-edited"]["apiKey"], "sk-newer");
+        assert!(!pi_models::lock_path(&pi_models::models_file(&agent)).exists());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

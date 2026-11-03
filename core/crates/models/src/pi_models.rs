@@ -16,7 +16,7 @@ use std::time::{Duration, Instant, SystemTime};
 use serde_json::{json, Map, Value};
 
 use crate::endpoint_models::{
-    discover_endpoint_models, discover_endpoint_models_checked, DiscoveryFailure,
+    discover_endpoint_models, discover_endpoint_models_checked, DiscoveryFailure, EndpointModels,
 };
 use crate::registry::{
     key_providers, CUSTOM_PROVIDER_PREFIX, LM_STUDIO_PROVIDER, OLLAMA_DECISIONS, OLLAMA_MODEL,
@@ -683,15 +683,8 @@ pub fn store_ollama(
     let key = saved.as_deref().unwrap_or(key);
     endpoint_url(base_url, MESSAGE)?;
 
-    fs::create_dir_all(agent).map_err(|_| SAVE_ERROR.to_string())?;
-    let _models_lock = lock(&models_file).map_err(|_| SAVE_ERROR.to_string())?;
-    let mut models = read_for_update(&models_file)?;
-    let providers = models
-        .entry("providers")
-        .or_insert_with(|| json!({}))
-        .as_object_mut()
-        .ok_or_else(|| SAVE_ERROR.to_string())?;
-    // The server names its own models; the pinned id stands in when it does not answer.
+    // The server names its own models; the pinned id stands in when it does
+    // not answer. Discovery runs before the lock, so no save waits on it.
     let discovered = discover_endpoint_models_checked(
         base_url,
         resolve_key(key).as_deref().or(Some(key)),
@@ -718,6 +711,14 @@ pub fn store_ollama(
             .unwrap_or(&model_ids[0])
             .as_str()
     };
+    fs::create_dir_all(agent).map_err(|_| SAVE_ERROR.to_string())?;
+    let _models_lock = lock(&models_file).map_err(|_| SAVE_ERROR.to_string())?;
+    let mut models = read_for_update(&models_file)?;
+    let providers = models
+        .entry("providers")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .ok_or_else(|| SAVE_ERROR.to_string())?;
     providers.insert(
         OLLAMA_PROVIDER.to_owned(),
         json!({
@@ -903,96 +904,59 @@ pub fn refresh_endpoints_with(
     if !models_file.is_file() {
         return Ok(false);
     }
+    // Discovery reads each server over the network, and a key command may
+    // run, so it reads the file without the lock. A save never waits on it.
+    let seen = read_for_update(&models_file)?;
+    let mut discovered = Vec::new();
+    for (id, entry) in seen
+        .get("providers")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter(|(id, _)| {
+            id.as_str() != ROUTER_PROVIDER && !key_providers().any(|(known, _)| known == *id)
+        })
+    {
+        let Some(base_url) = entry.get("baseUrl").and_then(Value::as_str) else {
+            continue;
+        };
+        // The stand-in keys Pi sends to a server with no key are not keys.
+        let key = entry
+            .get("apiKey")
+            .and_then(Value::as_str)
+            .filter(|key| !matches!(*key, "ollama" | "local"))
+            .and_then(key_for);
+        // A server that answers with no chat model is still loading, as
+        // a local server does for a while after it starts, so the saved
+        // list stays until it serves one.
+        if let Some(found) = discover_endpoint_models(base_url, key.as_deref(), DISCOVERY_TIMEOUT)
+            .filter(|found| !found.chat.is_empty())
+        {
+            discovered.push((id.clone(), entry.clone(), found));
+        }
+    }
+    if discovered.is_empty() {
+        return Ok(false);
+    }
+    // The lock covers only the merge. An entry a save changed while
+    // discovery ran keeps what the save wrote.
     let _lock = lock(&models_file).map_err(|_| SAVE_ERROR.to_string())?;
     let mut root = read_for_update(&models_file)?;
     let record = read_record(agent)?;
     let mut changed = false;
     let mut decisions = Vec::new();
     if let Some(providers) = root.get_mut("providers").and_then(Value::as_object_mut) {
-        for (id, entry) in providers
-            .iter_mut()
-            .filter(|(id, _)| {
-                id.as_str() != ROUTER_PROVIDER && !key_providers().any(|(known, _)| known == *id)
-            })
-            .filter_map(|(id, value)| value.as_object_mut().map(|entry| (id, entry)))
-        {
-            let Some(base_url) = entry.get("baseUrl").and_then(Value::as_str) else {
+        for (id, before, found) in discovered {
+            let Some(entry) = providers.get_mut(&id).filter(|entry| **entry == before) else {
                 continue;
             };
-            // The stand-in keys Pi sends to a server with no key are not keys.
-            let key = entry
-                .get("apiKey")
-                .and_then(Value::as_str)
-                .filter(|key| !matches!(*key, "ollama" | "local"))
-                .and_then(key_for);
-            // A server that answers with no chat model is still loading, as
-            // a local server does for a while after it starts, so the saved
-            // list stays until it serves one.
-            let Some(found) = discover_endpoint_models(base_url, key.as_deref(), DISCOVERY_TIMEOUT)
-                .filter(|found| !found.chat.is_empty())
-            else {
+            let Some(entry) = entry.as_object_mut() else {
                 continue;
             };
-            let current = entry
-                .get("models")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            if named_models(&record, id) {
-                // The person named these models, so the list stays as it
-                // is and the server only adds the limits a model lacks.
-                let next: Vec<Value> = current
-                    .iter()
-                    .map(|old| {
-                        let mut next = old.clone();
-                        let window = old
-                            .get("id")
-                            .and_then(Value::as_str)
-                            .and_then(|model| found.windows.get(model).map(|w| (model, w)));
-                        if let (Some((model, window)), Some(fields)) =
-                            (window, next.as_object_mut())
-                        {
-                            let reported = model_entry(model, Some(window));
-                            for field in ["contextWindow", "maxTokens"] {
-                                if let Some(value) = reported.get(field) {
-                                    fields.entry(field).or_insert_with(|| value.clone());
-                                }
-                            }
-                        }
-                        next
-                    })
-                    .collect();
-                if current != next {
-                    entry.insert("models".into(), next.into());
-                    changed = true;
-                }
-                continue;
-            }
-            decisions.push((id.clone(), found.decisions));
-            let next: Vec<Value> = found
-                .chat
-                .iter()
-                .map(|model| {
-                    let mut next = current
-                        .iter()
-                        .find(|old| old.get("id").and_then(Value::as_str) == Some(model))
-                        .filter(|old| old.is_object())
-                        .cloned()
-                        .unwrap_or_else(|| json!({ "id": model }));
-                    if let Some(window) = found.windows.get(model) {
-                        let reported = model_entry(model, Some(window));
-                        for field in ["contextWindow", "maxTokens"] {
-                            if let Some(value) = reported.get(field) {
-                                next[field] = value.clone();
-                            }
-                        }
-                    }
-                    next
-                })
-                .collect();
-            if current != next {
-                entry.insert("models".into(), next.into());
-                changed = true;
+            let named = named_models(&record, &id);
+            changed |= apply_discovered(entry, named, &found);
+            if !named {
+                decisions.push((id, found.decisions));
             }
         }
     }
@@ -1007,6 +971,66 @@ pub fn refresh_endpoints_with(
         }
     }
     Ok(changed)
+}
+
+/// Rewrites one endpoint entry's model list from what its server serves, as
+/// [`refresh_endpoints`] describes, and answers whether the list changed.
+fn apply_discovered(entry: &mut Map<String, Value>, named: bool, found: &EndpointModels) -> bool {
+    let current = entry
+        .get("models")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let next: Vec<Value> = if named {
+        // The person named these models, so the list stays as it is and
+        // the server only adds the limits a model lacks.
+        current
+            .iter()
+            .map(|old| {
+                let mut next = old.clone();
+                let window = old
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .and_then(|model| found.windows.get(model).map(|w| (model, w)));
+                if let (Some((model, window)), Some(fields)) = (window, next.as_object_mut()) {
+                    let reported = model_entry(model, Some(window));
+                    for field in ["contextWindow", "maxTokens"] {
+                        if let Some(value) = reported.get(field) {
+                            fields.entry(field).or_insert_with(|| value.clone());
+                        }
+                    }
+                }
+                next
+            })
+            .collect()
+    } else {
+        found
+            .chat
+            .iter()
+            .map(|model| {
+                let mut next = current
+                    .iter()
+                    .find(|old| old.get("id").and_then(Value::as_str) == Some(model))
+                    .filter(|old| old.is_object())
+                    .cloned()
+                    .unwrap_or_else(|| json!({ "id": model }));
+                if let Some(window) = found.windows.get(model) {
+                    let reported = model_entry(model, Some(window));
+                    for field in ["contextWindow", "maxTokens"] {
+                        if let Some(value) = reported.get(field) {
+                            next[field] = value.clone();
+                        }
+                    }
+                }
+                next
+            })
+            .collect()
+    };
+    if current == next {
+        return false;
+    }
+    entry.insert("models".into(), next.into());
+    true
 }
 
 /// Adds the models each provider's discovery found to Pi's model file without
@@ -1513,6 +1537,92 @@ mod tests {
         fs::write(models_file(&agent), saved.to_string()).unwrap();
         assert!(!refresh_endpoints(&agent).unwrap());
         assert_eq!(models(&agent), saved);
+        fs::remove_dir_all(agent).unwrap();
+    }
+
+    #[test]
+    fn a_refresh_leaves_the_lock_free_while_a_server_is_slow() {
+        use std::io::{BufRead, BufReader, Write};
+        let agent = temporary_directory();
+        // The slow server holds its first answer until the test releases it.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let slow = format!("http://{}/v1", listener.local_addr().unwrap());
+        let (arrived, asked) = mpsc::channel();
+        let (release, released) = mpsc::channel::<()>();
+        std::thread::spawn(move || {
+            for (index, stream) in listener.incoming().enumerate() {
+                let Ok(mut stream) = stream else { continue };
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let (mut route, mut line) = (String::new(), String::new());
+                reader.read_line(&mut route).unwrap();
+                while reader.read_line(&mut line).unwrap_or(0) > 0 && line != "\r\n" {
+                    line.clear();
+                }
+                if index == 0 {
+                    let _ = arrived.send(());
+                    let _ = released.recv_timeout(Duration::from_secs(3));
+                }
+                let body = if route.starts_with("GET /v1/models") {
+                    json!({"data": [{"id": "fresh"}]}).to_string()
+                } else {
+                    String::new()
+                };
+                let status = if body.is_empty() {
+                    "404 Not Found"
+                } else {
+                    "200 OK"
+                };
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+        let fast = serve_routes(vec![("GET /v1/models", json!({"data": [{"id": "quick"}]}))]);
+        fs::write(
+            models_file(&agent),
+            json!({"providers": {
+                "custom-slow": {"baseUrl": slow, "apiKey": "local", "models": [{"id": "old"}]},
+                "custom-edited": {"baseUrl": slow, "apiKey": "local", "models": [{"id": "old"}]}
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        let refresh = std::thread::spawn({
+            let agent = agent.clone();
+            move || refresh_endpoints(&agent)
+        });
+        asked.recv_timeout(Duration::from_secs(3)).unwrap();
+
+        // Discovery waits on the server, and a save takes the lock at once.
+        let started = Instant::now();
+        store_endpoint(&agent, "lmstudio", "", &fast, "", &[]).unwrap();
+        {
+            let _save = lock_with(&models_file(&agent), Duration::ZERO, LOCK_STALE).unwrap();
+            let mut root = read_json(&models_file(&agent)).unwrap();
+            root["providers"]["custom-edited"]["models"] = json!([{"id": "saved"}]);
+            write_json(&models_file(&agent), &root).unwrap();
+        }
+        assert!(started.elapsed() < Duration::from_secs(1));
+        release.send(()).unwrap();
+
+        assert!(refresh.join().unwrap().unwrap());
+        let root = models(&agent);
+        assert_eq!(
+            root["providers"]["custom-slow"]["models"],
+            json!([{"id": "fresh"}])
+        );
+        // The save that ran during discovery wins over what discovery found.
+        assert_eq!(
+            root["providers"]["custom-edited"]["models"],
+            json!([{"id": "saved"}])
+        );
+        assert_eq!(
+            root["providers"]["lmstudio"]["models"],
+            json!([{"id": "quick"}])
+        );
+        assert!(!lock_path(&models_file(&agent)).exists());
         fs::remove_dir_all(agent).unwrap();
     }
 
