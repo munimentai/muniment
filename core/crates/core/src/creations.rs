@@ -261,13 +261,14 @@ pub fn remove(profile: &Path, thread: &str) -> Result<(), String> {
 
 /// Deletes a creation chat's record. A draft that saved no agent or artifact
 /// also loses its session folder when that holds only Muniment's own files,
-/// as a thread delete does. Answers the folder when it stays because it holds
-/// the user's files.
+/// as a thread delete does. An agent draft with no turns is a plan a reply
+/// kept in a thread that holds the user's messages, so only its record goes
+/// and the thread keeps its folder. Answers the folder when it stays
+/// because it holds the user's files.
 pub fn delete(profile: &Path, thread: &str) -> Result<Option<PathBuf>, String> {
-    let draft = read(profile, thread)
-        .ok()
-        .flatten()
-        .is_some_and(|item| item.result_id.is_none());
+    let draft = read(profile, thread).ok().flatten().is_some_and(|item| {
+        item.result_id.is_none() && !(item.kind == "agent" && item.turns.is_empty())
+    });
     remove(profile, thread)?;
     if !draft {
         return Ok(None);
@@ -399,13 +400,18 @@ mod tests {
         let home = root.join("home");
         crate::home::confirm_home(&profile, &home).unwrap();
         let sessions = home.join("sessions");
+        // A draft chat keeps each message it sent as a turn.
         let draft = |thread: &str| Creation {
             thread_id: thread.into(),
             kind: "agent".into(),
             goal: "Summarize my inbox every morning".into(),
             output: "A saved agent".into(),
             result_id: None,
-            turns: Vec::new(),
+            turns: vec![DraftTurn {
+                message: "Summarize my inbox every morning".into(),
+                at: "2026-08-06T12:00:00Z".into(),
+                ..Default::default()
+            }],
             title: None,
             created_at: None,
         };

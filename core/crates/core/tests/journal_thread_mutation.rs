@@ -1221,3 +1221,79 @@ fn a_deleted_threads_pi_transcripts_go_and_a_live_threads_stay() {
     drop(journal);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn an_unsaved_agent_draft_in_a_thread_with_runs_stays_at_start_and_its_delete_keeps_the_thread() {
+    let (root, profile, mut journal) = agent_profile("muniment-unsaved-draft");
+    // A plan a reply kept in a thread that holds the user's messages: it has
+    // a title and names no agent, as an older version saved it.
+    let thread = journal
+        .append_new_run("workspace-a", &run_started(Some("owner")))
+        .unwrap();
+    journal
+        .append_new_run_in_thread("workspace-a", &thread, &run_started(Some("owner")))
+        .unwrap();
+    let record = muniment_core::creations::Creation {
+        thread_id: thread.clone(),
+        kind: "agent".into(),
+        goal: "Report the project status".into(),
+        output: "A saved agent".into(),
+        result_id: None,
+        turns: Vec::new(),
+        title: Some("Muniment Project Status".into()),
+        created_at: None,
+    };
+    // Written by hand, since a save now stamps its time.
+    let records = profile.join("creation-threads");
+    std::fs::create_dir_all(&records).unwrap();
+    std::fs::write(
+        records.join(format!("{thread}.json")),
+        serde_json::to_vec(&record).unwrap(),
+    )
+    .unwrap();
+    let folder = muniment_core::workspace_names::resolve(
+        &profile,
+        &root.join("muniment/sessions"),
+        &thread,
+        Some("Muniment Project Status"),
+        None,
+    )
+    .unwrap();
+
+    // The start repair leaves the draft, with no time of its own.
+    assert!(repair_taken_over_threads(&mut journal, &profile)
+        .unwrap()
+        .is_empty());
+    let kept = muniment_core::creations::read(&profile, &thread)
+        .unwrap()
+        .unwrap();
+    assert_eq!(kept.title.as_deref(), Some("Muniment Project Status"));
+    assert!(kept.created_at.is_none());
+    assert!(
+        remove_orphan_creation_threads(&mut journal, &profile, &provenance(None))
+            .unwrap()
+            .is_empty()
+    );
+
+    // The draft card's delete removes the record only: the thread keeps its
+    // runs and its folder.
+    assert_eq!(
+        muniment_core::creations::delete(&profile, &thread).unwrap(),
+        None
+    );
+    assert!(muniment_core::creations::read(&profile, &thread)
+        .unwrap()
+        .is_none());
+    assert!(!thread_deleted(&mut journal, &thread));
+    assert_eq!(
+        journal
+            .thread_run_ids(&thread, 10, None)
+            .unwrap()
+            .run_ids
+            .len(),
+        2
+    );
+    assert!(folder.is_dir());
+    drop(journal);
+    std::fs::remove_dir_all(root).unwrap();
+}

@@ -358,17 +358,22 @@ pub fn remove_deleted_thread_sessions(
     )
 }
 
-/// Repairs, at start, each ordinary thread a reply's agent tools took over:
-/// an agent creation record with no turns on a thread that held a message
-/// before the record existed, or whose record keeps no time. The record
-/// goes and the thread leaves the agent, so the thread stays the user's
-/// and a delete of the agent leaves it. Answers the threads it repaired.
+/// Repairs, at start, each ordinary thread a saved agent took over: an
+/// agent creation record that names the agent, with no turns, on a thread
+/// that held a message before the record existed, or whose record keeps no
+/// time. The record goes and the thread leaves the agent, so the thread
+/// stays the user's and a delete of the agent leaves it. A record that
+/// names no agent is the user's unsaved draft and stays. Answers the
+/// threads it repaired.
 pub fn repair_taken_over_threads(
     journal: &mut RunJournal,
     profile: &std::path::Path,
 ) -> Result<Vec<String>, String> {
     let mut repaired = Vec::new();
     for creation in crate::creations::list(profile)? {
+        let Some(agent) = creation.result_id.as_deref() else {
+            continue;
+        };
         if creation.kind != "agent"
             || !creation.turns.is_empty()
             || !held_messages_before(
@@ -380,17 +385,15 @@ pub fn repair_taken_over_threads(
         {
             continue;
         }
-        if let Some(agent) = creation.result_id.as_deref() {
-            crate::agents::with_state(profile, |state| {
-                if state.threads.get(&creation.thread_id).map(String::as_str) == Some(agent) {
-                    state.threads.remove(&creation.thread_id);
-                }
-                if state.primary_threads.get(agent) == Some(&creation.thread_id) {
-                    state.primary_threads.remove(agent);
-                }
-                Ok(())
-            })?;
-        }
+        crate::agents::with_state(profile, |state| {
+            if state.threads.get(&creation.thread_id).map(String::as_str) == Some(agent) {
+                state.threads.remove(&creation.thread_id);
+            }
+            if state.primary_threads.get(agent) == Some(&creation.thread_id) {
+                state.primary_threads.remove(agent);
+            }
+            Ok(())
+        })?;
         crate::creations::remove(profile, &creation.thread_id)?;
         repaired.push(creation.thread_id);
     }
