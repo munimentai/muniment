@@ -1486,7 +1486,7 @@ mod tests {
     }
 
     #[test]
-    fn a_fact_added_in_an_agent_profile_names_that_agent() {
+    fn a_fact_added_in_an_agent_profile_reads_added_by_you() {
         let (service, profile) = service();
         muniment_core::home::confirm_home(&profile, &profile.join("Home")).unwrap();
         let agent = muniment_core::agents::save(
@@ -1511,14 +1511,14 @@ mod tests {
             saved["origin"],
             serde_json::json!({"kind": "user", "surface": "agent_profile", "agent_id": agent.id})
         );
-        assert_eq!(saved["origin_label"], "Added by Tauri Morning agent");
+        assert_eq!(saved["origin_label"], "Added by you");
         let listed = run(
             ModelAction::MemoryFacts,
             serde_json::json!({"agent": agent.id}),
         )
         .unwrap();
         assert_eq!(listed[0]["origin"], saved["origin"]);
-        assert_eq!(listed[0]["origin_label"], "Added by Tauri Morning agent");
+        assert_eq!(listed[0]["origin_label"], "Added by you");
         let settings = run(ModelAction::MemoryFacts, serde_json::json!({})).unwrap();
         assert_eq!(settings, serde_json::json!([]));
         std::fs::remove_dir_all(profile).unwrap();
