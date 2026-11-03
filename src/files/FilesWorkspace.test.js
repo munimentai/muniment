@@ -100,3 +100,46 @@ it('uses explicit agent context and restores browsing state without exposing hid
   render(FilesWorkspace,{props})
   await waitFor(()=>expect(screen.getByRole('combobox',{name:'Workspace folder'})).toHaveValue('/agents'))
 })
+it('follows its thread folder when the thread takes its title, and again on a rename', async () => {
+  let folder = '/home/sessions/New_thread-c3fa5c5a'
+  const lists = {
+    '/home/sessions/New_thread-c3fa5c5a': [{name:'drafts',path:'/home/sessions/New_thread-c3fa5c5a/drafts',directory:true}],
+    '/home/sessions/Plan_the_week-c3fa5c5a': [{name:'drafts',path:'/home/sessions/Plan_the_week-c3fa5c5a/drafts',directory:true},{name:'plan.md',path:'/home/sessions/Plan_the_week-c3fa5c5a/plan.md',directory:false}],
+    '/home/sessions/Week_plan-c3fa5c5a': [{name:'week.md',path:'/home/sessions/Week_plan-c3fa5c5a/week.md',directory:false}],
+  }
+  const invoke = vi.fn(async (command,args) => {
+    if (command === 'workspace_folders') return [{label:'Muniment folder',path:'/home'},{label:'Thread workspace',path:folder}]
+    if (!lists[args.path]) throw 'This folder is unavailable.'
+    return {path:args.path,parent:'/home/sessions',entries:lists[args.path]}
+  })
+  const onfolder = vi.fn()
+  const view = render(FilesWorkspace,{props:{tauri:{invoke},context:{threadId:'t1',threadTitle:'New thread'},onfolder}})
+  expect(await screen.findByRole('treeitem',{name:'drafts'})).toBeInTheDocument()
+  // A run works in the folder with no title, and core names the folder when it ends.
+  await view.rerender({props:{context:{threadId:'t1'}}})
+  folder = '/home/sessions/Plan_the_week-c3fa5c5a'
+  await view.rerender({props:{context:{threadId:'t1',threadTitle:'Plan the week'}}})
+  expect(await screen.findByRole('treeitem',{name:'plan.md'})).toBeInTheDocument()
+  expect(invoke).toHaveBeenCalledWith('workspace_folders',{threadId:'t1',threadTitle:'Plan the week'})
+  expect(onfolder).toHaveBeenLastCalledWith('/home/sessions/Plan_the_week-c3fa5c5a')
+  await fireEvent.click(screen.getByRole('button',{name:'Refresh files'}))
+  expect(screen.queryByText('This folder is unavailable.')).toBeNull()
+  folder = '/home/sessions/Week_plan-c3fa5c5a'
+  await view.rerender({props:{context:{threadId:'t1',threadTitle:'Week plan'}}})
+  expect(await screen.findByRole('treeitem',{name:'week.md'})).toBeInTheDocument()
+  expect(onfolder).toHaveBeenLastCalledWith('/home/sessions/Week_plan-c3fa5c5a')
+})
+
+it('keeps a folder the person chose when the thread takes its title', async () => {
+  const invoke = vi.fn(async (command,args) => command === 'workspace_folders'
+    ? [{label:'Muniment folder',path:'/home'},{label:'Thread workspace',path:args.threadTitle ? '/home/sessions/Plan-c3fa5c5a' : '/home/sessions/Untitled-c3fa5c5a'}]
+    : {path:args.path,entries:[{name:`${args.path.split('/').at(-1)}.md`,path:`${args.path}/x.md`,directory:false}]})
+  const view = render(FilesWorkspace,{props:{tauri:{invoke},context:{threadId:'t1'}}})
+  expect(await screen.findByRole('treeitem',{name:'Untitled-c3fa5c5a.md'})).toBeInTheDocument()
+  await fireEvent.change(screen.getByRole('combobox',{name:'Workspace folder'}),{target:{value:'/home'}})
+  expect(await screen.findByRole('treeitem',{name:'home.md'})).toBeInTheDocument()
+  await view.rerender({props:{context:{threadId:'t1',threadTitle:'Plan'}}})
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('workspace_folders',{threadId:'t1',threadTitle:'Plan'}))
+  expect(screen.getByRole('treeitem',{name:'home.md'})).toBeInTheDocument()
+  expect(invoke.mock.calls.filter(([command,args]) => command === 'workspace_list' && args.path === '/home/sessions/Plan-c3fa5c5a')).toHaveLength(0)
+})

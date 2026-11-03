@@ -3,7 +3,7 @@
   import PopupClose from '../lib/PopupClose.svelte'
   import { floatingMenu } from '../lib/floating-menu.js'
   import { panelScroll } from '../lib/panel-scroll.js'
-  import { onMount, tick } from 'svelte'
+  import { onMount, tick, untrack } from 'svelte'
   import { open } from '@tauri-apps/plugin-dialog'
   import LucideIcon from '../lib/LucideIcon.svelte'
   import ConfirmDialog from '../lib/ConfirmDialog.svelte'
@@ -161,6 +161,9 @@
   // thread's while a new thread opens, loads nothing, so its folder never
   // names the next view's tab.
   let closed = false
+  // The listed path of the context's own folder, the last of its folders,
+  // while the view shows that folder or a folder inside it.
+  let ownFolder = null
   async function load(path) {
     if (closed) return
     const request = ++version
@@ -170,8 +173,32 @@
       const result = await tauri.invoke('workspace_list', { path })
       if (request !== version) return
       listing = result; filter = ''; onfolder?.(result.path)
+      if (path === folders.at(-1)?.path) ownFolder = result.path
+      else if (ownFolder && !within(result.path, ownFolder)) ownFolder = null
     } catch (e) { if (request === version) error = String(e) }
     finally { if (request === version) loading = false }
+  }
+  const within = (path, root) => path === root || path.startsWith(root + '/') || path.startsWith(root + '\\')
+  // A thread's folder takes the thread's title after its first turn, and a
+  // rename takes it again. The view reads the thread's folders with the new
+  // title, and a view in the old folder opens the new one.
+  let shownTitle = untrack(() => workspaceContext?.threadTitle)
+  $effect(() => {
+    const title = workspaceContext?.threadTitle
+    if (!workspaceContext?.threadId || !title || title === shownTitle) return
+    shownTitle = title
+    untrack(() => { void follow() })
+  })
+  async function follow() {
+    let result
+    try { result = await tauri.invoke('workspace_folders', workspaceContext) } catch { return }
+    if (closed || !Array.isArray(result)) return
+    folders = result
+    const next = result.at(-1)?.path
+    if (!next) return
+    const current = listing?.path
+    if (!current) return load(next)
+    if (ownFolder && within(current, ownFolder)) await load(next)
   }
   async function choose() {
     try { const path = await open({ directory: true, multiple: false }); if (typeof path === 'string') await load(path) }
