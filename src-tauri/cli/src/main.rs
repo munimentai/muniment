@@ -1,6 +1,7 @@
 use muniment_attach::{
-    handshake_as_with_credential, ClientError, Id, PendingPermission, PermissionDecision,
-    RedactedRunEvent, RunStreamMessage, ThreadListPage, ThreadOpenPage,
+    handshake_as_with_credential, ClientError, ErrorCode, ErrorDetails, Id, PendingPermission,
+    PermissionDecision, ProtocolError, RedactedRunEvent, RunStreamMessage, ThreadListPage,
+    ThreadOpenPage,
 };
 use std::ffi::OsString;
 use std::io::{self, BufRead, IsTerminal, Read, Write};
@@ -178,6 +179,7 @@ impl RuntimeRecordBackend {
         match call(client, body) {
             Ok(answer) => Ok(answer),
             Err(error) => {
+                let refusal = client.last_request_error().cloned();
                 if matches!(
                     error,
                     ClientError::ConnectionClosed
@@ -188,7 +190,7 @@ impl RuntimeRecordBackend {
                 ) {
                     self.client = None;
                 }
-                Err(format!("{error}. {}", record_guidance(&error)))
+                Err(record_failure(&error, refusal.as_ref()))
             }
         }
     }
@@ -205,6 +207,45 @@ impl mcp::RecordBackend for RuntimeRecordBackend {
 
     fn commit(&mut self, body: serde_json::Value) -> Result<serde_json::Value, String> {
         self.call(|client, body| client.record_commit(body), body)
+    }
+}
+
+/// The text the agent reads when a record call fails. A refusal the runtime
+/// sent reads as the reason it names, and only a retryable one asks for a
+/// retry.
+fn record_failure(error: &ClientError, refusal: Option<&ProtocolError>) -> String {
+    let Some(refusal) = refusal else {
+        return format!("{error}. {}", record_guidance(error));
+    };
+    let reason = match refusal.details() {
+        Some(ErrorDetails::RequestReason { reason }) => reason.trim_end_matches('.').to_owned(),
+        _ => serde_json::to_value(refusal.message())
+            .ok()
+            .and_then(|message| {
+                message
+                    .as_str()
+                    .map(|text| text.trim_end_matches('.').to_owned())
+            })
+            .unwrap_or_else(|| error.to_string()),
+    };
+    let guidance = if refusal.retryable() {
+        "Try the call again."
+    } else {
+        match refusal.code() {
+            ErrorCode::InvalidRequest | ErrorCode::MalformedFrame | ErrorCode::PayloadTooLarge => {
+                "Change the arguments, then call the tool again."
+            }
+            ErrorCode::ProtocolIncompatible | ErrorCode::UnsupportedOperation => {
+                "Update Muniment, then call the tool again."
+            }
+            ErrorCode::Unauthorized | ErrorCode::AuthorizationFailed => record_guidance(error),
+            _ => "",
+        }
+    };
+    if guidance.is_empty() {
+        format!("{reason}.")
+    } else {
+        format!("{reason}. {guidance}")
     }
 }
 
@@ -969,6 +1010,51 @@ mod tests {
         assert_eq!(metadata.uid(), unix_abi::effective_uid());
         assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn record_failure_reads_the_refusal_reason_and_asks_a_retry_only_when_retryable() {
+        let invalid = ProtocolError::invalid_request_with_reason("company_id is empty");
+        assert_eq!(
+            record_failure(&ClientError::RequestRejected, Some(&invalid)),
+            "company_id is empty. Change the arguments, then call the tool again."
+        );
+        let plain = record_failure(
+            &ClientError::RequestRejected,
+            Some(&ProtocolError::invalid_request()),
+        );
+        assert_eq!(
+            plain,
+            "The request is invalid. Change the arguments, then call the tool again."
+        );
+        let missing = record_failure(
+            &ClientError::RequestRejected,
+            Some(&ProtocolError::transfer_not_found()),
+        );
+        assert_eq!(missing, "The artifact transfer was not found.");
+        let busy = record_failure(
+            &ClientError::RequestRejected,
+            Some(&ProtocolError::desktop_busy()),
+        );
+        assert_eq!(
+            busy,
+            "The desktop is busy with another request. Try the call again."
+        );
+        for refusal in [
+            invalid,
+            ProtocolError::invalid_request(),
+            ProtocolError::transfer_not_found(),
+            ProtocolError::unsupported_operation(),
+        ] {
+            assert!(
+                !record_failure(&ClientError::RequestRejected, Some(&refusal))
+                    .contains("Try the call again")
+            );
+        }
+        assert_eq!(
+            record_failure(&ClientError::DesktopUnavailable, None),
+            "the Muniment desktop attach service is unavailable. Open the Muniment desktop, then try again."
+        );
     }
 
     #[test]
