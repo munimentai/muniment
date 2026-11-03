@@ -11,7 +11,23 @@
   // that arrives later shows under the head.
   setContext('page-part', { get title() { return title }, get note() { return note } })
   let node = $state()
-  $effect(() => { if (focus && node) node.scrollIntoView?.({ block: 'start' }) })
+  // Parts above this one load their sections after it scrolls and push it
+  // down, so it scrolls again as the page grows until the user scrolls,
+  // clicks or types, or for two seconds.
+  $effect(() => {
+    if (!focus || !node) return
+    const scroll = () => node.scrollIntoView?.({ block: 'start' })
+    scroll()
+    const page = node.parentElement
+    if (!page || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(scroll)
+    observer.observe(page)
+    const stop = () => observer.disconnect()
+    const events = ['wheel', 'touchstart', 'pointerdown', 'keydown']
+    for (const name of events) window.addEventListener(name, stop, { capture: true, once: true })
+    const timer = setTimeout(stop, 2000)
+    return () => { stop(); clearTimeout(timer); for (const name of events) window.removeEventListener(name, stop, { capture: true }) }
+  })
 </script>
 
 <div class="settings-part" data-settings-part={id} bind:this={node}>
