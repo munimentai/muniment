@@ -1396,8 +1396,8 @@ pub fn remove_deleted_memory(profile: &Path) -> Result<Vec<String>, String> {
 /// Removes an agent, its routines and its run history, and its folder when
 /// that holds only Muniment's own files. A folder with the user's files
 /// stays, and the answer names it. With `remove_memory`, its private memory
-/// folder goes too; the user confirms that first, since the memory cannot
-/// be recovered.
+/// folder and the facts its memory saved in its folder go too; the user
+/// confirms that first, since the memory cannot be recovered.
 pub fn delete_agent(profile: &Path, id: &str, remove_memory: bool) -> Result<Deleted, String> {
     let deleted = remove_agent(profile, id, remove_memory)?;
     forget_in_messaging(profile, id);
@@ -1416,6 +1416,11 @@ fn remove_agent(profile: &Path, id: &str, remove_memory: bool) -> Result<Deleted
     }
     fs::remove_file(directory.join("agent.md")).map_err(|_| "The agent could not be deleted.")?;
     crate::agent_replays::remove_all(profile, id)?;
+    if remove_memory && !directory.is_symlink() {
+        // The facts the agent's memory saved are its memory, not the user's
+        // files, so they go before the folder rule reads the folder.
+        crate::memory_files::remove_model_saved_in(&directory);
+    }
     // The folder's name record goes with the folder, so the index never
     // names a folder that is gone. A kept folder keeps its record.
     let folder_kept =
@@ -2998,6 +3003,101 @@ mod tests {
             );
             fs::remove_dir_all(root_dir).unwrap();
         }
+    }
+
+    /// Saves a fact into an agent's folder as its memory tool does in a run.
+    fn tool_fact(profile: &Path, folder: &Path, agent: &str) -> PathBuf {
+        let fact = crate::memory_files::fact_save_in(
+            &profile.join("agent-memory").join(agent),
+            folder,
+            crate::memory_files::Fact {
+                id: String::new(),
+                title: "Prefers tea".into(),
+                content: "The user prefers tea.".into(),
+                source: "thread:thread-1 run:run-1".into(),
+                trust: crate::memory_files::Trust::Conversation,
+                origin: Some(crate::memory_origin::Origin::of_run(
+                    profile, "thread-1", "run-1",
+                )),
+            },
+        )
+        .unwrap();
+        folder.join(format!("memory/facts/{}.md", fact.id))
+    }
+
+    #[test]
+    fn deleting_an_agent_with_its_memory_removes_the_facts_its_memory_saved() {
+        let (root_dir, profile) = profile();
+        let (agent, folder) = saved(&profile, "Learner");
+        crate::onboard_companion_workspace(&folder, &folder).unwrap();
+        let fact = tool_fact(&profile, &folder, &agent.id);
+        assert!(fact.is_file());
+        let deleted = delete_agent(&profile, &agent.id, true).unwrap();
+        assert_eq!(deleted, Deleted::default());
+        assert!(!folder.exists());
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    #[test]
+    fn deleting_an_agent_with_its_memory_keeps_the_users_files_in_memory() {
+        let user_fact = |profile: &Path, folder: &Path, agent: &str| {
+            let fact = crate::memory_files::fact_save_in(
+                &profile.join("agent-memory").join(agent),
+                folder,
+                crate::memory_files::Fact {
+                    id: String::new(),
+                    title: "Mine".into(),
+                    content: "My own fact.".into(),
+                    source: "Me".into(),
+                    trust: crate::memory_files::Trust::User,
+                    origin: Some(crate::memory_origin::Origin::user(Some(agent))),
+                },
+            )
+            .unwrap();
+            folder.join(format!("memory/facts/{}.md", fact.id))
+        };
+        for case in ["added", "edited", "user fact"] {
+            let (root_dir, profile) = profile();
+            let (agent, folder) = saved(&profile, "Learner");
+            let fact = tool_fact(&profile, &folder, &agent.id);
+            let kept = match case {
+                "added" => {
+                    let notes = folder.join("memory/notes.md");
+                    fs::write(&notes, "mine").unwrap();
+                    notes
+                }
+                "edited" => {
+                    let text = fs::read_to_string(&fact).unwrap();
+                    fs::write(&fact, format!("{text}\nMy edit.")).unwrap();
+                    fact.clone()
+                }
+                _ => user_fact(&profile, &folder, &agent.id),
+            };
+            let before = fs::read(&kept).unwrap();
+            let deleted = delete_agent(&profile, &agent.id, true).unwrap();
+            assert_eq!(
+                deleted.folder_kept.as_deref(),
+                Some(folder.as_path()),
+                "{case}"
+            );
+            assert_eq!(fs::read(&kept).unwrap(), before, "{case}");
+            if case != "edited" {
+                assert!(!fact.exists(), "{case}");
+            }
+            fs::remove_dir_all(root_dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn deleting_an_agent_and_keeping_its_memory_keeps_the_facts_its_memory_saved() {
+        let (root_dir, profile) = profile();
+        let (agent, folder) = saved(&profile, "Learner");
+        let fact = tool_fact(&profile, &folder, &agent.id);
+        let before = fs::read(&fact).unwrap();
+        let deleted = delete_agent(&profile, &agent.id, false).unwrap();
+        assert_eq!(deleted.folder_kept.as_deref(), Some(folder.as_path()));
+        assert_eq!(fs::read(&fact).unwrap(), before);
+        fs::remove_dir_all(root_dir).unwrap();
     }
 
     #[test]

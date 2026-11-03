@@ -340,23 +340,74 @@ fn save_unlocked(home: &Path, mut fact: Fact) -> Result<Fact, String> {
         }
         fact.id = uuid::Uuid::new_v4().to_string();
     }
+    write(home, &fact_path(&fact.id)?, &render(&fact))?;
+    Ok(fact)
+}
+/// The bytes a save writes for `fact`.
+fn render(fact: &Fact) -> String {
     let origin = fact
         .origin
         .as_ref()
         .map(|origin| format!("Origin: {}\n", origin.to_line()))
         .unwrap_or_default();
-    write(
-        home,
-        &fact_path(&fact.id)?,
-        &format!(
-            "# {}\n\nSource: {}\nTrust: {}\n{origin}\n{}\n",
-            fact.title,
-            fact.source,
-            fact.trust.as_str(),
-            fact.content
-        ),
-    )?;
-    Ok(fact)
+    format!(
+        "# {}\n\nSource: {}\nTrust: {}\n{origin}\n{}\n",
+        fact.title,
+        fact.source,
+        fact.trust.as_str(),
+        fact.content
+    )
+}
+/// Whether `path` is a fact file a model saved and nobody changed since: a
+/// regular file named by a fact id, with conversation or external trust, no
+/// user origin, and the bytes a save writes for what it holds.
+fn is_model_saved(path: &Path) -> bool {
+    let Some(id) = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_suffix(".md"))
+    else {
+        return false;
+    };
+    if fact_path(id).is_err()
+        || !fs::symlink_metadata(path).is_ok_and(|m| m.is_file() && m.len() <= MAX_TEXT as u64)
+    {
+        return false;
+    }
+    let Ok(text) = fs::read_to_string(path) else {
+        return false;
+    };
+    parse_fact(id, &text).is_ok_and(|fact| {
+        fact.trust != Trust::User
+            && fact
+                .origin
+                .as_ref()
+                .is_none_or(|origin| origin.kind != crate::memory_origin::OriginKind::User)
+            && render(&fact) == text
+    })
+}
+/// Removes each fact in `home`'s `memory/facts` that a model saved and
+/// nobody changed since. A fact the user wrote or edited, any other file and
+/// a link stay.
+pub(crate) fn remove_model_saved_in(home: &Path) {
+    let _guard = WRITE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Ok(directory) = checked_path(home, "memory/facts") else {
+        return;
+    };
+    if !fs::symlink_metadata(&directory).is_ok_and(|m| m.is_dir()) {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(&directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if is_model_saved(&path) {
+            let _ = fs::remove_file(path);
+        }
+    }
 }
 const USAGE_FILE: &str = "memory-usage.json";
 const MAX_USAGE: u64 = 256 * 1024;
