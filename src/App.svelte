@@ -1681,18 +1681,27 @@
   // The settled turns Review changes reads, newest first.
   const reviewTurns = $derived(messages.flatMap((message, index) => message.role === 'assistant' && message.run?.id && settledPhases.has(message.run.phase)
     ? [{ runId: message.run.id, run: message.run, prompt: promptFolders(message.run.prompt || (messages[index - 1]?.role === 'user' ? messages[index - 1].text : '')).text }] : []).reverse().slice(0, 20))
-  // A turn offers Review changes when its record counts a changed file, or
-  // when its commands changed files by the turn's checkpoint in core.
+  // A turn offers Review changes when its checkpoints in core hold a changed
+  // file. A turn whose record counts an edit or a command asks core. Core
+  // saves a turn's last checkpoint after the turn completes, so an answer
+  // with no saved files asks again a few times.
   const reviewable = $derived(!threadGroup && !currentSummary?.replica)
-  let commandChanges = $state({})
-  const turnChanged = (run) => reviewable && reviewTurns.some((turn) => turn.runId === run.id) && (changedFiles([{ run }]).length > 0 || commandChanges[run.id] > 0)
+  let savedChanges = $state({})
+  const savedChangesRetries = [500, 1500, 4500]
+  const turnChanged = (run) => reviewable && savedChanges[run.id] > 0 && reviewTurns.some((turn) => turn.runId === run.id)
+  function askSavedChanges(threadId, runId, attempt = 0) {
+    agentRequest(tauri, composerRuntime, 'run.changes', { thread_id: threadId, run_id: runId }).then((value) => {
+      if (value?.available) savedChanges[runId] = value.files?.length ?? 0
+      else if (attempt < savedChangesRetries.length) setTimeout(() => askSavedChanges(threadId, runId, attempt + 1), savedChangesRetries[attempt])
+    }, () => {})
+  }
   $effect(() => {
     const threadId = currentThreadId
     if (!threadId || !reviewable) return
     for (const { runId, run } of reviewTurns) {
-      if (run.phase !== 'complete' || untrack(() => runId in commandChanges) || changedFiles([{ run }]).length || !ranCommands(run)) continue
-      commandChanges[runId] = 0
-      agentRequest(tauri, composerRuntime, 'run.changes', { thread_id: threadId, run_id: runId }).then((value) => { commandChanges[runId] = value?.files?.length ?? 0 }, () => {})
+      if (run.phase !== 'complete' || untrack(() => runId in savedChanges) || (!changedFiles([{ run }]).length && !ranCommands(run))) continue
+      savedChanges[runId] = 0
+      askSavedChanges(threadId, runId)
     }
   })
   $effect(() => { void currentThreadId; untrack(() => { rewindNotice = null; reviewing = null; rewinding = null }) })

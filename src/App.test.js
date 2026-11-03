@@ -9147,7 +9147,8 @@ describe('provenance line', () => {
       ]
       if (command === 'agent_request' && args.operation === 'run.changes') {
         asked.push(args.body.run_id)
-        return { run_id: args.body.run_id, available: true, files: args.body.run_id === 'run-bash' ? [{ path: 'dist/app.js', status: 'modified', additions: 1, deletions: 0 }] : [] }
+        const files = { 'run-bash': 'dist/app.js', 'run-edit': 'notes.md' }[args.body.run_id]
+        return { run_id: args.body.run_id, available: true, files: files ? [{ path: files, status: 'modified', additions: 1, deletions: 0 }] : [] }
       }
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -9159,8 +9160,40 @@ describe('provenance line', () => {
     const offers = (text) => !!screen.getByText(text).closest('.response').querySelector('.receipt-line .review-turn')
     await waitFor(() => expect(offers('Ran the build.')).toBe(true))
     expect([offers('Edited the notes.'), offers('Read the notes.'), offers('Pushed.')]).toEqual([true, false, false])
-    // Only a turn that ran a command and counts no edit asks core for its checkpoint.
-    expect(asked.sort()).toEqual(['run-bash', 'run-push'])
+    // A turn that counts an edit or ran a command asks core for its checkpoint.
+    expect(asked.sort()).toEqual(['run-bash', 'run-edit', 'run-push'])
+  })
+
+  // Core saves a turn's last checkpoint after the turn completes. The first
+  // turn's record counts a write that core saved nothing for, and the second
+  // turn's first answer comes before its checkpoint lands.
+  it('offers Review changes on exactly the turns core saved changes for', async () => {
+    const asked = []
+    invoke.mockImplementation(async (command, args) => {
+      if (command === 'project_list') return { projects: {}, threads: {} }
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_thread_open') return [
+        { runId: 'run-first', phase: 'complete', text: 'Wrote the notes.', prompt: 'Write', receipt: { time: '2s' },
+          toolActivity: [{ effectId: 'w1', displayName: 'write', status: 'completed', input: JSON.stringify({ path: 'notes.md', content: 'a' }) }] },
+        { runId: 'run-second', phase: 'complete', text: 'Added a line.', prompt: 'Append', receipt: { time: '2s' },
+          toolActivity: [{ effectId: 'b1', displayName: 'bash', status: 'completed', input: JSON.stringify({ command: 'echo b >> notes.md' }) }] },
+      ]
+      if (command === 'agent_request' && args.operation === 'run.changes') {
+        asked.push(args.body.run_id)
+        if (args.body.run_id === 'run-first') return { run_id: 'run-first', folder: '/work', available: false, unavailable: 'The folder could not be read, so its files were not saved.', files: [], more: 0 }
+        if (asked.filter((id) => id === 'run-second').length === 1) return { run_id: 'run-second', available: false, unavailable: 'This turn is still running or ended before its files were saved.', files: [], more: 0 }
+        return { run_id: 'run-second', folder: '/work', available: true, more: 0, files: [{ path: 'notes.md', status: 'modified', additions: 1, deletions: 0 }] }
+      }
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'chat_select_thread') return undefined
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    expect(await screen.findByText('Added a line.')).toBeInTheDocument()
+    const offers = (text) => !!screen.getByText(text).closest('.response').querySelector('.receipt-line .review-turn')
+    await waitFor(() => expect(offers('Added a line.')).toBe(true), { timeout: 3000 })
+    expect(offers('Wrote the notes.')).toBe(false)
   })
 
   // A turn's dialogs sit over the thread. Escape in one closes it alone: the
@@ -9180,7 +9213,7 @@ describe('provenance line', () => {
       if (command === 'project_list') return { projects: {}, threads: {} }
       if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
       if (command === 'chat_thread_open') return [{ runId: 'run-edit', phase: 'complete', text: 'Edited the notes.', prompt: 'Edit the notes', receipt: { model: 'example', turns: 2, routing }, toolActivity: [edit] }]
-      if (command === 'agent_request' && args.operation === 'run.changes') return { run_id: args.body.run_id, available: true, more: 0, files: [], diff: { schemaVersion: 1, id: 'turn', truncated: false, files: [] } }
+      if (command === 'agent_request' && args.operation === 'run.changes') return { run_id: args.body.run_id, available: true, more: 0, files: [{ path: 'notes.md', status: 'modified', additions: 1, deletions: 1, binary: false, state: 'applied', hunks_applied: [true] }], diff: { schemaVersion: 1, id: 'turn', truncated: false, files: [{ oldPath: 'notes.md', newPath: 'notes.md', status: 'modified', binary: false, hunks: [{ oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, header: '@@ -1,1 +1,1 @@', lines: [] }] }] } }
       if (command === 'agent_request' && args.operation === 'thread.rewind_preview') return { thread_id: args.body.thread_id, run_id: args.body.run_id, available: true, turns: 1, conversation: 'restore', files: { files_available: true, restore: [], remove: [], cannot_restore: [], not_covered: [], token: 'token-1' }, irreversible: [] }
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
