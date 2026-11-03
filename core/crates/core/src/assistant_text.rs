@@ -550,15 +550,22 @@ fn assignment_candidate(bytes: &[u8], start: usize, complete: bool) -> RuleCandi
     };
     let value_start = assignment_value_prefix_end(bytes, delimiter_end);
     let Some(end) = assignment_value_end(bytes, value_start) else {
-        return if bytes
-            .get(value_start + 150)
-            .is_some_and(|byte| is_assignment_value_byte(*byte))
+        // Only one unbroken run of value bytes past the ceiling is over-span.
+        // A later word in prose after a short value is not.
+        let run = assignment_value_run_end(bytes, value_start);
+        return if run - value_start == ASSIGNMENT_VALUE_MAX
+            && bytes
+                .get(run)
+                .is_some_and(|byte| is_assignment_value_byte(*byte))
         {
             RuleCandidate::OverSpan
         } else {
             RuleCandidate::None
         };
     };
+    if !is_secret_like_value(&bytes[value_start..end]) {
+        return RuleCandidate::None;
+    }
     if complete || end < bytes.len() {
         RuleCandidate::Matched(end)
     } else {
@@ -600,6 +607,9 @@ fn assignment_delimiter_end(bytes: &[u8], start: usize) -> Option<usize> {
     {
         end += 1;
     }
+    let worded = bytes[start..end]
+        .iter()
+        .any(|byte| !matches!(byte, b' ' | b'\t'));
     DELIMITERS
         .into_iter()
         .find(|delimiter| {
@@ -607,6 +617,8 @@ fn assignment_delimiter_end(bytes: &[u8], start: usize) -> Option<usize> {
                 .get(end..)
                 .is_some_and(|remaining| remaining.starts_with(delimiter))
         })
+        // A comma after more words is a list in prose, not an assignment.
+        .filter(|delimiter| !(worded && *delimiter == b","))
         .map(|delimiter| end + delimiter.len())
 }
 
@@ -622,23 +634,75 @@ fn assignment_value_prefix_end(bytes: &[u8], start: usize) -> usize {
     end
 }
 
-fn assignment_value_end(bytes: &[u8], start: usize) -> Option<usize> {
-    const MIN_VALUE: usize = 10;
-    const MAX_VALUE: usize = 150;
+const ASSIGNMENT_VALUE_MAX: usize = 150;
 
+fn assignment_value_run_end(bytes: &[u8], start: usize) -> usize {
     let mut end = start;
-    while end - start < MAX_VALUE
+    while end - start < ASSIGNMENT_VALUE_MAX
         && bytes
             .get(end)
             .is_some_and(|byte| is_assignment_value_byte(*byte))
     {
         end += 1;
     }
+    end
+}
+
+fn assignment_value_end(bytes: &[u8], start: usize) -> Option<usize> {
+    const MIN_VALUE: usize = 10;
+
+    let end = assignment_value_run_end(bytes, start);
     (end - start >= MIN_VALUE
         && bytes.get(end).is_none_or(|byte| {
             byte.is_ascii_whitespace() || matches!(byte, b'\'' | b'"' | b'`' | b';' | b'\\')
         }))
     .then_some(end)
+}
+
+/// Whether an assignment value reads as a credential rather than a word.
+///
+/// A value with a known provider prefix counts. Any other value needs a
+/// digit, or a mix of upper and lower case past the length of a long word,
+/// and enough distinct bytes that it is not one repeated run.
+fn is_secret_like_value(value: &[u8]) -> bool {
+    const PREFIXES: [&[u8]; 9] = [
+        b"sk-",
+        b"sk_",
+        b"rk_",
+        b"ghp_",
+        b"gho_",
+        b"github_pat_",
+        b"xox",
+        b"AKIA",
+        b"hf_",
+    ];
+    const MIN_LETTER_ONLY: usize = 20;
+    const MIN_ENTROPY_BITS: f64 = 3.0;
+
+    if PREFIXES.iter().any(|prefix| value.starts_with(prefix)) {
+        return true;
+    }
+    let digit = value.iter().any(u8::is_ascii_digit);
+    let upper = value.iter().any(u8::is_ascii_uppercase);
+    let lower = value.iter().any(u8::is_ascii_lowercase);
+    let classes = digit || (upper && lower && value.len() >= MIN_LETTER_ONLY);
+    classes && shannon_entropy(value) >= MIN_ENTROPY_BITS
+}
+
+fn shannon_entropy(value: &[u8]) -> f64 {
+    let mut counts = [0_u32; 256];
+    for byte in value {
+        counts[usize::from(*byte)] += 1;
+    }
+    let length = f64::from(u32::try_from(value.len()).unwrap_or(u32::MAX));
+    counts
+        .iter()
+        .filter(|count| **count > 0)
+        .map(|count| {
+            let share = f64::from(*count) / length;
+            -share * share.log2()
+        })
+        .sum()
 }
 
 fn jwt_candidate(bytes: &[u8], start: usize, complete: bool) -> RuleCandidate {

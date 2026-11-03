@@ -103,7 +103,7 @@ fn overlong_assignment_withholds_later_provider_token() {
 
 #[test]
 fn assignment_accepts_value_length_ceiling() {
-    let value = "a".repeat(150);
+    let value = "a1B2c3D4e5".repeat(15);
     let complete = format!("key={value}");
     assert_eq!(scan(&complete, true).matches[0].range, 0..complete.len());
     assert!(scan(&complete, false).matches.is_empty());
@@ -125,6 +125,45 @@ fn overlong_assignment_near_misses_withhold_nothing() {
         let result = scan(&content, true);
         assert!(result.matches.is_empty(), "{content:?}");
         assert_eq!(result.withhold_from, None, "{content:?}");
+    }
+}
+
+#[test]
+fn prose_that_names_a_label_word_is_not_an_assignment() {
+    for content in [
+        "Highlight key developments, accomplishments, and blockers from the week. Keep it short and send it to the team every Friday afternoon.",
+        "Summarize the key points: accomplishments and risks.",
+        "The key date, 2025-11-03 matters.",
+        "Use the token: placeholder until the owner adds one.",
+        "Ask for a password: never store it, and never repeat it back.",
+        "Rotate the secret = weekly, and log the rotation.",
+        "Auth: Shibboleth, then Kerberos",
+        "token=aaaaaaaaaaaa",
+    ] {
+        let result = scan(content, true);
+        assert!(result.matches.is_empty(), "{content:?}");
+        assert_eq!(result.withhold_from, None, "{content:?}");
+    }
+}
+
+#[test]
+fn credential_shaped_assignments_stay_caught() {
+    for assignment in [
+        "api_key=Zx8qL2mN4vB7cR1tY6wP",
+        "password: Tr0ub4dor3xQ",
+        "secret = 9f86d081884c7d659a2feaa0c55ad015",
+        "token: sk_test_abcdef0123",
+        "Authorization: Bearer_eyJ0eXAiOiJKV1QiLCJhbGciOi",
+        "client_secret=AbCdEfGhIjKlMnOpQrStUvWx",
+    ] {
+        let content = format!("safe {assignment} text");
+        let result = scan(&content, true);
+        assert_eq!(result.matches.len(), 1, "{assignment:?}");
+        assert_eq!(
+            result.matches[0].rule,
+            Rule::SecretAssignment,
+            "{assignment:?}"
+        );
     }
 }
 

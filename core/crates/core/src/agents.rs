@@ -1892,6 +1892,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn instructions_in_prose_save_and_a_credential_does_not() {
+        let mut agent = Agent {
+            name: "Weekly digest".into(),
+            instructions: "Highlight key developments, accomplishments, and blockers. \
+                Ask for a password: never store it. Keep the token: placeholder."
+                .into(),
+            ..Agent::default()
+        };
+        assert_eq!(validate(&agent), Ok(()));
+
+        agent.instructions = "Post the digest with api_key=Zx8qL2mN4vB7cR1tY6wP.".into();
+        assert_eq!(
+            validate(&agent),
+            Err("Remove credentials from the agent instructions.".into())
+        );
+    }
+
+    #[test]
     fn write_diagnostics_report_steps_and_codes_without_private_text() {
         for step in ["create_temp", "write_temp", "sync_temp", "replace_file"] {
             let error = std::io::Error::from_raw_os_error(32);
