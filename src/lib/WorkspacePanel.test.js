@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/svelte'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/svelte'
 import '@testing-library/jest-dom/vitest'
 import { afterEach, expect, it, vi } from 'vitest'
 import WorkspacePanel from './WorkspacePanel.svelte'
@@ -9,6 +9,12 @@ vi.mock('@xterm/xterm', () => ({Terminal: class {
   onWriteParsed() { return {dispose() {}} }
 }}))
 vi.mock('@xterm/addon-fit', () => ({FitAddon: class {fit() {}}}))
+const editors = vi.hoisted(() => ({}))
+vi.mock('../files/code-editor.js', () => ({monaco: {Uri: {from: x => x}, KeyMod: {CtrlCmd: 1}, KeyCode: {KeyS: 2}, editor: {setTheme() {}, createModel(value, _, uri) {
+  const model = {value, getValue: () => model.value, setValue(next) { model.value = next; model.change?.() }, onDidChangeContent(fn) { model.change = fn; return {dispose() {}} }, dispose() {}}
+  editors[uri.path] = model
+  return model
+}, create: () => ({addCommand() {}, updateOptions() {}, dispose() {}})}}}))
 afterEach(cleanup)
 it('keeps each context shell alive and restores it without restarting', async () => {
   vi.stubGlobal('ResizeObserver', class {observe() {} disconnect() {}})
@@ -110,13 +116,13 @@ it('closes a deleted draft\'s file tabs and names a hidden Files tab after the t
   const view = render(WorkspacePanel, {props: {tauri: {invoke}, selected: 'files', context: {threadId: 'draft', label: 'New agent'}, threadId: 'draft', onselect}})
   await view.rerender({props: {requestedFile: draftFile}})
   expect(onselect).toHaveBeenLastCalledWith(`file:${draftFile.path}`)
-  await view.rerender({props: {selected: `file:${draftFile.path}`, context: {threadId: 't2', threadTitle: 'Plan'}, threadId: 't2'}})
+  await view.rerender({props: {selected: `file:${draftFile.path}`, requestedFile: null, context: {threadId: 't2', threadTitle: 'Plan'}, threadId: 't2'}})
   await view.rerender({props: {requestedFile: threadFile}})
   await view.rerender({props: {selected: `file:${threadFile.path}`}})
-  expect(screen.getByRole('tab', {name: 'live37-draft.txt'})).toBeInTheDocument()
+  expect(screen.queryByRole('tab', {name: 'live37-draft.txt'})).toBeNull()
   expect(screen.getByRole('tab', {name: 'Plan'})).toBeInTheDocument()
   await view.rerender({props: {gone: {ids: ['draft']}}})
-  await waitFor(() => expect(screen.queryByRole('tab', {name: 'live37-draft.txt'})).toBeNull())
+  await waitFor(() => expect(view.container.querySelectorAll('.file-view')).toHaveLength(1))
   expect(screen.getByRole('tab', {name: 'plan.md'})).toHaveAttribute('aria-selected', 'true')
   expect(screen.getByRole('tab', {name: 'Plan'})).toBeInTheDocument()
   expect(invoke.mock.calls.filter(([command, args]) => command === 'workspace_folders' && args.threadId === 't2')).toHaveLength(0)
@@ -143,5 +149,43 @@ it('selects the Files tab when the selected file tab closed while the panel was 
   await waitFor(() => expect(onselect).toHaveBeenLastCalledWith('files'))
   await view.rerender({props: {selected: 'files'}})
   expect(screen.getByRole('tab', {name: 'Plan'})).toHaveAttribute('aria-selected', 'true')
+  vi.unstubAllGlobals()
+})
+// A file tab stays with the thread that opened it. Another thread shows only
+// the shared tabs, and the first thread gets its tab, its selection and its
+// unsaved edit back.
+it('keeps a file tab, its selection and its unsaved edit in the thread that opened it', async () => {
+  vi.stubGlobal('ResizeObserver', class {observe() {} disconnect() {}})
+  vi.stubGlobal('matchMedia', () => ({matches: false, addEventListener() {}, removeEventListener() {}}))
+  const invoke = vi.fn(async (command, args) => command === 'workspace_folders' ? [{label: 'Thread workspace', path: `/home/sessions/${args.threadId}`}]
+    : command === 'workspace_list' ? {path: args.path, entries: []}
+    : command === 'workspace_read_text' ? {content: 'saved', revision: 'r1', path: args.path} : '')
+  let selected = 'files'
+  const onselect = vi.fn(id => { selected = id })
+  const file = {path: '/home/sessions/A/notes.md', name: 'notes.md', directory: false}
+  const view = render(WorkspacePanel, {props: {tauri: {invoke}, selected, context: {threadId: 'A', threadTitle: 'Alpha'}, threadId: 'A', onselect}})
+  await view.rerender({props: {requestedFile: file}})
+  await view.rerender({props: {selected, requestedFile: null}})
+  expect(screen.getByRole('tab', {name: 'notes.md'})).toHaveAttribute('aria-selected', 'true')
+  await waitFor(() => expect(editors[file.path]).toBeDefined())
+  editors[file.path].setValue('edited')
+  await waitFor(() => expect(screen.getByLabelText('Unsaved changes')).toBeInTheDocument())
+  // Thread B shows no tab of thread A, and the panel falls back to its Files tab.
+  await view.rerender({props: {context: {threadId: 'B', threadTitle: 'Beta'}, threadId: 'B'}})
+  await waitFor(() => expect(selected).toBe('files'))
+  await view.rerender({props: {selected}})
+  expect(screen.queryByRole('tab', {name: /^notes\.md/})).toBeNull()
+  expect(screen.getByRole('tab', {name: 'Beta'})).toHaveAttribute('aria-selected', 'true')
+  // A key press in B never walks to A's tab.
+  await fireEvent.keyDown(screen.getByRole('tablist'), {key: 'End'})
+  expect(selected).toBe('files')
+  // Back in A, the tab is selected again and holds the edit.
+  await view.rerender({props: {context: {threadId: 'A', threadTitle: 'Alpha'}, threadId: 'A'}})
+  await waitFor(() => expect(selected).toBe(`file:${file.path}`))
+  await view.rerender({props: {selected}})
+  expect(screen.getByRole('tab', {name: /^notes\.md/})).toHaveAttribute('aria-selected', 'true')
+  expect(screen.getByLabelText('Unsaved changes')).toBeInTheDocument()
+  expect(editors[file.path].getValue()).toBe('edited')
+  expect(invoke.mock.calls.filter(([command]) => command === 'workspace_read_text')).toHaveLength(1)
   vi.unstubAllGlobals()
 })

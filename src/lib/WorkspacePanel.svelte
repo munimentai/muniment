@@ -63,47 +63,63 @@
     if (!['rename','trash'].includes(action)) return
     for (const tab of [...tabs]) if (paths.some(path => tab.file?.path === path || tab.file?.path.startsWith(path + '/') || tab.file?.path.startsWith(path + '\\'))) close(tab.id)
   }
-  // A file tab belongs to the thread, draft or agent whose view opened it.
+  // A file tab belongs to the thread, draft or agent whose view opened it,
+  // and the strip shows only the open view's file tabs beside the shared
+  // tools. A view with no such owner, such as a catalog, owns its own tabs.
   // When `gone` names that owner, deleted with its folder, the tab closes,
   // unless it holds unsaved edits.
-  const owner = () => context?.threadId || context?.agentId || context?.artifactId || (context ? null : threadId) || null
+  const owner = $derived(context?.threadId || context?.agentId || context?.artifactId || (context ? null : threadId) || contextKey)
+  const viewTabs = $derived(tabs.filter(t => !t.file || t.owner === owner))
   function openFile(file) {
     const id = `file:${file.path}`
-    if (!tabs.some(t => t.id === id)) tabs = [...tabs,{id,name:file.name,file,owner:owner()}]
+    const open = tabs.find(t => t.id === id)
+    // A file another view holds open with unsaved edits stays in that view.
+    if (open && open.owner !== owner && !dirtyFiles.has(id)) tabs = tabs.map(t => t === open ? {...t, owner, threadId} : t)
+    else if (!open) tabs = [...tabs,{id,name:file.name,file,owner,threadId}]
     onselect(id)
   }
   $effect(() => {
     const ids = gone?.ids
-    if (ids?.length) untrack(() => { for (const tab of [...tabs]) if (tab.file && tab.owner && ids.includes(tab.owner) && !dirtyFiles.has(tab.id)) close(tab.id) })
+    if (ids?.length) untrack(() => { for (const tab of [...tabs]) if (tab.file && ids.includes(tab.owner) && !dirtyFiles.has(tab.id)) close(tab.id) })
   })
   function close(id, discard = false) {
     if (dirtyFiles.has(id) && !discard) { closing = id; return }
     if (id === 'terminal') terminalSessions = []
     if (id === 'browser' || id === 'artifacts') void tauri.invoke('browser_command', {request:{view:id === 'artifacts' ? 'artifact' : 'browser',action:'close',value:''}}).catch(() => {})
     markDirty(id, false)
-    const index = tabs.findIndex(t => t.id === id)
+    const index = viewTabs.findIndex(t => t.id === id)
     tabs = tabs.filter(t => t.id !== id)
-    if (selected === id) onselect(tabs[Math.min(index,tabs.length-1)]?.id ?? null)
+    if (selected === id) onselect(viewTabs[Math.min(index,viewTabs.length-1)]?.id ?? null)
   }
   async function keys(e) {
     if (!['ArrowLeft','ArrowRight','Home','End','Delete'].includes(e.key)) return
     e.preventDefault()
     if (e.key === 'Delete') { close(selected); return }
-    const index = tabs.findIndex(t => t.id === selected)
-    const next = e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length-1 : (index+(e.key === 'ArrowRight'?1:-1)+tabs.length)%tabs.length
-    onselect(tabs[next].id)
+    const index = viewTabs.findIndex(t => t.id === selected)
+    const next = e.key === 'Home' ? 0 : e.key === 'End' ? viewTabs.length-1 : (index+(e.key === 'ArrowRight'?1:-1)+viewTabs.length)%viewTabs.length
+    onselect(viewTabs[next].id)
     const list = e.currentTarget
     await tick()
     list?.querySelector('[aria-selected="true"]')?.focus()
   }
   $effect(() => { if (selected && tools[selected] && !tabs.some(t => t.id === selected)) tabs = [...tabs,{id:selected,...tools[selected]}] })
-  // A selected file tab that closed while the panel was put aside, as when
-  // its draft was deleted from Agents, comes back with no tab. The panel
-  // then selects the Files tab, or the first tab, or a thread's Files.
+  // Each view keeps its active tab. A view the person returns to selects
+  // its own tab again. A selected file tab the view does not show, one that
+  // belongs to another view or closed while the panel was put aside, gives
+  // way to the Files tab, or the first tab, or a thread's Files.
+  const activeTabs = {}
+  let activeOwner = null
   $effect(() => {
-    const id = selected
-    if (!id?.startsWith('file:') || tabs.some(t => t.id === id) || (requestedFile && requestedFile !== openedRequest)) return
-    untrack(() => onselect(tabs.find(t => t.id === 'files')?.id ?? tabs[0]?.id ?? (threadId ? 'files' : null)))
+    const key = owner, id = selected, back = key !== activeOwner ? activeTabs[key] : null
+    activeOwner = key
+    void tabs.length
+    if (requestedFile && requestedFile !== openedRequest) return
+    untrack(() => {
+      const shown = tabId => viewTabs.some(t => t.id === tabId)
+      if (id && back && back !== id && shown(back)) onselect(back)
+      else if (id?.startsWith('file:') && !shown(id)) onselect(viewTabs.find(t => t.id === 'files')?.id ?? viewTabs[0]?.id ?? (threadId ? 'files' : null))
+      else if (id && shown(id)) activeTabs[key] = id
+    })
   })
   $effect(() => {
     selected; tabs.length
@@ -116,7 +132,7 @@
 <aside data-panel="workspace" class="workspace-panel" class:hidden={!selected} class:maximized aria-label="Workspace panel">
   <header data-panel-header class="tabs-header">
     <div class="tabs fade-viewport" bind:this={tabList} use:overflowFade role="tablist" tabindex="-1" aria-label="Open workspace tabs" onkeydown={keys}>
-      {#each tabs as tab (tab.id)}
+      {#each viewTabs as tab (tab.id)}
         <div class="tab" class:active={selected === tab.id}>
           <button type="button" role="tab" title={tab.file?.path || (tab.id === 'files' ? folderPaths[contextKey] : tab.id === 'terminal' ? terminalPaths[contextKey] : tabName(tab))} aria-selected={selected === tab.id} tabindex={selected === tab.id ? 0 : -1} onclick={() => onselect(tab.id)}>
             {#if tab.file}<FileIcon name={tab.name} />{:else}<LucideIcon name={tab.icon} />{/if}<span class="tab-label">{tabName(tab)}</span>{#if dirtyFiles.has(tab.id)}<span class="dirty" aria-label="Unsaved changes">•</span>{/if}
@@ -134,7 +150,7 @@
   {#if tabs.some(t => t.id === 'files')}{#key contextKey}<FilesWorkspace {context} onwillchange={canChange} onchanged={filesChanged} hidden={selected !== 'files'} {tauri} {threadId} {projectId} initialPath="" onfolder={path => { folderPaths = {...folderPaths, [contextKey]: path}; onfolder?.(path) }} onfile={openFile} />{/key}{/if}
   {#each terminalSessions as session (session.key)}{#await loadTerminal() then module}{@const TerminalWorkspace = module.default}<TerminalWorkspace oncwd={path => terminalPaths = {...terminalPaths, [session.key]: path}} {tauri} context={session.context} hidden={selected !== 'terminal' || session.key !== contextKey} />{/await}{/each}
   {#each tabs.filter(t => t.file) as tab (tab.id)}
-    <div class="file-view" class:hidden={selected !== tab.id}><WorkspaceFile {tauri} file={tab.file} {threadId} ondirty={dirty => markDirty(tab.id, dirty)} /></div>
+    <div class="file-view" class:hidden={selected !== tab.id}><WorkspaceFile {tauri} file={tab.file} threadId={tab.threadId} ondirty={dirty => markDirty(tab.id, dirty)} /></div>
   {/each}
 </aside>
 {#if closing}<ConfirmDialog title="Discard unsaved changes?" cancelLabel="Cancel" confirmLabel="Discard" destructive onDecision={yes => { if (yes) close(closing, true); closing = null }}><p>Your edits to {tabs.find(t => t.id === closing)?.name} have not been saved.</p></ConfirmDialog>{/if}
