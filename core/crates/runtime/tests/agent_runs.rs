@@ -1456,6 +1456,7 @@ fn creation_chat(profile: &Path, thread_id: &str, agent: &str) {
             result_id: Some(agent.to_owned()),
             turns: Vec::new(),
             title: None,
+            created_at: None,
         },
     )
     .unwrap();
@@ -1516,6 +1517,7 @@ fn the_runtime_start_deletes_the_creation_chats_deleted_agents_left() {
             result_id: None,
             turns: Vec::new(),
             title: None,
+            created_at: None,
         },
     )
     .unwrap();

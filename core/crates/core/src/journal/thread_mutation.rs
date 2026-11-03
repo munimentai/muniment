@@ -205,17 +205,47 @@ fn thread_live(journal: &mut RunJournal, thread_id: &str) -> Result<bool, Journa
             .all(|event| event.event_type != "thread.deleted"))
 }
 
+/// Whether a thread held a message before `started_at`, the time it became
+/// a creation chat. A thread with a run and no known start may have, so it
+/// counts as one that did.
+fn held_messages_before(
+    journal: &mut RunJournal,
+    thread_id: &str,
+    started_at: Option<&str>,
+) -> Result<bool, JournalError> {
+    let Some(first) = journal.first_message_at(thread_id)? else {
+        return Ok(false);
+    };
+    let parse = |at: &str| chrono::DateTime::parse_from_rfc3339(at).ok();
+    Ok(match (parse(&first), started_at.and_then(parse)) {
+        (Some(first), Some(started)) => first < started,
+        _ => true,
+    })
+}
+
 /// Deletes the creation chats of an agent the user deleted, with their
 /// records and folders. The chat belongs to the agent, so the delete needs
-/// no other owner check. Answers the threads it deleted.
+/// no other owner check. A thread that held a message before it became a
+/// creation chat is the user's: it stays, and only its record goes.
+/// Answers the threads it deleted.
 pub fn delete_agent_creation_threads_now(
     journal: &mut RunJournal,
     profile: &std::path::Path,
-    threads: &[String],
+    chats: &[crate::creations::CreationChat],
     provenance: &Provenance,
 ) -> Result<Vec<String>, ThreadMutationError> {
     let mut deleted = Vec::new();
-    for thread_id in threads {
+    for chat in chats {
+        let thread_id = &chat.thread_id;
+        if held_messages_before(journal, thread_id, chat.started_at.as_deref())
+            .map_err(ThreadMutationError::Journal)?
+        {
+            crate::runtime_eprintln!(
+                "agent_delete: thread kept thread={thread_id} reason=held_user_messages"
+            );
+            crate::creations::remove(profile, thread_id).map_err(ThreadMutationError::Creation)?;
+            continue;
+        }
         if thread_live(journal, thread_id).map_err(ThreadMutationError::Journal)? {
             let last_thread_seq = journal
                 .last_thread_seq(thread_id)
@@ -328,26 +358,26 @@ pub fn remove_deleted_thread_sessions(
     )
 }
 
-/// Repairs, at start, each ordinary thread an `agent-save` call took over:
-/// the thread holds a run and its creation record is one that call wrote.
-/// The record goes and the thread leaves the agent, so the thread stays
-/// the user's and a delete of the agent leaves it. Answers the threads it
-/// repaired.
+/// Repairs, at start, each ordinary thread a reply's agent tools took over:
+/// an agent creation record with no turns on a thread that held a message
+/// before the record existed, or whose record keeps no time. The record
+/// goes and the thread leaves the agent, so the thread stays the user's
+/// and a delete of the agent leaves it. Answers the threads it repaired.
 pub fn repair_taken_over_threads(
     journal: &mut RunJournal,
     profile: &std::path::Path,
 ) -> Result<Vec<String>, String> {
     let mut repaired = Vec::new();
     for creation in crate::creations::list(profile)? {
-        if !creation.taken_over() {
-            continue;
-        }
-        let ran = !journal
-            .thread_run_ids(&creation.thread_id, 1, None)
+        if creation.kind != "agent"
+            || !creation.turns.is_empty()
+            || !held_messages_before(
+                journal,
+                &creation.thread_id,
+                creation.started_at().as_deref(),
+            )
             .map_err(|error| format!("{error:?}"))?
-            .run_ids
-            .is_empty();
-        if !ran {
+        {
             continue;
         }
         if let Some(agent) = creation.result_id.as_deref() {
@@ -368,6 +398,30 @@ pub fn repair_taken_over_threads(
 }
 
 impl RunJournal {
+    /// When the thread's first run started, which holds its first message,
+    /// rewound runs included. None for a thread with no run.
+    fn first_message_at(&mut self, thread_id: &str) -> Result<Option<String>, JournalError> {
+        let coordination = self.coordination.clone();
+        let _operation = coordination
+            .as_ref()
+            .map(|state| state.operation.lock().unwrap());
+        self.refresh_after_compaction()?;
+        let connection = self
+            .connection
+            .as_ref()
+            .expect("journal connection is always present outside compaction");
+        let mut statement = connection.prepare(
+            "SELECT e.recorded_at FROM run_threads runs JOIN events e ON e.run_id=runs.run_id \
+             WHERE runs.thread_id=?1 AND e.run_seq=1",
+        )?;
+        let times = statement
+            .query_map([thread_id], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(times
+            .into_iter()
+            .min_by_key(|at| chrono::DateTime::parse_from_rfc3339(at).ok()))
+    }
+
     /// Every Pi transcript a run bound, with its thread and whether the
     /// thread is deleted.
     fn session_bindings(&mut self) -> Result<Vec<SessionBinding>, JournalError> {
@@ -507,6 +561,14 @@ pub fn remove_orphan_creation_threads(
             orphans.push(thread);
         }
     }
+    // Each orphan holds no run, so the delete's start time check passes.
+    let orphans: Vec<crate::creations::CreationChat> = orphans
+        .into_iter()
+        .map(|thread_id| crate::creations::CreationChat {
+            thread_id,
+            started_at: None,
+        })
+        .collect();
     delete_agent_creation_threads_now(journal, profile, &orphans, provenance)
         .map_err(|failure| error(&failure))
 }

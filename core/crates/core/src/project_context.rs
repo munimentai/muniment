@@ -217,6 +217,7 @@ mod tests {
                 result_id: None,
                 turns: Vec::new(),
                 title: None,
+                created_at: None,
             },
         )
         .unwrap();

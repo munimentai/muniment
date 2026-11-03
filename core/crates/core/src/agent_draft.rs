@@ -688,6 +688,7 @@ fn chat_draft(
                 result_id: None,
                 turns: Vec::new(),
                 title: None,
+                created_at: None,
             });
         record.turns.push(crate::creations::DraftTurn {
             message,

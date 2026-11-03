@@ -23,18 +23,27 @@ pub struct Creation {
     /// when the thread list no longer holds the chat.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// When the record was first saved, RFC 3339. A save keeps the first
+    /// time, and a record saved before it kept one holds none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
 }
 impl Creation {
-    /// Whether an `agent-save` call in an ordinary thread wrote this record:
-    /// an agent record with no turns, the goal `Create <name>` and the
-    /// output `Saved agent: <name>`. That thread held the user's messages
-    /// before the agent existed, so it is never the agent's creation chat.
-    pub fn taken_over(&self) -> bool {
-        self.kind == "agent"
-            && self.turns.is_empty()
-            && self.goal.starts_with("Create ")
-            && self.output.starts_with("Saved agent: ")
+    /// When the chat became a creation chat: the record's first save, or the
+    /// first turn of a record saved before it kept that time.
+    pub fn started_at(&self) -> Option<String> {
+        self.created_at
+            .clone()
+            .or_else(|| self.turns.first().map(|turn| turn.at.clone()))
     }
+}
+/// A creation chat an agent delete may take with the agent, with the time
+/// it became one. The delete keeps a thread that held a message before then.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CreationChat {
+    pub thread_id: String,
+    /// RFC 3339. None for a thread no record names.
+    pub started_at: Option<String>,
 }
 /// One message of an agent's creation chat and the draft `agent.draft`
 /// answered it with.
@@ -86,13 +95,20 @@ pub fn save(profile: &Path, mut item: Creation) -> Result<Creation, String> {
         .filter(|title| !title.is_empty() && title.chars().count() <= 80);
     // A save that carries no turns keeps the chat's turns, and a save that
     // carries no title keeps the chat's title.
-    if item.turns.is_empty() || item.title.is_none() {
-        if let Some(saved) = read(profile, &item.thread_id)? {
+    match read(profile, &item.thread_id)? {
+        Some(saved) => {
             if item.turns.is_empty() {
                 item.turns = saved.turns;
             }
             if item.title.is_none() {
                 item.title = saved.title;
+            }
+            // A record keeps the time it was first saved.
+            item.created_at = saved.created_at;
+        }
+        None => {
+            if item.created_at.is_none() {
+                item.created_at = Some(chrono::Utc::now().to_rfc3339());
             }
         }
     }
@@ -225,6 +241,7 @@ pub fn publish(
         result_id: None,
         turns: Vec::new(),
         title: None,
+        created_at: None,
     });
     if plan.kind == "artifact" {
         plan.result_id = Some(item.id.clone());
@@ -324,6 +341,7 @@ mod tests {
             result_id: None,
             turns: Vec::new(),
             title: title.map(Into::into),
+            created_at: None,
         };
         save(&profile, record(Some("  Muniment   Project Status "))).unwrap();
         save(&profile, record(None)).unwrap();
@@ -389,6 +407,7 @@ mod tests {
             result_id: None,
             turns: Vec::new(),
             title: None,
+            created_at: None,
         };
         // The Files view of a draft chat names its folder after the chat.
         let folder_of = |thread: &str| {

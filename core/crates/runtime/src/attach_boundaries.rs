@@ -1962,22 +1962,25 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
                 persistence_error("lock", error.to_string()).desktop_protocol_error()
             })?;
             // The agent is gone, so a chat that fails to go only logs, and the
-            // startup sweep tries it again.
-            if let Err(error) = delete_agent_creation_threads_now(
+            // startup sweep tries it again. A thread the delete keeps keeps
+            // its process.
+            let deleted = match delete_agent_creation_threads_now(
                 &mut storage.journal,
                 &self.profile_directory,
                 &creation_threads,
                 &runtime_provenance(self.host.runtime_version),
             ) {
-                muniment_core::runtime_eprintln!(
-                    "muniment-runtime: agent creation threads not deleted error={error:?}"
-                );
-            }
+                Ok(deleted) => deleted,
+                Err(error) => {
+                    muniment_core::runtime_eprintln!(
+                        "muniment-runtime: agent creation threads not deleted error={error:?}"
+                    );
+                    Vec::new()
+                }
+            };
             drop(storage);
-            self.runtime.stop_threads(
-                creation_threads.iter().map(String::as_str),
-                IdleStop::Deleted,
-            );
+            self.runtime
+                .stop_threads(deleted.iter().map(String::as_str), IdleStop::Deleted);
         }
         if let Some(threads) = agent_threads {
             self.runtime

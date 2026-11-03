@@ -1456,19 +1456,17 @@ fn remove_agent(profile: &Path, id: &str, remove_memory: bool) -> Result<Deleted
     Ok(Deleted { folder_kept })
 }
 /// The creation chats of one agent: the threads whose creation record
-/// made it. A thread an `agent-save` took over holds the user's earlier
-/// messages and is not one. Read them before [`delete_agent`], which
-/// removes the records.
-pub fn creation_threads(profile: &Path, id: &str) -> Vec<String> {
+/// made it, each with the time it became one. Read them before
+/// [`delete_agent`], which removes the records.
+pub fn creation_threads(profile: &Path, id: &str) -> Vec<crate::creations::CreationChat> {
     crate::creations::list(profile)
         .unwrap_or_default()
         .into_iter()
-        .filter(|creation| {
-            creation.kind == "agent"
-                && creation.result_id.as_deref() == Some(id)
-                && !creation.taken_over()
+        .filter(|creation| creation.kind == "agent" && creation.result_id.as_deref() == Some(id))
+        .map(|creation| crate::creations::CreationChat {
+            started_at: creation.started_at(),
+            thread_id: creation.thread_id,
         })
-        .map(|creation| creation.thread_id)
         .collect()
 }
 /// Whether an agent exists: its folder holds its `agent.md`. An agent this
@@ -3266,6 +3264,7 @@ mod tests {
             result_id,
             turns: Vec::new(),
             title: None,
+            created_at: None,
         };
         let chat = crate::creations::save(&profile, creation(Some(agent.id.clone()))).unwrap();
         let other = crate::creations::save(&profile, creation(None)).unwrap();

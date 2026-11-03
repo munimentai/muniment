@@ -473,6 +473,15 @@ impl ApplicationMemoryRuntime {
                     serde_json::from_str(arguments).map_err(|_| "Invalid creation goal.")?;
                 let existing =
                     crate::creations::read(&self.config, &thread)?.filter(|p| p.kind == plan.kind);
+                // An agent's creation chat holds its record before any reply
+                // runs, so a reply that finds none runs in an ordinary
+                // thread. That thread stays the user's and gets no record.
+                if plan.kind == "agent" && existing.is_none() {
+                    return Ok(serde_json::json!({
+                        "saved": false,
+                        "message": "This thread is not an agent's creation chat, so no goal is kept here. Use agent-save to create the agent.",
+                    }));
+                }
                 let result_id = existing.as_ref().and_then(|p| p.result_id.clone());
                 let title = existing.and_then(|p| p.title);
                 let plan = crate::creations::save(
@@ -485,6 +494,7 @@ impl ApplicationMemoryRuntime {
                         result_id,
                         turns: Vec::new(),
                         title,
+                        created_at: None,
                     },
                 )?;
                 Ok(serde_json::json!({"saved":true,"creation":plan}))
@@ -530,18 +540,10 @@ impl ApplicationMemoryRuntime {
                 let creating = agent.id.is_empty();
                 let agent = crate::agents::save(&self.config, agent)?;
                 if creating {
-                    // An agent's creation chat holds its creation record
-                    // before the save, and the agent takes that chat. An
-                    // ordinary thread stays the user's: it gets no record
-                    // and never becomes the agent's thread, so a delete of
-                    // the agent leaves it.
-                    if let Some(mut plan) = crate::creations::read(&self.config, &thread)?
-                        .filter(|plan| plan.kind == "agent")
-                    {
-                        crate::agents::assign(&self.config, &thread, &agent.id)?;
-                        plan.result_id = Some(agent.id.clone());
-                        crate::creations::save(&self.config, plan)?;
-                    }
+                    // A reply runs in an ordinary thread: an agent's creation
+                    // chat drafts through `agent.draft` and runs no reply. The
+                    // thread stays the user's, with no creation record and no
+                    // place in the agent, so a delete of the agent leaves it.
                     self.created_agents
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
