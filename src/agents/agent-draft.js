@@ -75,8 +75,19 @@ export function draftAgent(form, { saved = null, test = false, projectId = null 
 
 // Whether `next`, an `agent.save` body, saves `saved` unchanged: the same
 // name, label, instructions, skills, permission mode and routines, each
-// routine with its name, prompt, trigger and on or off.
-const routineShape = (routine) => [routine.name ?? '', routine.prompt ?? '', canonical(routine.trigger ?? null), routine.enabled !== false]
+// routine with its name, prompt, trigger and on or off. What core adds on a
+// save is no change a person made: the routines it proposes from the
+// instructions, a webhook's id, secret and default sender, and an MCP
+// trigger's empty arguments.
+const routineShape = (routine) => [routine.name ?? '', routine.prompt ?? '', canonical(triggerShape(routine.trigger ?? null)), routine.enabled !== false]
+function triggerShape(trigger) {
+  if (trigger?.kind === 'webhook') {
+    const { hook_id: _id, secret_sha256: _secret, ...rest } = trigger
+    return { ...rest, preset: trigger.preset ?? 'generic' }
+  }
+  if (trigger?.kind === 'mcp') return { ...trigger, args: trigger.args ?? {} }
+  return trigger
+}
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical)
   if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().filter((key) => value[key] !== undefined && value[key] !== null).map((key) => [key, canonical(value[key])]))
@@ -84,7 +95,7 @@ function canonical(value) {
 }
 const agentShape = (agent) => JSON.stringify([
   (agent?.name ?? '').trim(), (agent?.label ?? '').trim(), (agent?.instructions ?? '').trim(),
-  [...(agent?.skills ?? [])].sort(), agent?.permissions?.mode ?? '', (agent?.routines ?? []).map(routineShape),
+  [...(agent?.skills ?? [])].sort(), agent?.permissions?.mode ?? '', (agent?.routines ?? []).filter((routine) => !routine.proposed).map(routineShape),
 ])
 export function sameAgent(next, saved) {
   return !!next && !!saved && agentShape(next) === agentShape(saved)

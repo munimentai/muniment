@@ -130,6 +130,29 @@ it('rests Save changes on a reopened chat until its draft differs from the saved
   expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled()
 })
 
+it('rests Save changes on a reopened chat against the agent exactly as core saved it, with its proposals and webhook id', async () => {
+  const { tauri } = runtime()
+  const webhook = { name: 'On push', enabled: true, trigger: { kind: 'webhook' }, prompt: 'Read the pushed commits.' }
+  const drafted = { ...draft, routines: [...draft.routines, webhook] }
+  // The answer `agent.read` gives for the agent this draft saved: core added
+  // ids, the webhook's id and default sender, run state, and a routine it
+  // proposed from the instructions, which waits off for the user.
+  const stored = {
+    id: 'agent-7', projectId: null, name: 'Inbox brief', label: 'Morning briefer', instructions: draft.instructions, schedule: null,
+    skills: ['pack:skills/brief/SKILL.md'], permissions: { mode: 'manual' }, avatar: { style: 'muniment', seed: 'seed' }, model: { provider: 'openai', id: 'gpt-6' },
+    routines: [
+      { id: 'extract-1', name: 'Summarize the new email in my inbox', enabled: true, trigger: { kind: 'cron', expr: '0 9 * * 1-5', tz: 'America/New_York' }, prompt: 'Summarize the new email in my inbox.', created_from: 'instructions', last_fired_at: null, last_result: null, next_fire_at: 1760965200 },
+      { id: '01930000-0000-7000-8000-000000000001', name: 'On push', enabled: true, trigger: { kind: 'webhook', hook_id: '01930000-0000-7000-8000-000000000002', preset: 'generic' }, prompt: 'Read the pushed commits.', created_from: 'user', last_fired_at: null, last_result: null },
+      { id: 'extract-9f2c', name: 'List what needs a reply', enabled: false, trigger: { kind: 'cron', expr: '0 17 * * 5', tz: 'America/New_York' }, prompt: 'List what needs a reply.', created_from: 'instructions', last_fired_at: null, last_result: null, proposed: true },
+    ],
+  }
+  const read = tauri.invoke.getMockImplementation()
+  tauri.invoke.mockImplementation(async (command, payload) => payload.operation === 'agent.read' ? { agent: stored } : read(command, payload))
+  render(AgentDraftChat, { tauri, agentId: 'agent-7', turns: [turn('Summarize my inbox', { draft: drafted, question: null, via: 'router' })] })
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled())
+  expect(sameAgent(draftAgent(draftForm({ ...drafted, routines: [draft.routines[0], { ...webhook, trigger: { kind: 'webhook', preset: 'github' } }] }), { saved: stored }), stored)).toBe(false)
+})
+
 it('rests Save on the draft it saved until a new message drafts a change', async () => {
   const { tauri } = runtime()
   const first = [turn('Summarize my inbox')]
