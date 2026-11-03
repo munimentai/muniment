@@ -4767,6 +4767,34 @@ describe('sidebar collapse', () => {
     expect(invoke.mock.calls.filter(([cmd]) => cmd === 'chat_new_thread')).toHaveLength(0)
   })
 
+  it('keeps the agent profile open while a connection approval shows and after it is answered', async () => {
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args)
+      ? agentListAnswer([{ id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null, routines: [] }], { 'agent-1': 'agent-thread' })
+      : command === 'agent_request' && args?.operation === 'agent.run_now' ? Promise.resolve({ run: { id: 'run-now', agent_id: 'agent-1', status: 'queued', thread_id: null } })
+      : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
+    const profileOpen = () => !!document.querySelector('.workspace.agent-profile-open')
+    render(App)
+    await openSidebarPage('Agents')
+    const card = await within(await screen.findByRole('region', { name: 'Agents', exact: true })).findByRole('article', { name: 'Scout' })
+    await fireEvent.click(within(card).getByRole('button', { name: 'Actions for Scout' }))
+    await fireEvent.click(within(screen.getByRole('menu', { name: 'Actions for Scout' })).getByRole('menuitem', { name: 'Open profile' }))
+    const profile = await screen.findByRole('complementary', { name: 'Agent profile' })
+    await fireEvent.click(within(profile).getByRole('button', { name: 'Run now' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', expect.objectContaining({ operation: 'agent.run_now' })))
+    const run = { id: 'run-now', agent_id: 'agent-1', status: 'running', thread_id: 'agent-thread', updated_at: new Date().toISOString(), trigger: { kind: 'manual', source: 'run_now' } }
+    for (const [name, handle] of window.__TAURI__.event.listen.mock.calls) if (name === 'agent-run-updated') handle({ payload: { runtimeId: 'local', run } })
+    await waitFor(() => expect(pairingListener).toBeDefined())
+    pairingListener({ payload: { challenge: 'profile-pairing', claimed_kind: 'cli', claimed_version: '0.4.2', workspace: 'w', scopes: ['thread.read'] } })
+    const dialog = await screen.findByRole('dialog', { name: 'Approve Muniment connection' })
+    expect(profileOpen()).toBe(true)
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Deny' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Approve Muniment connection' })).toBeNull())
+    for (const [name, handle] of window.__TAURI__.event.listen.mock.calls) if (name === 'agent-run-updated') handle({ payload: { runtimeId: 'local', run: { ...run, status: 'failed', error: 'the desktop pairing connection was closed.' } } })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(profileOpen()).toBe(true)
+  })
+
   it('opens the profile from "Add or edit in the profile" beside the agent\'s thread, not the open one', async () => {
     threadSummaryResult = [{ threadId: 'ordinary-thread', title: 'Single Word Acknowledgment', updatedAt: '2026-01-02T00:00:00Z' }, { threadId: 'agent-thread', title: 'Scout chat', updatedAt: '2026-01-01T00:00:00Z' }]
     const original = invoke.getMockImplementation()
