@@ -104,6 +104,40 @@ it.each([
   expect(body.routines.map((routine) => routine.id).sort()).toEqual(routines.map((routine) => routine.id).sort())
 })
 
+// The scheduler writes fire times, results, polls and run state on the
+// saved agent after a Save. None of them is a change a person made.
+it('rests Save changes on a reopened chat while the scheduler writes its routines after a Save', async () => {
+  const turns = [turn('Post the greeting on Fridays at 4 PM', { draft: weekly, question: null, via: 'router' })]
+  const scheduled = { ...greeting, next_fire_at: 1793988000, last_fired_at: '2026-11-03T09:00:00Z', last_result: { status: 'completed', run_id: 'run-4' }, last_poll: { at: '2026-11-03T09:00:00Z', fired: true, failures: 0 }, cut_short: false }
+  const stored = { ...savedWeekly(weekly, [scheduled, { ...backup, next_fire_at: 1793990000 }]), schedule: { cron: '0 16 * * 5', enabled: true }, paused_reason: null, epoch: 3 }
+  expect(sameAgent(draftAgent(draftForm(weekly), { saved: stored }), stored)).toBe(true)
+  const invoke = vi.fn(async (_command, { operation }) => {
+    if (operation === 'agent.tool_catalog') return catalog
+    if (operation === 'agent.read') return { agent: stored, primary_thread_id: null }
+    throw new Error(`unexpected ${operation}`)
+  })
+  render(AgentDraftChat, { tauri: { invoke }, agentId: 'agent-9', turns })
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled())
+})
+
+// The window keeps one builder while it moves from one agent chat to the
+// next, so the builder reads the agent each chat names, never the last one.
+it('reads the agent fresh when the chat names another agent', async () => {
+  const other = { ...draft, name: 'Notes keeper', label: 'Keeper', instructions: 'Keep the notes folder tidy.', routines: [] }
+  const agents = { 'agent-1': { ...draft, id: 'agent-1', permissions: { mode: 'manual' } }, 'agent-2': { ...other, id: 'agent-2', permissions: { mode: 'manual' } } }
+  const reads = []
+  const invoke = vi.fn(async (_command, { operation, body }) => {
+    if (operation === 'agent.tool_catalog') return catalog
+    if (operation === 'agent.read') { reads.push(body.id); return { agent: agents[body.id] } }
+    throw new Error(`unexpected ${operation}`)
+  })
+  const { rerender } = render(AgentDraftChat, { tauri: { invoke }, agentId: 'agent-1', turns: [turn('Summarize my inbox')] })
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled())
+  await rerender({ agentId: 'agent-2', turns: [turn('Keep my notes tidy', { draft: other, question: null, via: 'router' })] })
+  await waitFor(() => expect(reads).toEqual(['agent-1', 'agent-2']))
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled())
+})
+
 it('shows the message a draft is answering and blocks the actions until it lands', () => {
   const { tauri } = runtime()
   render(AgentDraftChat, { tauri, turns: [turn('Summarize my inbox')], pending: 'Make it 8am' })

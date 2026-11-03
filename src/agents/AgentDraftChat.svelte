@@ -7,7 +7,7 @@
   // `runs`, the window's agent runs. Save turns the triggers on. The chat's
   // creation record keeps every message and draft, so the chat stays to
   // revise the agent, and each later Save updates the same agent.
-  import { onMount } from 'svelte'
+  import { onMount, untrack } from 'svelte'
   import Button from '../lib/ui/Button.svelte'
   import FailureNote from '../lib/FailureNote.svelte'
   import { agentRequest } from './agent-runtime.js'
@@ -33,16 +33,24 @@
   // The draft a Save turned on, which a later message replaces. Save rests
   // while the newest draft is that one.
   let savedDraft = $state(null)
-  // The agent as core last saved it: read once when a reopened chat names
+  // The agent as core last saved it: read fresh each time the chat names
   // its agent, then each Save's answer. Save rests while the newest draft
-  // would save that agent unchanged.
+  // would save that agent unchanged. `reads` counts the reads and Saves, so
+  // an older read never replaces a newer answer.
   let stored = $state(null)
+  let reads = 0
   let alive = true
 
   onMount(() => {
     void loadToolCatalog(tauri, runtime).then((value) => { if (alive) catalog = value })
-    if (agentId) void agentRequest(tauri, runtime, 'agent.read', { id: agentId }).then((answer) => { if (alive && !stored) stored = answer?.agent ?? null }).catch(() => {})
     return () => { alive = false }
+  })
+  $effect(() => {
+    const id = agentId
+    const read = ++reads
+    if (!id) return
+    untrack(() => { if (stored?.id !== id) stored = null })
+    void agentRequest(tauri, runtime, 'agent.read', { id }).then((answer) => { if (alive && read === reads) stored = answer?.agent ?? null }).catch(() => {})
   })
 
   const latest = $derived(turns.length - 1)
@@ -71,6 +79,7 @@
       const previous = id ? await agentRequest(tauri, runtime, 'agent.read', { id }).then((answer) => answer?.agent ?? null).catch(() => null) : null
       const answer = await agentRequest(tauri, runtime, 'agent.save', { agent: draftAgent(form, { saved: $state.snapshot(previous), test, projectId, earlier: $state.snapshot(earlier) }) })
       saved = answer.agent
+      reads += 1
       stored = answer.agent
       savedDraft = test ? null : key
       if (test) {

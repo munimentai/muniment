@@ -4394,10 +4394,13 @@
         <div class="thread" role="region" aria-label={`Transcript: ${currentThreadTitle}`} bind:this={thread} onscroll={transcriptScrolled}>
           {#if historyError}<p class="history-error" role="alert">{historyError} {#if historyErrorAction}<button onclick={historyErrorAction.run}>{historyErrorAction.label}</button>{/if}</p>{/if}
           {#if agentChat}
+            <!-- Each agent chat draws its own builder, so no Save, draft or saved agent of one chat reaches another. -->
+            {#key agentChat.threadId}
             <AgentDraftChat {tauri} turns={agentChat.record?.turns ?? []} pending={agentChatPending?.threadId === agentChat.threadId ? agentChatPending.message : ''} error={agentChatError} failed={agentChatFailure?.threadId === agentChat.threadId ? agentChatFailure.message : ''} agentId={agentChat.record?.resultId ?? null}
               projectId={projectCatalog.projects[projectCatalog.threads[agentChat.threadId]] ? projectCatalog.threads[agentChat.threadId] : null} model={agentChatModel} runs={activityRuns}
               onsend={(text) => sendAgentChat(text)} onsaved={(agent) => agentChatSaved(agent, agentChat.threadId)}
               onopenchat={(agent, run) => (run ? openRunThread(run) : openBuiltAgent(agent)).catch(error => { submitError = String(error) })} />
+            {/key}
           {/if}
           {#if messages.length === 0 && currentPosts.length === 0 && !currentCreation && !agentChat}{#if !threadGroup && !threadAgent && !(auth.name === 'local' && (inventoryError || !inventory || !chipModel || !currentModelAvailable(inventory)))}{#if !threadsLoading}<ThreadStarters disabled={switchLocked || !!active} onpick={pickThreadStarter} />{/if}{:else}<p class="empty">{#if threadGroup}Write to the group. Mention agents with @name or @everyone.{:else}{auth.name === 'local' && inventoryError ? inventoryError : auth.name === 'local' && modelsLoading ? 'Checking available models…' : auth.name === 'local' && !chipModel ? 'Connect a model in the composer to start chatting.' : auth.name === 'local' && !currentModelAvailable(inventory) ? 'This model needs an account. Connect one or choose another.' : `Chat with ${threadAgent?.name} using ${modelSourceLabel}.`}{/if}</p>{/if}{/if}
           {#if currentCreation && !agentChat}
