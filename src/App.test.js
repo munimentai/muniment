@@ -4956,6 +4956,53 @@ describe('sidebar collapse', () => {
     expect(screen.queryByRole('region', { name: 'Agents', exact: true })).not.toBeInTheDocument()
   })
 
+  it('opens "Open profile" on an agent with no run thread beside its creation chat, not the last viewed thread', async () => {
+    threadSummaryResult = [{ threadId: 'ordinary-thread', title: 'Single Word Acknowledgment', updatedAt: '2026-01-02T00:00:00Z' }, { threadId: 'creation-thread', title: 'Scout', updatedAt: '2026-01-01T00:00:00Z' }]
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args)
+      ? agentListAnswer([{ id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null, routines: [] }], {})
+      : command === 'creation_list' ? [{ threadId: 'creation-thread', kind: 'agent', goal: 'Read sources', output: '', resultId: 'agent-1', turns: [{ message: 'Read sources', at: '2026-01-01T00:00:00Z', reply: { draft: { name: 'Scout' } } }] }]
+      : command === 'chat_current_thread' ? Promise.resolve('ordinary-thread')
+      : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
+    render(App)
+    await waitFor(() => expect(document.querySelector('.thread-row.active-thread .thread-row-title')).toHaveTextContent('Single Word Acknowledgment'))
+    await openSidebarPage('Agents')
+    const page = await screen.findByRole('region', { name: 'Agents', exact: true })
+    await fireEvent.click(await within(page).findByRole('button', { name: 'Actions for Scout' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Open profile' }))
+    const profile = await screen.findByRole('complementary', { name: 'Agent profile' })
+    expect(within(profile).getByText('Scout', { selector: '.name' })).toBeInTheDocument()
+    expect(invoke).toHaveBeenCalledWith('chat_select_thread', { threadId: 'creation-thread' })
+    await waitFor(() => expect(document.querySelector('.thread-row.active-thread')).toHaveAttribute('data-thread-id', 'creation-thread'))
+    expect(invoke.mock.calls.filter(([cmd]) => cmd === 'chat_new_thread')).toHaveLength(0)
+  })
+
+  it('opens "Open profile" on an agent with no thread or creation chat beside the Agents page, and closes it with the page', async () => {
+    threadSummaryResult = [{ threadId: 'ordinary-thread', title: 'Single Word Acknowledgment', updatedAt: '2026-01-02T00:00:00Z' }]
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args)
+      ? agentListAnswer([{ id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null, routines: [] }], {})
+      : command === 'chat_current_thread' ? Promise.resolve('ordinary-thread')
+      : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
+    render(App)
+    await waitFor(() => expect(document.querySelector('.thread-row.active-thread .thread-row-title')).toHaveTextContent('Single Word Acknowledgment'))
+    await openSidebarPage('Agents')
+    const page = await screen.findByRole('region', { name: 'Agents', exact: true })
+    const switches = () => invoke.mock.calls.filter(([cmd]) => cmd === 'chat_select_thread' || cmd === 'chat_new_thread').length
+    const before = switches()
+    await fireEvent.click(await within(page).findByRole('button', { name: 'Actions for Scout' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Open profile' }))
+    const profile = await screen.findByRole('complementary', { name: 'Agent profile' })
+    expect(within(profile).getByText('Scout', { selector: '.name' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Agents', exact: true })).toBeInTheDocument()
+    expect(document.querySelector('.workspace')).toHaveClass('agents-open')
+    expect(switches()).toBe(before)
+    // The thread under the page never shows beside the profile.
+    await fireEvent.click(screen.getByRole('button', { name: 'Agents', exact: true }))
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Agents', exact: true })).toBeNull())
+    expect(screen.queryByRole('complementary', { name: 'Agent profile' })).toBeNull()
+  })
+
   it('opens the profile of an agent with no thread alone, with no new thread', async () => {
     const original = invoke.getMockImplementation()
     invoke.mockImplementation(async (command, args) => isAgentList(command, args)

@@ -650,7 +650,13 @@
   // The thread a run's link opened. Its agent's profile stays closed, so
   // the thread keeps the view until the user reveals the profile.
   let profileHeldFor = null
-  function revealAgentProfile() { browserPanel = null; projectsOpen = false; agentsOpen = false; fullPage = null; closeRail(); agentProfileOpen = true; agentResize.fit() }
+  // A profile with no thread behind it keeps the page it opened beside, and
+  // it closes with that page.
+  let profileOnPage = $state(false)
+  function revealAgentProfile() { browserPanel = null; if (!profileOnPage) { projectsOpen = false; agentsOpen = false; fullPage = null }; closeRail(); agentProfileOpen = true; agentResize.fit() }
+  $effect(() => {
+    if (profileOnPage && !agentsOpen && !projectsOpen) untrack(() => { profileOnPage = false; agentProfileOpen = false; profileOnlyAgent = null })
+  })
   $effect(() => {
     const id = profileAgent?.id
     if (id && id !== lastProfileAgent && !browserPanel && untrack(() => profileHeldFor !== currentThreadId)) untrack(() => revealAgentProfile())
@@ -715,12 +721,13 @@
     if (switchLocked) return
     if (!threadSummaries.some(thread => thread.threadId === group.thread_id)) await chatController.refreshThreads()
     if (group.thread_id !== currentThreadId && !await chatController.openThread(group.thread_id)) return
-    selectedAgent = null; profileOnlyAgent = null; agentProfileOpen = false
+    selectedAgent = null; profileOnlyAgent = null; agentProfileOpen = false; profileOnPage = false
     projectsOpen = false; agentsOpen = false; fullPage = null; artifactsOpen = false
   }
   async function openAgent(agent) {
     if (switchLocked || agentOpening) return
     agentOpening = true
+    profileOnPage = false
     try {
       // An agent's conversation lives on its machine, and the thread opens there.
       const machine = agentMachine(runtimeList, agent)
@@ -749,22 +756,29 @@
     return agentListing.primaryThreads?.[agent.id] ?? (agent.replica && threadSummaries.some(thread => thread.threadId === agent.primaryThread) ? agent.primaryThread : null) ?? (mapping[currentThreadId] === agent.id ? currentThreadId
       : threadSummaries.find(thread => mapping[thread.threadId] === agent.id && !threadOrganization[thread.threadId]?.archived)?.threadId) ?? null
   }
-  // An agent's profile beside the agent's own thread, or alone while the
-  // agent has none, never beside another thread. A card's Delete opens it
+  // An agent's profile beside the agent's own thread. An agent with no
+  // thread yet shows it beside its creation chat, else beside the page it
+  // opened from, and never beside another thread. A card's Delete opens it
   // the same way, at the profile's delete confirmation. A card's Delete on
   // the Agents page returns there once confirmed.
   let profileDelete = $state({ agentId: null, count: 0, fromAgents: false })
+  const agentCreationChat = (agent) => (agent.runtimeId ?? LOCAL_RUNTIME_ID) === LOCAL_RUNTIME_ID && !agent.replica
+    ? creations.find(item => item.kind === 'agent' && item.resultId === agent.id)?.threadId ?? null : null
   async function openAgentProfile(agent, { deleting = false } = {}) {
     const fromAgents = deleting && agentsOpen
-    const threadId = agentHomeThread(agent)
+    const homeThread = agentHomeThread(agent)
+    const threadId = homeThread ?? agentCreationChat(agent)
     if (threadId && (threadId !== currentThreadId || freshThread) && !switchLocked && !agentOpening) {
       agentOpening = true
-      try { if (!await chatController.openThread(threadId, true)) return } finally { agentOpening = false }
+      try { await chatController.openThread(threadId, true) } finally { agentOpening = false }
     }
-    const home = !!threadId && threadId === currentThreadId && !freshThread
+    const beside = !!threadId && threadId === currentThreadId && !freshThread
+    const home = beside && threadId === homeThread
     profileOnlyAgent = home ? null : agent.id
     if (home) { selectedAgent = agent.id; selectedProject = agent.projectId || null }
-    projectsOpen = false; agentsOpen = false; fullPage = null; artifactsOpen = false
+    profileOnPage = !beside
+    if (beside) { projectsOpen = false; agentsOpen = false; fullPage = null; artifactsOpen = false }
+    else if (!agentsOpen && !projectsOpen) { artifactsOpen = false; fullPage = null; agentsOpen = true; agentsRequest += 1 }
     if (deleting) profileDelete = { agentId: agent.id, count: profileDelete.count + 1, fromAgents }
     if (!browserPanel || deleting) revealAgentProfile()
   }
@@ -2034,7 +2048,7 @@
     onMoreThreads: (next) => { moreThreads = next },
     readProject: () => selectedProject,
     readAgent: () => selectedAgent,
-    onThreadSelected: (next) => { threadShown = true; selectTask(next); profileOnlyAgent = null; selectedAgent = agentThreadMap[next] ?? startingAgent ?? null; if (!selectedAgent) agentProfileOpen = false; void refreshProjects(next); void refreshAgents(); void refreshCreations() },
+    onThreadSelected: (next) => { threadShown = true; selectTask(next); profileOnlyAgent = null; profileOnPage = false; selectedAgent = agentThreadMap[next] ?? startingAgent ?? null; if (!selectedAgent) agentProfileOpen = false; void refreshProjects(next); void refreshAgents(); void refreshCreations() },
     onThreadSwitch: (next) => { threadSwitching = next },
     onFreshThread: (next) => { freshThread = next; if (next) threadShown = true },
     onHistoryStart: () => { expandedReceipts = new Set(); parallelTools = new Map() },
@@ -4194,7 +4208,7 @@
       </section>
     {/if}
     {#if workspaceMode() && desktopClientStatus}
-      <section class="workspace" inert={auth.name === 'signing-in' || !!deletingThreadId} data-testid={auth.name === 'local' ? 'local-mode' : undefined} class:macos={macOS} class:sidebar-collapsed={sidebarCollapsed} class:rail-open={railOccupant !== null} class:agents-open={agentsOpen || artifactsOpen || projectsOpen || !!fullPage} class:tools-open={!!browserPanel} class:agent-profile-open={launchSettled && agentProfileOpen && !!profileAgent && !agentsOpen} class:record-maximized={(recordPanelOpen || filePanelOpen) && recordMaximized} class:artifact-resizing={artifactRailPointer !== undefined || workspacePanelPointer !== undefined} class:sidebar-resizing={sidebarPointer !== undefined} class:settings-open={settingsOpen} style:--workspace-panel-width={`${workspacePanelWidth}px`} style:--agent-panel-width={`${agentPanelWidth}px`} style:--artifact-rail-width={`${artifactRailWidth}px`} style:--sidebar-column={`${sidebarCollapsed ? 0 : sidebarWidth}px`} bind:this={workspace}>
+      <section class="workspace" inert={auth.name === 'signing-in' || !!deletingThreadId} data-testid={auth.name === 'local' ? 'local-mode' : undefined} class:macos={macOS} class:sidebar-collapsed={sidebarCollapsed} class:rail-open={railOccupant !== null} class:agents-open={agentsOpen || artifactsOpen || projectsOpen || !!fullPage} class:tools-open={!!browserPanel} class:agent-profile-open={launchSettled && agentProfileOpen && !!profileAgent && (!agentsOpen || profileOnPage)} class:record-maximized={(recordPanelOpen || filePanelOpen) && recordMaximized} class:artifact-resizing={artifactRailPointer !== undefined || workspacePanelPointer !== undefined} class:sidebar-resizing={sidebarPointer !== undefined} class:settings-open={settingsOpen} style:--workspace-panel-width={`${workspacePanelWidth}px`} style:--agent-panel-width={`${agentPanelWidth}px`} style:--artifact-rail-width={`${artifactRailWidth}px`} style:--sidebar-column={`${sidebarCollapsed ? 0 : sidebarWidth}px`} bind:this={workspace}>
         <header class="titlebar" data-tauri-drag-region use:overflowLabels={'.agent-chat-title span'}>
           <div class="titlebar-sidebar" data-tauri-drag-region>
             <button type="button" class="quiet side-toggle" aria-controls="sidebar" aria-expanded={!sidebarCollapsed} aria-keyshortcuts={sidebarKeyShortcut} aria-label={`${sidebarCollapsed ? 'Expand' : 'Collapse'} sidebar`} onclick={toggleSidebar}>
@@ -4789,12 +4803,12 @@
           {/if}
           {#await loadFilePanel() then module}{@const FilePanel = module.default}<FilePanel file={viewedFile} {tauri} threadId={currentThreadId} maximized={recordMaximized} ontogglemaximized={toggleRecordMaximized} onclose={closeRail} />{/await}
         {/if}
-    {#if launchSettled && agentProfileOpen && profileAgent && !agentsOpen}
+    {#if launchSettled && agentProfileOpen && profileAgent && (!agentsOpen || profileOnPage)}
       <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
       <div class="artifact-divider agent-divider" role="separator" aria-label="Agent profile width" aria-orientation="vertical" aria-valuemin="240" aria-valuemax={agentPanelMaximum} aria-valuenow={agentPanelWidth} tabindex="0" onpointerdown={agentResize.pointerDown} onpointermove={agentResize.pointerMove} onpointerup={agentResize.pointerEnd} onpointercancel={agentResize.pointerEnd} onkeydown={agentResize.keydown}><span class="divider-grip" aria-hidden="true"><LucideIcon name="ellipsis-vertical" size={14} variant="action" /></span></div>
       {#key `${profileAgent.runtimeId}:${profileAgent.id}`}<AgentProfile agent={profileAgent} {tauri} projects={projectRows} run={agentListing.latestRuns[profileAgent.id]}
         runs={activityRuns.filter(entry => entry.agent_id === profileAgent.id && entry.runtimeId === profileAgent.runtimeId)} agents={roster} {runtimeList} {swarm} {inventory} catalog={agentCatalog} activity={profileAgent.activity} connected={desktopClientStatus?.connected !== false} threads={agentListing.threads?.[profileAgent.id] ?? []}
-        onclose={() => { agentProfileOpen = false; profileOnlyAgent = null }} onchange={refreshAgentsAndRuns} onrun={(run) => { startedRuns.add(run.id); activityRuns = applyRunUpdate(activityRuns, { runtimeId: run.runtimeId, run }) }}
+        onclose={() => { agentProfileOpen = false; profileOnlyAgent = null; profileOnPage = false }} onchange={refreshAgentsAndRuns} onrun={(run) => { startedRuns.add(run.id); activityRuns = applyRunUpdate(activityRuns, { runtimeId: run.runtimeId, run }) }}
         onmanagemodels={openModelSettings} onvisibility={setModelShown}
         deleteAsked={profileDelete.agentId === profileAgent.id ? profileDelete.count : 0} ondelete={(answer, options) => { const agent = profileAgent; const toAgents = !!options?.asked && profileDelete.agentId === agent.id && profileDelete.fromAgents; const settle = keptFolderDelete(); showKeptFolder(agent, answer); void agentDeleted(agent, { removeThreads: options?.removeThreads, toAgents }).finally(settle) }}
         onopen={(id) => showThread(id)} onopenrun={(run) => openRunThread(run).catch(error => { submitError = String(error) })} onopenfolder={openAgentFolder} />{/key}
