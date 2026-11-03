@@ -126,6 +126,7 @@ pub enum ModelAction {
     MemoryFactSave,
     MemoryFactDelete,
     MemoryFactRestore,
+    MemoryFactPurge,
     MemoryRecallSettings,
     MemoryRecallSettingsSave,
     MemoryPending,
@@ -137,7 +138,7 @@ pub enum ModelAction {
 
 impl ModelAction {
     /// Every action, in wire order.
-    pub const ALL: [ModelAction; 51] = [
+    pub const ALL: [ModelAction; 52] = [
         Self::ProviderStatus,
         Self::StoreProviderKey,
         Self::StoreLocalProvider,
@@ -182,6 +183,7 @@ impl ModelAction {
         Self::MemoryFactSave,
         Self::MemoryFactDelete,
         Self::MemoryFactRestore,
+        Self::MemoryFactPurge,
         Self::MemoryRecallSettings,
         Self::MemoryRecallSettingsSave,
         Self::MemoryPending,
@@ -293,6 +295,7 @@ impl ModelAction {
             Self::MemoryFactSave => "memory_fact_save",
             Self::MemoryFactDelete => "memory_fact_delete",
             Self::MemoryFactRestore => "memory_fact_restore",
+            Self::MemoryFactPurge => "memory_fact_purge",
             Self::MemoryRecallSettings => "memory_recall_settings",
             Self::MemoryRecallSettingsSave => "memory_recall_settings_save",
             Self::MemoryPending => "memory_pending",
