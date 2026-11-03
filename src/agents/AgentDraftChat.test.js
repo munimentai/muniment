@@ -276,6 +276,48 @@ it('drops a routine an earlier draft named when the newest draft changes it, and
   expect(sameAgent(draftAgent(draftForm(draft), { saved, earlier: draft.routines }), saved)).toBe(true)
 })
 
+// The person turned the drafted routine off in the profile after the chat saved it.
+it('rests Save changes on a reopened chat after the profile turns a drafted routine off, and a later Save keeps it off', async () => {
+  const { tauri, requests } = runtime()
+  const off = { ...draft.routines[0], enabled: false, last_fired_at: null, last_result: null, next_fire_at: null }
+  const stored = { ...draftAgent(draftForm(draft)), id: 'agent-7', permissions: { mode: 'manual' }, avatar: { style: 'muniment', seed: 'seed' }, routines: [off] }
+  const read = tauri.invoke.getMockImplementation()
+  tauri.invoke.mockImplementation(async (command, payload) => payload.operation === 'agent.read' ? { agent: stored } : read(command, payload))
+  const first = turn('Summarize my inbox')
+  const { rerender } = render(AgentDraftChat, { tauri, agentId: 'agent-7', turns: [first] })
+  await waitFor(() => expect(tauri.invoke.mock.calls.some(([, payload]) => payload.operation === 'agent.read')).toBe(true))
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled())
+  // A draft that keeps the routine as the chat drafted it leaves it off.
+  await rerender({ turns: [first, { ...turn('Keep it as is'), at: '2026-10-19T10:05:00Z' }] })
+  expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled()
+  // A rename wakes Save, and the Save keeps the routine off.
+  await rerender({ turns: [first, { ...turn('Call it Inbox digest', { draft: { ...draft, name: 'Inbox digest' }, question: null, via: 'router' }), at: '2026-10-19T10:05:00Z' }] })
+  await fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+  await waitFor(() => expect(requests.some((request) => request.operation === 'agent.save')).toBe(true))
+  const body = requests.find((request) => request.operation === 'agent.save').body.agent
+  expect(body.name).toBe('Inbox digest')
+  expect(body.routines).toHaveLength(1)
+  expect(body.routines[0]).toMatchObject({ id: 'extract-1', enabled: false })
+  expect(body.routines[0].proposed).toBeFalsy()
+})
+
+it('keeps a profile edit of a drafted routine until the newest draft changes that routine', () => {
+  const edited = { ...draft.routines[0], name: 'Morning inbox', enabled: false }
+  const saved = { ...draftAgent(draftForm(draft)), id: 'agent-7', routines: [edited] }
+  // The chat's stale draft sends the routine as the profile left it.
+  expect(draftAgent(draftForm(draft), { saved }).routines).toEqual([edited])
+  expect(draftAgent(draftForm(draft), { saved, earlier: draft.routines }).routines).toEqual([edited])
+  expect(sameAgent(draftAgent(draftForm(draft), { saved, earlier: draft.routines }), saved)).toBe(true)
+  // A newest draft that renames it over an earlier draft is the chat's change.
+  const renamed = { ...draft.routines[0], name: 'Inbox summary' }
+  const body = draftAgent(draftForm({ ...draft, routines: [renamed] }), { saved, earlier: draft.routines })
+  expect(body.routines).toEqual([{ ...renamed, enabled: true, proposed: false }])
+  // A test save keeps every drafted routine off, and a draft that accepts a proposal turns it on.
+  expect(draftAgent(draftForm(draft), { saved, test: true }).routines[0]).toMatchObject({ name: draft.routines[0].name, enabled: false })
+  const proposal = { ...draft.routines[0], enabled: false, proposed: true }
+  expect(draftAgent(draftForm(draft), { saved: { ...saved, routines: [proposal] } }).routines[0]).toMatchObject({ enabled: true, proposed: false })
+})
+
 it('rests Save on the draft it saved until a new message drafts a change', async () => {
   const { tauri } = runtime()
   const first = [turn('Summarize my inbox')]
