@@ -749,6 +749,33 @@ fn authorized_round_trips_and_ignores_future_optional_fields() {
 }
 
 #[test]
+fn an_ephemeral_credential_is_marked_on_the_wire_and_a_stored_one_is_not() {
+    let message = authorized(
+        "profile-id",
+        "connection-capability",
+        3600,
+        900,
+        Default::default(),
+    );
+    let stored = serde_json::to_value(&message).unwrap();
+    assert!(stored.get("credential_ephemeral").is_none());
+    assert!(
+        !serde_json::from_value::<Authorized>(stored)
+            .unwrap()
+            .credential_ephemeral
+    );
+
+    let ephemeral = message.with_ephemeral_credential();
+    let value = serde_json::to_value(&ephemeral).unwrap();
+    assert_eq!(value["credential_ephemeral"], true);
+    let encoded = encode_frame(&ephemeral).unwrap();
+    assert_eq!(
+        decode_frame::<Authorized>(&encoded).unwrap().unwrap().0,
+        ephemeral
+    );
+}
+
+#[test]
 fn handshake_wire_debug_redacts_secrets() {
     let welcome = welcome(1, "0.1.0", "server-nonce", "secret-challenge")
         .with_handoff_nonce("secret-handoff-nonce");

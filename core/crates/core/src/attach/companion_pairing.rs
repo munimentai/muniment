@@ -112,6 +112,11 @@ pub(super) struct PairingSession<'a> {
     pub first_frame: Option<&'a [u8]>,
     pub registry: &'a LiveConnectionRegistry,
     pub handoff_nonce: Option<&'a str>,
+    /// The peer was paired without a prompt because of where it runs, so its
+    /// credential must not outlive the connection. The exchange reuses no
+    /// stored credential, stores none, and tells the client to keep its own
+    /// in memory.
+    pub ephemeral_credential: bool,
 }
 
 /// Injected platform seam for a migration control detour above the exchange.
@@ -179,6 +184,7 @@ where
         first_frame,
         registry,
         handoff_nonce,
+        ephemeral_credential,
     } = session;
     let deadline = Instant::now()
         .checked_add(timeout)
@@ -255,8 +261,10 @@ where
     if migration_peer {
         return migration.serve(stream, selected, server_nonce, &mut fill_random, service);
     }
+    // An ephemeral pairing never reuses a credential the user approved.
     let reconnect = authorized_client_credential
         .as_deref()
+        .filter(|_| !ephemeral_credential)
         .and_then(|credential| {
             let approval = service.reconnect_approval()?;
             service
@@ -344,17 +352,23 @@ where
             let mut credential_bytes = [0u8; 32];
             fill_random(&mut credential_bytes).map_err(|_| AttachSessionError::Randomness)?;
             let issued_credential = hex(&credential_bytes);
-            match service.authorize_client(
-                &authorized_client_id,
-                authorized_client_credential.as_deref(),
-                &issued_credential,
-                &companion_kind,
-                &companion_version,
-            ) {
-                Ok(credential) => credential,
-                Err(error) => {
-                    write_protocol_error(stream, error, authorization_deadline);
-                    return Err(AttachSessionError::Authorization);
+            if ephemeral_credential {
+                // The session binds the client, and no store learns the credential.
+                service.bind_authorized_client(&authorized_client_id);
+                issued_credential
+            } else {
+                match service.authorize_client(
+                    &authorized_client_id,
+                    authorized_client_credential.as_deref(),
+                    &issued_credential,
+                    &companion_kind,
+                    &companion_version,
+                ) {
+                    Ok(credential) => credential,
+                    Err(error) => {
+                        write_protocol_error(stream, error, authorization_deadline);
+                        return Err(AttachSessionError::Authorization);
+                    }
                 }
             }
         }
@@ -367,6 +381,11 @@ where
         workspace_scopes,
         client_credential.clone(),
     );
+    let response = if ephemeral_credential {
+        response.with_ephemeral_credential()
+    } else {
+        response
+    };
     let connection_event_id = super::Id::new(uuid::Uuid::new_v4().to_string())
         .map_err(|_| AttachSessionError::Randomness)?;
     let connection = registry.register(

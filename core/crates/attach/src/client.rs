@@ -717,6 +717,7 @@ mod linux {
         active_run_stream: Option<ActiveRunStream>,
         pending_artifact_events: BTreeMap<String, VecDeque<ArtifactTransferEvent>>,
         authorized_client_credential: String,
+        credential_ephemeral: bool,
     }
 
     impl std::fmt::Debug for AuthorizedClient {
@@ -736,6 +737,12 @@ mod linux {
 
         pub fn authorized_client_credential(&self) -> &str {
             &self.authorized_client_credential
+        }
+
+        /// Whether the client may store its credential for a later
+        /// connection. An ephemeral credential stays in this process.
+        pub fn credential_persists(&self) -> bool {
+            !self.credential_ephemeral
         }
 
         pub fn onboard_workspace(
@@ -2829,6 +2836,7 @@ mod linux {
             active_run_stream: None,
             pending_artifact_events: BTreeMap::new(),
             authorized_client_credential: authorized.authorized_client_credential,
+            credential_ephemeral: authorized.credential_ephemeral,
         })
     }
 
@@ -3005,6 +3013,11 @@ impl AuthorizedClient {
     // A companion off unix holds no credential to persist; the record is reached over unix sockets alone.
     pub fn authorized_client_credential(&self) -> &str {
         ""
+    }
+
+    // The runtime marks no credential off unix as ephemeral.
+    pub fn credential_persists(&self) -> bool {
+        true
     }
 
     // A companion off unix is bound to no runtime profile.

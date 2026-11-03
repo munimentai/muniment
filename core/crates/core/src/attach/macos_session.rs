@@ -495,6 +495,7 @@ where
                     first_frame: Some(&frame),
                     registry,
                     handoff_nonce: None,
+                    ephemeral_credential: bundled,
                 },
                 desktop_version,
                 deadline.saturating_duration_since(Instant::now()),
@@ -748,6 +749,163 @@ mod tests {
             }
             assert!(responses.is_empty());
         }
+    }
+
+    const CLIENT_ID: &str = "018f0000-0000-7000-8000-000000000099";
+
+    /// A companion store that holds one credential the user approved.
+    struct CredentialService {
+        approved: String,
+        authorized: Vec<(Option<String>, String)>,
+        bound: Vec<String>,
+    }
+
+    impl ThreadListService for CredentialService {
+        fn list_threads(
+            &mut self,
+            _: &str,
+            _: super::super::thread_service::ThreadListRequest,
+        ) -> Result<super::super::thread_service::ThreadListPage, ProtocolError> {
+            Ok(super::super::thread_service::ThreadListPage {
+                threads: vec![],
+                next_cursor: None,
+            })
+        }
+
+        fn bind_authorized_client(&mut self, client_identity: &str) {
+            self.bound.push(client_identity.to_owned());
+        }
+
+        fn reconnect_approval(&self) -> Option<Approval> {
+            Some(owner_approval())
+        }
+
+        fn authorize_client(
+            &mut self,
+            _: &str,
+            presented: Option<&str>,
+            issued: &str,
+            _: &str,
+            _: &str,
+        ) -> Result<String, ProtocolError> {
+            self.authorized
+                .push((presented.map(str::to_owned), issued.to_owned()));
+            if presented == Some(self.approved.as_str()) {
+                Ok(self.approved.clone())
+            } else {
+                Err(ProtocolError::unauthorized())
+            }
+        }
+    }
+
+    fn owner_approval() -> Approval {
+        Approval {
+            profile: "desktop-owner".into(),
+            workspace: "workspace-a".into(),
+            scopes: ["thread.read".to_owned(), "run.write".to_owned()].into(),
+            lifetime: Duration::from_secs(3600),
+        }
+    }
+
+    fn read_value(stream: &mut UnixStream) -> Option<serde_json::Value> {
+        use std::io::Read;
+        let mut prefix = [0_u8; 4];
+        stream.read_exact(&mut prefix).ok()?;
+        let mut frame = prefix.to_vec();
+        frame.resize(4 + u32::from_be_bytes(prefix) as usize, 0);
+        stream.read_exact(&mut frame[4..]).ok()?;
+        super::super::decode_frame::<serde_json::Value>(&frame)
+            .ok()?
+            .map(|(value, _)| value)
+    }
+
+    /// Pairs one `cli` hello that presents `credential` on `route`, and
+    /// answers the Authorized frame, whether the user was asked, and the
+    /// service.
+    fn pair_cli(
+        route: MacosAttachConnectionRoute,
+        credential: &str,
+    ) -> (Option<serde_json::Value>, bool, CredentialService) {
+        use std::io::Write;
+        let (mut peer, server) = UnixStream::pair().unwrap();
+        peer.write_all(
+            &super::super::encode_frame(&serde_json::json!({
+                "protocol": "muniment.attach/1", "client": {"kind": "cli", "version": "0.4.2"},
+                "supported": {"min": 1, "max": 1}, "client_nonce": "nonce",
+                "authorized_client_id": CLIENT_ID, "authorized_client_credential": credential,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let served = std::thread::spawn(move || {
+            let mut diagnostic = AdmissionDiagnostic::route(
+                &Reader(false),
+                &std::env::current_exe().unwrap(),
+                Duration::from_secs(5),
+            );
+            diagnostic.route = route;
+            let mut service = CredentialService {
+                approved: "ab".repeat(32),
+                authorized: vec![],
+                bound: vec![],
+            };
+            let prompted = std::cell::Cell::new(false);
+            let _ = serve_macos_attach_route_with_state(
+                server,
+                &mut diagnostic,
+                501,
+                "1.0.0",
+                &mut service,
+                Some(owner_approval()),
+                ApprovalCoordinator::default(),
+                |_: &super::super::PairingChallenge, _: Duration| {
+                    prompted.set(true);
+                    None
+                },
+                &LiveConnectionRegistry::default(),
+                |_| {},
+            );
+            (prompted.get(), service)
+        });
+        let welcome = read_value(&mut peer).unwrap();
+        assert_eq!(welcome["selected"], 1);
+        let authorized = read_value(&mut peer);
+        drop(peer);
+        let (prompted, service) = served.join().unwrap();
+        (authorized, prompted, service)
+    }
+
+    #[test]
+    fn the_bundled_cli_pairs_without_a_prompt_and_its_credential_is_stored_nowhere() {
+        let approved = "ab".repeat(32);
+        let (authorized, prompted, service) = pair_cli(
+            MacosAttachConnectionRoute::BundledCompanion { peer_pid: 42 },
+            &approved,
+        );
+        let authorized = authorized.unwrap();
+        assert!(!prompted);
+        assert_eq!(authorized["credential_ephemeral"], true);
+        let ephemeral = authorized["authorized_client_credential"].as_str().unwrap();
+        assert_eq!(ephemeral.len(), 64);
+        // The credential the user approved is neither reused nor replaced.
+        assert_ne!(ephemeral, approved);
+        assert!(service.authorized.is_empty());
+        assert_eq!(service.approved, approved);
+        assert_eq!(service.bound, [CLIENT_ID]);
+
+        // A process outside the runtime that presents the ephemeral
+        // credential reconnects to nothing and waits on the user.
+        let (authorized, prompted, service) = pair_cli(
+            MacosAttachConnectionRoute::Companion { peer_pid: 42 },
+            ephemeral,
+        );
+        assert!(prompted);
+        assert!(authorized.is_none());
+        assert_eq!(
+            service.authorized,
+            [(Some(ephemeral.to_owned()), String::new())]
+        );
+        assert_eq!(service.approved, approved);
     }
 
     #[test]

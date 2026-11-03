@@ -836,6 +836,7 @@ where
             first_frame: None,
             registry,
             handoff_nonce,
+            ephemeral_credential: false,
         },
         desktop_version,
         timeout,
