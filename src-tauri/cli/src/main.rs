@@ -103,7 +103,7 @@ fn run_command(mut args: Vec<OsString>) -> Result<(), CliError> {
             || {},
         )
         .map_err(CliError::Client)?;
-        persist_authorized_client_credential(client.authorized_client_credential())?;
+        keep_authorized_client_credential(&client)?;
         client
             .onboard_workspace(&opened.to_string_lossy(), &workspace.to_string_lossy())
             .map_err(CliError::Client)?;
@@ -127,7 +127,7 @@ fn run_command(mut args: Vec<OsString>) -> Result<(), CliError> {
                 client_credential.as_deref(),
                 pairing_pending,
             )?;
-            persist_authorized_client_credential(client.authorized_client_credential())
+            keep_authorized_client_credential(&client)
                 .map_err(|_| ClientError::UnexpectedMessage)?;
             client.onboard_workspace(&opened.to_string_lossy(), &workspace.to_string_lossy())?;
             if args.first().is_some_and(|command| command == "threads") {
@@ -267,8 +267,7 @@ fn connect_record_client(
         || eprintln!("muniment: approve this harness in the Muniment desktop to reach the record."),
     )
     .map_err(|error| format!("{error}. {}", record_guidance(&error)))?;
-    persist_authorized_client_credential(client.authorized_client_credential())
-        .map_err(|error| guidance(&error).to_owned())?;
+    keep_authorized_client_credential(&client).map_err(|error| guidance(&error).to_owned())?;
     client
         .onboard_workspace(opened, workspace)
         .map_err(|error| format!("{error}. {}", record_guidance(&error)))?;
@@ -352,6 +351,31 @@ fn authorized_client_credential() -> Result<Option<String>, CliError> {
         Ok(_) => Err(CliError::Workspace),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(_) => Err(CliError::Workspace),
+    }
+}
+
+/// Stores the client's credential for the next run, unless the runtime made
+/// it ephemeral. An ephemeral credential stays in this process, so a later run
+/// from a terminal never finds it, and the credential the user approved stays.
+fn keep_authorized_client_credential(
+    client: &muniment_attach::AuthorizedClient,
+) -> Result<(), CliError> {
+    keep_credential(
+        client.credential_persists(),
+        client.authorized_client_credential(),
+        persist_authorized_client_credential,
+    )
+}
+
+fn keep_credential(
+    persists: bool,
+    credential: &str,
+    store: impl FnOnce(&str) -> Result<(), CliError>,
+) -> Result<(), CliError> {
+    if persists {
+        store(credential)
+    } else {
+        Ok(())
     }
 }
 
@@ -854,6 +878,23 @@ fn one_line(value: &str) -> String {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_ephemeral_credential_is_never_stored() {
+        let mut stored = Vec::new();
+        keep_credential(false, "ephemeral", |credential| {
+            stored.push(credential.to_owned());
+            Ok(())
+        })
+        .unwrap();
+        assert!(stored.is_empty());
+        keep_credential(true, "approved", |credential| {
+            stored.push(credential.to_owned());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(stored, ["approved"]);
+    }
     use muniment_attach::{
         authorized, encode_frame, handshake_stream, welcome, ErrorEnvelope, Event, EventName,
         Failure, Id, Protocol, ProtocolError, RedactedThreadSummary, Response, Success,
