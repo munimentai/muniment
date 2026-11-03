@@ -1,3 +1,4 @@
+import { markdownPlainText } from './assistant-markdown.js'
 import { modelLabel, modelReason, receiptNames } from './model-label.js'
 import { shortcutDisplayLabel } from './artifact-rail-state.js'
 import { receiptTime } from './execution-time.js'
@@ -256,11 +257,12 @@ function failureDetail(source) {
   return typeof value === 'string' && value.trim() ? value : null
 }
 
-// Streamed text never reaches the live region until the run settles.
+// Streamed text never reaches the live region until the run settles. The
+// reply reaches it as plain words, without its Markdown syntax.
 export function runAnnouncement(run) {
   if (!run) return ''
   if (run.phase === 'failed') return runFailureMessage(run)
-  if (run.phase === 'complete') return `Reply complete. ${run.text ?? ''}`.trim()
+  if (run.phase === 'complete') return `Reply complete. ${markdownPlainText(run.text)}`.trim()
   return runPhaseAnnouncements[run.phase] ?? ''
 }
 

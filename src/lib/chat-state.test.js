@@ -251,6 +251,13 @@ describe('chat composer and projection', () => {
     expect(runAnnouncement({ phase: 'failed', failureReason })).toBe(failureReason)
   })
 
+  it('announces a complete reply as plain words without its Markdown', () => {
+    expect(runAnnouncement({ phase: 'complete', text: 'Saved **Live44 Taker**.\n\n- Runs `daily-check` at [9 AM](https://example.com)' }))
+      .toBe('Reply complete. Saved Live44 Taker. Runs daily-check at 9 AM')
+    expect(runAnnouncement({ phase: 'complete', text: '' })).toBe('Reply complete.')
+    expect(runAnnouncement({ phase: 'complete' })).toBe('Reply complete.')
+  })
+
   it('threads projected tool activity into the active run', () => {
     const toolActivity = [
       { effectId: 'tool-1', displayName: 'Read file', status: 'running' },
