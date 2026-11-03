@@ -87,6 +87,28 @@ it('keeps a failed edit for retry and names the failure', async () => {
   await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Job title' })).not.toBeInTheDocument())
 })
 
+it('shows an instructions Save refusal beside that Save, above Delete agent, and clears it on Cancel', async () => {
+  const invoke = vi.fn(async (command, args) => {
+    if (args?.operation === 'agent.read') return { agent }
+    if (args?.operation === 'agent.save') throw new Error('Remove credentials from the agent instructions.')
+    return {}
+  })
+  render(AgentProfile, { agent, tauri: { invoke }, onchange: vi.fn(), onclose: vi.fn() })
+  await fireEvent.click(screen.getByRole('button', { name: 'Edit instructions' }))
+  await fireEvent.input(screen.getByRole('textbox', { name: 'Instructions' }), { target: { value: 'Use token sk-live-123 to post.' } })
+  await fireEvent.click(screen.getByRole('button', { name: 'Save', exact: true }))
+  const alert = await screen.findByRole('alert')
+  expect(alert).toHaveTextContent('Remove credentials from the agent instructions.')
+  expect(screen.getAllByRole('alert')).toHaveLength(1)
+  const form = screen.getByRole('form', { name: 'Edit Instructions' })
+  expect(form).toContainElement(alert)
+  expect(within(form).getByRole('button', { name: 'Save', exact: true }).compareDocumentPosition(alert) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  const remove = screen.getByRole('button', { name: 'Delete agent' })
+  expect(alert.compareDocumentPosition(remove) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  await fireEvent.click(within(form).getByRole('button', { name: 'Cancel' }))
+  expect(screen.queryByRole('alert')).toBeNull()
+})
+
 it('turns skills on and off, picks a core mode from the composer menu and limits messages to chosen agents', async () => {
   const { invoke, saved } = machine()
   const others = [{ id: 'editor', name: 'Editor', runtimeId: 'box' }, { id: 'triage', name: 'Triage', runtimeId: 'box' }]

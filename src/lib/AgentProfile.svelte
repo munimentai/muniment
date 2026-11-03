@@ -45,6 +45,8 @@
   let value = $state('')
   let busy = $state(false)
   let error = $state('')
+  // The field whose Save refused, so its error shows beside that Save.
+  let errorAt = $state(null)
   let deleting = $state(false)
   let removeMemory = $state(false)
   let removeThreads = $state(false)
@@ -211,12 +213,13 @@
   }
   async function endEdit() {
     const field = editing
+    if (errorAt === field) { error = ''; errorAt = null }
     editing = null
     await tick()
     panel?.querySelector(`[aria-label="Edit ${fieldLabel(field)}"]`)?.focus()
   }
-  async function action(work) {
-    busy = true; error = ''
+  async function action(work, at = null) {
+    busy = true; error = ''; errorAt = at
     try { await work() } catch (e) { error = String(e?.message ?? e) }
     finally { busy = false }
   }
@@ -235,7 +238,7 @@
       await saveAgent({ [editing]: value.trim() })
       busy = false
       await endEdit()
-    })
+    }, editing)
   }
   function chooseProject(id) {
     void closeMenu()
@@ -307,6 +310,7 @@
             {#if field === 'instructions'}<textarea aria-label="Instructions" rows="12" bind:value required disabled={busy}></textarea><small>Saving can propose routines from schedules in the instructions.</small>
             {:else}<input aria-label={label} bind:value maxlength={field === 'name' ? 100 : 120} required={field === 'name'} spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" disabled={busy} />{/if}
             <div class="actions"><button type="submit" data-variant="primary" disabled={busy || (['name','instructions'].includes(field) && !value.trim())}>Save</button><button type="button" disabled={busy} onclick={endEdit}>Cancel</button></div>
+            {#if error && errorAt === field}<p role="alert">{error}</p>{/if}
           </form>
         {:else}
           {#if field === 'instructions' && (agent.instructions || '').length > 400}<p class:clamped={!instructionsOpen}>{agent.instructions}</p><button class="more" aria-expanded={instructionsOpen} onclick={() => { instructionsOpen = !instructionsOpen }}>{instructionsOpen ? 'Show less' : 'Show all'}</button>
@@ -401,7 +405,7 @@
     </div>
     {/if}
     {#if notice}<p class="muted" role="status">{notice}</p>{/if}
-    {#if error}<p role="alert">{error}</p>{/if}
+    {#if error && !(errorAt && errorAt === editing)}<p role="alert">{error}</p>{/if}
   </div>
 </aside>
 
