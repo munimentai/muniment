@@ -10,6 +10,8 @@ use muniment_core::permission_gate::PLAN_TOOL;
 mod acquisition_coordinate;
 #[path = "pi_launch/compaction_coordinate.rs"]
 mod compaction_coordinate;
+#[path = "pi_launch/endpoint_wait_coordinate.rs"]
+mod endpoint_wait_coordinate;
 #[path = "pi_launch/folder_access_coordinate.rs"]
 mod folder_access_coordinate;
 #[path = "pi_launch/gateway_coordinate.rs"]

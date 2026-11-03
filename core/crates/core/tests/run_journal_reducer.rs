@@ -1052,6 +1052,9 @@ fn routing_stages_replay_and_reply_output_clears_the_wait() {
         ),
         (7, "routing", None),
         (8, "fallback", Some("fallback")),
+        // A retried model call names its attempt and its server.
+        (9, "retrying:2:2:DO Test", Some("retrying:2:2:DO Test")),
+        (10, "fallback", Some("fallback")),
     ] {
         events.push(event(seq, "model.routing.stage", json!({ "stage": stage })));
         projector.apply(events.last().unwrap()).unwrap();
@@ -1060,7 +1063,7 @@ fn routing_stages_replay_and_reply_output_clears_the_wait() {
             expected
         );
     }
-    events.push(event(9, "model.stream.delta", json!({"text":"hello"})));
+    events.push(event(11, "model.stream.delta", json!({"text":"hello"})));
     projector.apply(events.last().unwrap()).unwrap();
     assert_eq!(projector.projection().unwrap().routing_stage, None);
     assert_eq!(

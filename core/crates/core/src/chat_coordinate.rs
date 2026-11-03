@@ -1,5 +1,6 @@
 mod delta_batch;
 mod diagnostics;
+mod endpoint_wait;
 
 use crate::runtime_eprintln as eprintln;
 use delta_batch::HeldDeltas;
@@ -1424,6 +1425,21 @@ fn coordinate_work(
     // since, so the next call's text starts on a paragraph of its own.
     let mut text_end: Option<char> = None;
     let mut call_ended = false;
+    // A reply on a server the person added names that server while Pi
+    // retries it, and a probe with a short connect bound ends the wait when
+    // the server does not accept a connection.
+    let endpoint = grant
+        .is_local()
+        .then(|| app.local_default_model())
+        .flatten()
+        .zip(crate::state_root::state_directory())
+        .and_then(|(model, state)| {
+            endpoint_wait::Endpoint::of_model(&crate::state_root::agent_directory(&state), &model)
+        });
+    let probe = endpoint.as_ref().and_then(|endpoint| {
+        endpoint_wait::Probe::start(&endpoint.url, endpoint_wait::CONNECT_BOUND)
+    });
+    let mut answered = false;
     'coordinate: loop {
         diagnostics.log_lifecycle();
         if let Some(error) = gateway_failure
@@ -1481,6 +1497,45 @@ fn coordinate_work(
                 &mut open_effects,
                 "run.cancelled",
                 json!({}),
+                subject.as_deref(),
+            );
+            break;
+        }
+        if let Some(endpoint) = endpoint.as_ref().filter(|_| {
+            !answered
+                && probe
+                    .as_ref()
+                    .is_some_and(|probe| probe.silent(Duration::ZERO))
+        }) {
+            eprintln!(
+                "muniment-runtime: run_id={run_id} endpoint_probe outcome=silent bound_ms={}",
+                endpoint_wait::CONNECT_BOUND.as_millis()
+            );
+            if engine
+                .cancel(&transport, &adapter, Duration::from_secs(2))
+                .is_err()
+            {
+                engine.stop(runtime);
+            }
+            diagnostics.outcome = "failed";
+            diagnostics.provider_error = Some("Connection error.".into());
+            let _ = held_deltas.flush(
+                &app,
+                &journal,
+                &mut projector,
+                &run_id,
+                &mut seq,
+                subject.as_deref(),
+            );
+            fail_with_detail(
+                &app,
+                &journal,
+                &mut projector,
+                &run_id,
+                &mut seq,
+                &mut open_effects,
+                &endpoint.silent_reason(),
+                Some("Connection error."),
                 subject.as_deref(),
             );
             break;
@@ -1575,6 +1630,10 @@ fn coordinate_work(
         });
         if let Ok(event) = &event {
             ledger.record(event);
+            answered |= matches!(
+                event,
+                PiChatEvent::TextDelta(_) | PiChatEvent::ToolStarted { .. }
+            );
         }
         // Any event but text, and the idle poll that ends a window, commits
         // the held text before the event's own append.
@@ -1771,8 +1830,15 @@ fn coordinate_work(
                 if let Some(detail) = &detail {
                     diagnostics.provider_error = Some(detail.clone());
                 }
+                let silent = endpoint.as_ref().filter(|_| {
+                    detail
+                        .as_deref()
+                        .is_some_and(crate::sidecar::pi_chat::connection_failure)
+                });
                 let reason = if event == PiChatEvent::UsageLimit {
                     crate::model_router::balance::PickError::UsageLimit.message()
+                } else if let Some(endpoint) = silent {
+                    endpoint.silent_reason()
                 } else {
                     failure_reason(detail.as_deref())
                 };
@@ -1881,6 +1947,51 @@ fn coordinate_work(
                 }
             }
             Ok(PiChatEvent::ModelReported { .. }) => call_ended = true,
+            Ok(PiChatEvent::Retrying {
+                attempt,
+                max_attempts,
+                error,
+            }) => {
+                let connection = crate::sidecar::pi_chat::connection_failure(&error);
+                // A call that never reached the server gets one more try.
+                if connection && attempt > endpoint_wait::CONNECTION_RETRIES {
+                    eprintln!(
+                        "muniment-runtime: run_id={run_id} provider_retry stopped attempt={attempt} reason=connection"
+                    );
+                    if let Err(error) = adapter.stop_retry(&transport) {
+                        eprintln!(
+                            "muniment-runtime: run_id={run_id} provider_retry stop_failed error={error}"
+                        );
+                    }
+                    continue;
+                }
+                eprintln!(
+                    "muniment-runtime: run_id={run_id} provider_retry attempt={attempt} max={max_attempts} connection={connection}"
+                );
+                let retries = if connection {
+                    max_attempts.min(endpoint_wait::CONNECTION_RETRIES)
+                } else {
+                    max_attempts
+                };
+                let stage = match endpoint.as_ref().filter(|_| connection) {
+                    Some(endpoint) => endpoint.retry_stage(attempt + 1, retries + 1),
+                    None => endpoint_wait::retry_stage(attempt + 1, retries + 1),
+                };
+                if append_emit(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    "model.routing.stage",
+                    json!({ "stage": stage }),
+                    subject.as_deref(),
+                )
+                .is_err()
+                {
+                    break;
+                }
+            }
             Ok(PiChatEvent::RoutingStage(stage)) => {
                 if append_emit(
                     &app,

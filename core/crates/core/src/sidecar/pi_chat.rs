@@ -203,6 +203,13 @@ pub enum PiChatEvent {
     /// The turn failed, with the provider's own sentence when it gave one.
     Failed(Option<String>),
     UsageLimit,
+    /// Pi failed a model call and tries it again after a delay: `attempt` of
+    /// its `max_attempts` retries, after the call failed with `error`.
+    Retrying {
+        attempt: u32,
+        max_attempts: u32,
+        error: String,
+    },
     /// A valid Pi event for another part of the agent lifecycle.
     Interleaved,
 }
@@ -357,6 +364,27 @@ pub fn parse_frame(frame: &Value) -> Result<PiChatEvent, &'static str> {
             }
         }
         Some("agent_start") => Ok(PiChatEvent::TurnStarted),
+        Some("auto_retry_start") => Ok(PiChatEvent::Retrying {
+            attempt: frame
+                .get("attempt")
+                .and_then(Value::as_u64)
+                .map_or(1, |n| n.min(u64::from(u32::MAX)) as u32),
+            max_attempts: frame
+                .get("maxAttempts")
+                .and_then(Value::as_u64)
+                .map_or(1, |n| n.min(u64::from(u32::MAX)) as u32),
+            error: frame
+                .get("errorMessage")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .chars()
+                .take(500)
+                .collect(),
+        }),
+        // A retry that answered returns the run to the model's thought.
+        Some("auto_retry_end") if frame.get("success").and_then(Value::as_bool) == Some(true) => {
+            Ok(PiChatEvent::RoutingStage("thinking".into()))
+        }
         Some("message_end")
             if frame.pointer("/message/role").and_then(Value::as_str) == Some("assistant") =>
         {
@@ -505,6 +533,24 @@ const PROVIDER_DETAIL_CHARS: usize = 300;
 /// message of a JSON error body after an HTTP status, such as
 /// `400: {"message": ...}`, or the text itself. It comes back on one line,
 /// with credentials removed, and at most 300 characters long.
+/// Whether a provider's error says the request never reached the server:
+/// the connection was refused, timed out or found no host.
+pub fn connection_failure(text: &str) -> bool {
+    const SIGNS: [&str; 9] = [
+        "connection error",
+        "econnrefused",
+        "connection refused",
+        "enotfound",
+        "eai_again",
+        "etimedout",
+        "connecttimeout",
+        "unable to connect",
+        "fetch failed",
+    ];
+    let text = text.to_ascii_lowercase();
+    SIGNS.iter().any(|sign| text.contains(sign))
+}
+
 pub fn provider_error_detail(text: &str) -> Option<String> {
     if let Some(provider) = refused_key_provider(text) {
         return Some(key_failure_detail(
@@ -1169,6 +1215,13 @@ impl PiRunAdapter {
             }
         }
         Err("Pi cancellation did not finish".into())
+    }
+
+    /// Stops Pi's waiting retry, so the failure it retried ends the turn.
+    pub fn stop_retry(&self, transport: &PiRpcTransport) -> Result<(), String> {
+        transport
+            .call(json!({"type": "abort_retry"}), Duration::from_secs(2))
+            .map(|_| ())
     }
 
     /// Queues a message for delivery during the active turn. Success only

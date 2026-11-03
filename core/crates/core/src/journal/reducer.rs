@@ -918,12 +918,14 @@ impl ChatProjector {
             "model.routing.stage" => {
                 let stage = field(event, "stage")?;
                 // `folder-access` names an operating system consent prompt
-                // the run waits on, and `routing` ends that wait.
+                // the run waits on, and `routing` ends that wait. `retrying:`
+                // names the model call Pi tries again and its server.
                 if matches!(
                     stage.as_str(),
                     "choosing-model" | "waiting-for-account" | "fallback" | "thinking"
                 ) || stage == "folder-access"
                     || stage.starts_with("folder-access:")
+                    || stage.starts_with("retrying:")
                 {
                     self.chat.routing_stage = Some(stage);
                 } else if stage == "routing" {

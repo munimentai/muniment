@@ -487,6 +487,23 @@ fn pi_resume(args: Vec<String>) {
                             serde_json::json!({"type":"message_update", "assistantMessageEvent":{"type":"text_delta", "delta":text}})
                         );
                     }
+                } else if let Ok(error) = std::env::var("PI_RESUME_STUB_RETRY_ERROR") {
+                    // Pi's model call fails, and Pi retries it after a delay:
+                    // the first retry fails too, and the second waits.
+                    for attempt in 1..=2 {
+                        println!("{}", serde_json::json!({"type":"agent_start"}));
+                        println!(
+                            "{}",
+                            serde_json::json!({"type":"agent_end", "willRetry":false, "messages":[
+                                {"role":"assistant", "stopReason":"error", "errorMessage":error}
+                            ]})
+                        );
+                        println!(
+                            "{}",
+                            serde_json::json!({"type":"auto_retry_start", "attempt":attempt,
+                                "maxAttempts":3, "delayMs":2000, "errorMessage":error})
+                        );
+                    }
                 } else if let Ok(plan) = std::env::var("PI_RESUME_STUB_PLAN") {
                     // The plan tool's first step: the plan check.
                     println!(
@@ -696,6 +713,28 @@ fn pi_resume(args: Vec<String>) {
                     serde_json::json!({"type":"message_update", "assistantMessageEvent":{"type":"text_delta", "delta":" resumed"}})
                 );
                 println!("{}", serde_json::json!({"type":"agent_end"}));
+            }
+            "abort_retry" => {
+                if let Ok(path) = std::env::var("PI_RESUME_STUB_REQUESTS") {
+                    let mut requests = fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(path)
+                        .unwrap();
+                    writeln!(requests, "{request}").unwrap();
+                }
+                println!(
+                    "{}",
+                    serde_json::json!({"type":"response", "command":"abort_retry", "success":true, "id":request["id"]})
+                );
+                println!(
+                    "{}",
+                    serde_json::json!({"type":"auto_retry_end", "success":false, "attempt":2, "finalError":"Retry cancelled"})
+                );
+                println!(
+                    "{}",
+                    serde_json::json!({"type":"agent_settled", "aborted":false})
+                );
             }
             "abort" => {
                 if let Ok(path) = std::env::var("PI_RESUME_STUB_ABORT_CAPTURE") {

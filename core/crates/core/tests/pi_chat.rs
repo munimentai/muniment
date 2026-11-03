@@ -1,6 +1,7 @@
 use muniment_core::sidecar::pi_chat::{
-    parse_frame, ExtensionUiAnswer, ExtensionUiDialog, ExtensionUiRequest, ExtensionUiResponse,
-    FollowUpCommand, PiChatEvent, PiImageContent, PiRunAdapter, PromptCommand, SteerCommand,
+    connection_failure, parse_frame, ExtensionUiAnswer, ExtensionUiDialog, ExtensionUiRequest,
+    ExtensionUiResponse, FollowUpCommand, PiChatEvent, PiImageContent, PiRunAdapter, PromptCommand,
+    SteerCommand,
 };
 
 fn extension_request(frame: serde_json::Value) -> ExtensionUiRequest {
@@ -924,6 +925,41 @@ fn startup_answers_name_requests_before_acknowledgement_and_keeps_other_frames()
         PiChatEvent::Completed
     );
     supervisor.shutdown().unwrap();
+}
+
+#[test]
+fn pi_retries_are_typed_and_a_connection_failure_is_named() {
+    assert_eq!(
+        parse_frame(&json!({"type":"auto_retry_start","attempt":1,"maxAttempts":3,"delayMs":2000,"errorMessage":"Connection error."})).unwrap(),
+        PiChatEvent::Retrying {
+            attempt: 1,
+            max_attempts: 3,
+            error: "Connection error.".into(),
+        }
+    );
+    assert_eq!(
+        parse_frame(&json!({"type":"auto_retry_end","success":true,"attempt":2})).unwrap(),
+        PiChatEvent::RoutingStage("thinking".into())
+    );
+    assert_eq!(
+        parse_frame(&json!({"type":"auto_retry_end","success":false,"attempt":2,"finalError":"Retry cancelled"})).unwrap(),
+        PiChatEvent::Interleaved
+    );
+    for error in [
+        "Connection error.",
+        "connect ECONNREFUSED 127.0.0.1:8000",
+        "getaddrinfo ENOTFOUND models.invalid",
+        "Unable to connect. Is the computer able to access the url?",
+    ] {
+        assert!(connection_failure(error), "{error}");
+    }
+    for error in [
+        "529 overloaded",
+        "Rate limit exceeded",
+        "500 Internal Server Error",
+    ] {
+        assert!(!connection_failure(error), "{error}");
+    }
 }
 
 #[test]
