@@ -653,7 +653,9 @@
   // A profile with no thread behind it keeps the page it opened beside, and
   // it closes with that page.
   let profileOnPage = $state(false)
-  function revealAgentProfile() { browserPanel = null; if (!profileOnPage) { projectsOpen = false; agentsOpen = false; fullPage = null }; closeRail(); agentProfileOpen = true; agentResize.fit() }
+  // The profile takes the one rail column. A tool put aside while a catalog
+  // page showed stays closed, so coming back to the thread never draws both.
+  function revealAgentProfile() { browserPanel = null; parkedPanel = null; if (!profileOnPage) { projectsOpen = false; agentsOpen = false; fullPage = null }; closeRail(); agentProfileOpen = true; agentResize.fit() }
   $effect(() => {
     if (profileOnPage && !agentsOpen && !projectsOpen) untrack(() => { profileOnPage = false; agentProfileOpen = false; profileOnlyAgent = null })
   })

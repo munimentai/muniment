@@ -4977,6 +4977,37 @@ describe('sidebar collapse', () => {
     expect(invoke.mock.calls.filter(([cmd]) => cmd === 'chat_new_thread')).toHaveLength(0)
   })
 
+  it.each(['Open profile', 'Delete'])('gives the rail to the profile from a card\'s %s while Files is open, so the two never overlap', async (action) => {
+    threadSummaryResult = [{ threadId: 'agent-thread', title: 'Scout chat', updatedAt: '2026-01-03T00:00:00Z' }, { threadId: 'other-thread', title: 'Other', updatedAt: '2026-01-02T00:00:00Z' }]
+    const original = invoke.getMockImplementation()
+    const scout = { id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null, routines: [] }
+    let deleted = false
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args) ? agentListAnswer(deleted ? [] : [scout], deleted ? {} : { 'agent-1': 'agent-thread' })
+      : command === 'agent_request' && args?.operation === 'agent.delete' ? (deleted = true, {})
+      : command === 'chat_current_thread' ? Promise.resolve('other-thread')
+      : command === 'chat_thread_open' ? []
+      : command === 'workspace_folders' ? [{ label: 'Thread workspace', path: '/home/sessions/Other' }]
+      : command === 'workspace_list' ? { path: args.path, entries: [] }
+      : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
+    render(App)
+    await findReadyWorkspaceComposer()
+    await fireEvent.click(screen.getByRole('button', { name: 'Workspace tools' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Files', exact: true }))
+    await waitFor(() => expect(document.querySelector('.workspace')).toHaveClass('tools-open'))
+    await openSidebarPage('Agents')
+    await fireEvent.click(await within(await screen.findByRole('region', { name: 'Agents', exact: true })).findByRole('button', { name: 'Actions for Scout' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: action }))
+    const profile = await screen.findByRole('complementary', { name: 'Agent profile' })
+    await waitFor(() => expect(document.querySelector('.thread-row.active-thread')).toHaveAttribute('data-thread-id', 'agent-thread'))
+    await tick()
+    expect(document.querySelector('.workspace')).not.toHaveClass('tools-open')
+    expect(document.querySelector('.workspace')).toHaveClass('agent-profile-open')
+    if (action !== 'Delete') return
+    await fireEvent.click(within(await within(profile).findByRole('group', { name: 'Delete agent' })).getByRole('button', { name: 'Confirm delete' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', expect.objectContaining({ operation: 'agent.delete' })))
+    await waitFor(() => expect(screen.queryByRole('complementary', { name: 'Agent profile' })).toBeNull())
+  })
+
   it('opens "Open profile" on an agent with no thread or creation chat beside the Agents page, and closes it with the page', async () => {
     threadSummaryResult = [{ threadId: 'ordinary-thread', title: 'Single Word Acknowledgment', updatedAt: '2026-01-02T00:00:00Z' }]
     const original = invoke.getMockImplementation()
