@@ -88,3 +88,10 @@ for (const scheme of ['light', 'dark']) for (const [where, left, embedded] of [[
     expect(picker.textContent).toContain('Grok 4.20 0309 Reasoning')
   })
 }
+
+it('selects no word of a row label, while the search field keeps its text selectable', () => {
+  const { container } = render(ModelPicker, { inventory: { providers: [{ id: 'openai', name: 'OpenAI', source: 'key', models: [{ id: 'astra-large' }] }] }, onchoose() {}, onmanage() {}, onclose() {} })
+  const row = container.querySelector('.picker-row')
+  for (const node of [row, row.querySelector('.model-id'), container.querySelector('.rail-mark')]) expect(getComputedStyle(node).userSelect).toBe('none')
+  expect(getComputedStyle(container.querySelector('input[type="search"]')).userSelect).not.toBe('none')
+})

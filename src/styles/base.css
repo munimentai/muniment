@@ -87,6 +87,18 @@ a:hover {
   background-color: transparent !important;
 }
 
+/* The model picker, a menu and a list of choices are controls, not text, so
+   a press on a row selects no word of its label (press-target.js keeps the
+   right button's default off too). A text field in them keeps selection. */
+:is([data-panel="model-picker"], [role="menu"], [role="menubar"], [role="listbox"], [role="tree"]) :not(input, textarea, [contenteditable]:not([contenteditable="false"])),
+:is([role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="option"], [role="treeitem"]) {
+  user-select: none;
+  -webkit-user-select: none;
+}
+:is([data-panel="model-picker"], [role="menu"], [role="menubar"], [role="listbox"], [role="tree"]) :is(input, textarea) {
+  user-select: text;
+  -webkit-user-select: text;
+}
 
 code,
 kbd,

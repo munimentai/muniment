@@ -48,3 +48,19 @@ it('keeps the default off a secondary press on a sidebar row, so no word is sele
   expect(down('field', { button: 2 })).toBe(false)
   expect(down('text', { button: 2 })).toBe(false)
 })
+
+it('keeps the default off a secondary press on a model picker, menu, list or tree row, and not on its text field', () => {
+  document.body.innerHTML = '<div data-panel="model-picker"><input id="search"><button id="model"><span id="label">Astra</span></button></div>'
+    + '<div role="menu"><button role="menuitem" id="item">Rename</button></div><ul role="listbox"><li role="option" id="option">Scout</li></ul>'
+    + '<div role="tree"><div role="treeitem" id="file">notes.md</div></div><main><p id="text">Reply</p></main>'
+  const down = (id, init) => {
+    const event = new MouseEvent('mousedown', { bubbles: true, cancelable: true, ...init })
+    document.getElementById(id).dispatchEvent(event)
+    return event.defaultPrevented
+  }
+  for (const id of ['label', 'model', 'item', 'option', 'file']) expect(down(id, { button: 2 })).toBe(true)
+  expect(down('label', { button: 0, ctrlKey: true })).toBe(true)
+  expect(down('label', { button: 0 })).toBe(false)
+  expect(down('search', { button: 2 })).toBe(false)
+  expect(down('text', { button: 2 })).toBe(false)
+})
