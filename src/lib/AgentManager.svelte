@@ -21,6 +21,13 @@
   let {tauri, onselect, oncreate, onchange=()=>{}, onimported=()=>{}, pending=[], threadSummaries=[], onopen, agents=null, runtimeList=null, inventory=null, latestRuns=null, isArchived=()=>false, onaction=()=>{}, onprofile=()=>{}, onrun=()=>{}, onopenrun=null, onvisibility=null, onmanagemodels=()=>{}, ongroup=null}=$props()
   let archived = $state(false)
   let importOpen = $state(false)
+  // A draft card reads what its newest draft does, else what the person
+  // asked for, else how to start it.
+  function draftDescription(plan) {
+    const turns = plan?.turns ?? []
+    const words = turns.findLast((turn) => turn?.reply?.draft?.instructions?.trim())?.reply.draft.instructions ?? turns.findLast((turn) => turn?.message?.trim())?.message ?? ''
+    return words.trim() || 'Draft agent. Describe its task to shape it.'
+  }
   // The machines an import can land on: this computer and each that answers.
   const importRuntimes = $derived(agentRuntimes(runtimeList).map(runtime => ({ id: runtime.id, name: machineName(runtime) })))
   const machineOf = (agent) => agent.primaryMachine ?? agentMachine(runtimeList, agent)
@@ -79,8 +86,8 @@
       {/each}
       {#each pending.filter(plan=>isArchived('creation',plan)===archived) as plan (plan.threadId)}
         <CatalogCard onclick={()=>onopen(plan)}>
-          {#snippet menu()}<CatalogActions name={creationTitle(plan, threadSummaries)} {archived} onaction={(action,name)=>onaction('creation',plan,action,name)}/>{/snippet}
-          <LucideIcon name="bot" size={32}/><strong>{creationTitle(plan, threadSummaries)}</strong><span>Draft agent. Describe its task to shape it.</span><small>Continue creation</small>
+          {#snippet menu()}<CatalogActions name={creationTitle(plan, threadSummaries)} {archived} deleteNote="Its draft chat is deleted. Files you added stay." onaction={(action,name)=>onaction('creation',plan,action,name)}/>{/snippet}
+          <LucideIcon name="bot" size={32}/><strong>{creationTitle(plan, threadSummaries)}</strong><span>{draftDescription(plan)}</span><small>Continue creation</small>
         </CatalogCard>
       {/each}
     </CardGrid>

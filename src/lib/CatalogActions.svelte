@@ -4,7 +4,7 @@
   import { menuStep } from './menu-pointer.js'
   import { tick, onMount } from 'svelte'
   import LucideIcon from './LucideIcon.svelte'
-  let { name, archived = false, onaction, disabled = false, extraActions = [], allowRename = true, allowArchive = true, allowDelete = true, confirmDelete = true, maxNameLength = 160 } = $props()
+  let { name, archived = false, onaction, disabled = false, extraActions = [], allowRename = true, allowArchive = true, allowDelete = true, confirmDelete = true, maxNameLength = 160, deleteNote = 'Saved files and chat history stay.' } = $props()
   let open = $state(false), mode = $state('menu'), value = $state(''), error = $state(''), busy = $state(false)
   let trigger, menu
   // A click opens the menu with focus on its first item but no item shown,
@@ -60,7 +60,7 @@
       </form>
     {:else}
       <header><strong>Delete</strong><PopupClose label="Close delete" disabled={busy} onclick={close} /></header>
-      <p>Delete “{name}”?</p><p class="muted">Saved files and chat history stay.</p>
+      <p>Delete “{name}”?</p><p class="muted">{deleteNote}</p>
       <div class="buttons"><button class="danger" onclick={() => choose('delete')} disabled={busy}>Confirm delete</button><button onclick={close} disabled={busy}>Cancel</button></div>
     {/if}
     {#if error}<p role="alert">{error}</p>{/if}
