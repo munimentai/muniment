@@ -97,11 +97,21 @@
     list?.querySelector('[aria-selected="true"]')?.focus()
   }
   $effect(() => { if (selected && tools[selected] && !tabs.some(t => t.id === selected)) tabs = [...tabs,{id:selected,...tools[selected]}] })
+  // A selected file tab that closed while the panel was put aside, as when
+  // its draft was deleted from Agents, comes back with no tab. The panel
+  // then selects the Files tab, or the first tab, or a thread's Files.
+  $effect(() => {
+    const id = selected
+    if (!id?.startsWith('file:') || tabs.some(t => t.id === id) || (requestedFile && requestedFile !== openedRequest)) return
+    untrack(() => onselect(tabs.find(t => t.id === 'files')?.id ?? tabs[0]?.id ?? (threadId ? 'files' : null)))
+  })
   $effect(() => {
     selected; tabs.length
     void tick().then(() => tabList?.querySelector('[aria-selected="true"]')?.closest('.tab')?.scrollIntoView?.({block: 'nearest', inline: 'nearest'}))
   })
-  $effect(() => { const file = requestedFile; if (file) untrack(() => openFile(file)) })
+  // The requested file this panel opened, so a request still on its way holds its selection.
+  let openedRequest = null
+  $effect(() => { const file = requestedFile; if (file) untrack(() => { openFile(file); openedRequest = file }) })
 </script>
 <aside data-panel="workspace" class="workspace-panel" class:hidden={!selected} class:maximized aria-label="Workspace panel">
   <header data-panel-header class="tabs-header">

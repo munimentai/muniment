@@ -122,3 +122,26 @@ it('closes a deleted draft\'s file tabs and names a hidden Files tab after the t
   expect(invoke.mock.calls.filter(([command, args]) => command === 'workspace_folders' && args.threadId === 't2')).toHaveLength(0)
   vi.unstubAllGlobals()
 })
+// A draft's file tab that closed while Agents put the panel aside comes back
+// as the selection. The thread then shows its Files tab, not a blank panel.
+it('selects the Files tab when the selected file tab closed while the panel was put aside', async () => {
+  vi.stubGlobal('ResizeObserver', class {observe() {} disconnect() {}})
+  vi.stubGlobal('matchMedia', () => ({matches: false, addEventListener() {}, removeEventListener() {}}))
+  const invoke = vi.fn(async (command, args) => command === 'workspace_folders' ? [{label: 'Thread workspace', path: `/home/sessions/${args.threadId}`}] : command === 'workspace_list' ? {path: args.path, entries: []} : '')
+  const onselect = vi.fn()
+  const draftFile = {path: '/home/sessions/New_agent-0b3e9d21/live38-draft.txt', name: 'live38-draft.txt', directory: false}
+  const view = render(WorkspacePanel, {props: {tauri: {invoke}, selected: 'files', context: {threadId: 'draft', label: 'New agent'}, threadId: 'draft', onselect}})
+  await view.rerender({props: {requestedFile: draftFile}})
+  await view.rerender({props: {selected: `file:${draftFile.path}`, requestedFile: null}})
+  // Agents shows: the panel is put aside, then the draft goes.
+  await view.rerender({props: {selected: null}})
+  await view.rerender({props: {gone: {ids: ['draft']}}})
+  await waitFor(() => expect(screen.queryByRole('tab', {name: 'live38-draft.txt'})).toBeNull())
+  onselect.mockClear()
+  // The next thread brings the put-aside selection back.
+  await view.rerender({props: {selected: `file:${draftFile.path}`, context: {threadId: 't2', threadTitle: 'Plan'}, threadId: 't2'}})
+  await waitFor(() => expect(onselect).toHaveBeenLastCalledWith('files'))
+  await view.rerender({props: {selected: 'files'}})
+  expect(screen.getByRole('tab', {name: 'Plan'})).toHaveAttribute('aria-selected', 'true')
+  vi.unstubAllGlobals()
+})
