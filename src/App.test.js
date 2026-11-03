@@ -11890,6 +11890,30 @@ describe('the swarm', () => {
     expect(within(list).queryByRole('button', { name: 'Deny' })).toBeNull()
   })
 
+  it('answers an agent run question in its thread through the approval core routes', async () => {
+    HTMLDialogElement.prototype.showModal = function () { this.open = true }
+    HTMLDialogElement.prototype.close = function () { this.open = false }
+    const prefill = JSON.stringify({ questions: [{ id: 'tone', question: 'Which tone?', options: [{ label: 'Formal' }, { label: 'Casual' }] }] })
+    const gate = { gate_id: 'g1', kind: 'editor', title: 'muniment:ask_user_question', prefill }
+    const approval = { approval_id: 'r1:g1', agent_id: 'a1', agent_name: 'Lead scout', runtime_id: 'core-laptop', run_id: 'r1', gate_id: 'g1', thread_id: 'agent-thread', state: 'pending', created_at: new Date().toISOString(), request: gate }
+    threadSummaryResult = [{ threadId: 'agent-thread', title: 'Lead scout run', updatedAt: '', runtimeId: 'local' }]
+    swarmMachine({ approvals: [approval], answers: { 'agent.approval_answer': () => ({ status: 'answered', approval: { ...approval, state: 'answered' } }), 'agent.runs': () => ({ runs: [] }) } })
+    const swarmed = invoke.getMockImplementation()
+    invoke.mockImplementation((command, args) => command === 'chat_current_thread' ? Promise.resolve('agent-thread')
+      : command === 'chat_thread_open' ? Promise.resolve([{ runId: 'r1', phase: 'pending-permission', text: '', prompt: 'Draft the update.', receipt: null, toolActivity: [], pendingPermission: { gateId: 'g1', kind: 'editor', title: 'muniment:ask_user_question', prefill } }])
+        : swarmed(command, args))
+    render(App)
+    const dialog = await screen.findByRole('dialog', { name: 'A few details' })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', expect.objectContaining({ operation: 'agent.approvals' })))
+    expect(screen.queryByText('This request needs its conversation.')).toBeNull()
+    expect(screen.queryByRole('article', { name: 'Approval for Lead scout' })).toBeNull()
+    await fireEvent.click(within(dialog).getByRole('radio', { name: 'Casual' }))
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Submit answers' }))
+    const value = JSON.stringify({ answers: [{ id: 'tone', question: 'Which tone?', selected: ['Casual'], text: '' }] })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'agent.approval_answer', body: { approval_id: 'r1:g1', answer: { type: 'editor', value } } }))
+    expect(invoke).not.toHaveBeenCalledWith('chat_answer_permission', expect.anything())
+  })
+
   it('posts a follow-up in a thread another machine runs to that machine through core', async () => {
     threadSummaryResult = [{ threadId: 'box-thread', title: 'Hostname', updatedAt: '', runtimeId: 'local', owner_runtime: 'core-box', replica: true }]
     swarmMachine({ answers: { 'thread.post': () => ({ message_id: 'm9', forwarded: true, op_id: 'op1', state: 'sent' }) } })

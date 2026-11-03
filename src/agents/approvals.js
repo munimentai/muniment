@@ -3,6 +3,7 @@
 // answers it accepts (`answers`), routes each answer to the machine that runs
 // the agent and keeps the first one. An approval from an older runtime has
 // neither, so its gate's own options answer it.
+import { isQuestionGate } from '../lib/user-question.js'
 
 export const ANSWER_LABELS = {
   allow_once: 'Allow once',
@@ -18,9 +19,22 @@ const ORDER = Object.keys(ANSWER_LABELS)
 const ALLOW_ONCE = 'Allow once'
 const DENY = 'Deny'
 
+// The answer form an approval's request takes besides its buttons: `question`
+// for a `muniment:ask_user_question` gate, `text` for any other input or
+// editor gate, `browser` for the browser gate the app works by itself, or
+// null.
+export function approvalForm(approval) {
+  const request = approval?.request
+  if (Array.isArray(approval?.answers) && approval.answers.length) return null
+  if (isQuestionGate(request)) return 'question'
+  if (request?.kind === 'editor' && request.title === 'muniment:browser') return 'browser'
+  if (request?.kind === 'input' || request?.kind === 'editor') return 'text'
+  return null
+}
+
 // `[{ label, answer, tone }]` for one approval. Only the answers core lists
-// appear, in a fixed order. A request that asks for text or a file review
-// opens its conversation instead.
+// appear, in a fixed order. A text or file review request offers Deny, which
+// ends the wait as the conversation's Deny does. A question offers none.
 export function approvalChoices(approval) {
   if (Array.isArray(approval?.answers) && approval.answers.length) {
     return ORDER.filter((id) => approval.answers.includes(id))
@@ -43,6 +57,7 @@ export function approvalChoices(approval) {
     }
     return options.map((option) => ({ label: option, answer: { type: 'select', value: option } }))
   }
+  if (approvalForm(approval) === 'text' || request?.kind === 'code_diff') return [{ label: DENY, answer: { type: 'cancelled' }, tone: 'deny' }]
   return []
 }
 

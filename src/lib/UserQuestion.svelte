@@ -4,31 +4,21 @@
   import { panelScroll } from './panel-scroll.js'
   import { COMPOSER_PANEL_EVENT, openComposerPanel } from './composer-panels.js'
   import { onMount } from 'svelte'
+  import { parseQuestions, pickOption, questionAnswerValue, questionsComplete } from './user-question.js'
   let { payload, anchor, pending = false, error = '', onanswer } = $props()
   let dialog
   let index = $state(0)
   let answers = $state({})
-  let questions = $derived.by(() => {
-    try {
-      const value = JSON.parse(payload).questions
-      if (!Array.isArray(value) || value.length < 1 || value.length > 4) return []
-      if (new Set(value.map(q => q.id)).size !== value.length) return []
-      return value.every(q => typeof q.id === 'string' && typeof q.question === 'string'
-        && (!q.options || (Array.isArray(q.options) && q.options.length <= 6 && q.options.every(o => typeof o.label === 'string')))) ? value : []
-    } catch { return [] }
-  })
+  let questions = $derived(parseQuestions(payload))
   let question = $derived(questions[index])
-  let complete = $derived(questions.length > 0 && questions.every(q => answers[q.id]?.selected?.length || answers[q.id]?.text?.trim()))
+  let complete = $derived(questionsComplete(questions, answers))
   function update(id, change) { answers = { ...answers, [id]: { selected: [], text: '', ...answers[id], ...change } } }
-  function select(label) {
-    const selected = answers[question.id]?.selected ?? []
-    update(question.id, { selected: question.multiSelect ? (selected.includes(label) ? selected.filter(x => x !== label) : [...selected, label]) : [label] })
-  }
+  function select(label) { answers = pickOption(answers, question, label) }
   function open() { openComposerPanel('questions'); if (!dialog.open) dialog.showModal() }
   async function submit(event) {
     event.preventDefault()
     if (!complete || pending) return
-    await onanswer(JSON.stringify({ answers: questions.map(q => ({ id: q.id, question: q.question, ...answers[q.id] })) }))
+    await onanswer(questionAnswerValue(questions, answers))
   }
   onMount(() => {
     let frame

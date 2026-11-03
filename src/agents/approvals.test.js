@@ -31,7 +31,9 @@ describe('approval answers', () => {
       { type: 'confirm', value: false },
     ])
     expect(approvalChoices({ request: { kind: 'select', title: 'Pick', options: ['Red', 'Blue'] } }).map((choice) => choice.label)).toEqual(['Red', 'Blue'])
-    expect(approvalChoices({ request: { kind: 'input', title: 'Name?' } })).toEqual([])
+    expect(approvalChoices({ request: { kind: 'input', title: 'Name?' } })).toEqual([{ label: 'Deny', answer: { type: 'cancelled' }, tone: 'deny' }])
+    expect(approvalChoices({ request: { kind: 'code_diff', effect_id: 'e' } }).map((choice) => choice.answer)).toEqual([{ type: 'cancelled' }])
+    expect(approvalChoices({ request: { kind: 'editor', title: 'muniment:ask_user_question', prefill: '{}' } })).toEqual([])
     expect(approvalChoices(undefined)).toEqual([])
   })
 })

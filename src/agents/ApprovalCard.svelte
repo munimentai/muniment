@@ -9,7 +9,8 @@
   import AgentAvatar from '../lib/AgentAvatar.svelte'
   import MachineMark from './MachineMark.svelte'
   import { agentRequest } from './agent-runtime.js'
-  import { approvalChoices, approvalOutcome, approvalSummary, longInput } from './approvals.js'
+  import { approvalChoices, approvalForm, approvalOutcome, approvalSummary, longInput } from './approvals.js'
+  import { parseQuestions, pickOption, questionAnswerValue, questionsComplete } from '../lib/user-question.js'
   import { whenLabel } from '../lib/agent-labels.js'
   import ToolCall from '../activity/ToolCall.svelte'
   import { ruleInput } from '../activity/tool-call.js'
@@ -25,6 +26,15 @@
   const plan = $derived(String(approval.plan ?? '').trim())
   let planOpen = $state(false)
   const shown = $derived(agent ?? { id: approval.agent_id, name: approval.agent_name })
+  // A question or text request takes its answer here, as its conversation
+  // does, so a run with no conversation can still go on.
+  const form = $derived(approvalForm(approval))
+  const questions = $derived(form === 'question' ? parseQuestions(approval.request?.prefill) : [])
+  let answers = $state({})
+  let text = $state('')
+  const complete = $derived(questionsComplete(questions, answers))
+  const answerText = (question, value) => { answers = { ...answers, [question.id]: { selected: [], text: '', ...answers[question.id], text: value } } }
+  const conversation = $derived(!!approval.thread_id)
 
   async function answer(choice) {
     busy = true
@@ -48,7 +58,29 @@
     {#if machine}<MachineMark {machine} />{/if}
     <time class="when" datetime={approval.created_at}>{whenLabel(approval.created_at)}</time>
   </header>
-  {#if approval.presentation && !plan}
+  {#if form === 'question'}
+    <p class="operation human">{approval.agent_name} asks you</p>
+    {#if questions.length}
+      {#each questions as question (question.id)}
+        <fieldset class="question" disabled={busy || settled}>
+          <legend>{question.question}</legend>
+          {#if question.options?.length}
+            <div class="options" role="group" aria-label={question.question}>
+              {#each question.options as option (option.label)}
+                <Button variant="outline" aria-pressed={answers[question.id]?.selected?.includes(option.label) ?? false} title={option.description ?? undefined} onclick={() => { answers = pickOption(answers, question, option.label) }}>{option.label}</Button>
+              {/each}
+            </div>
+          {/if}
+          <textarea class="field" rows="2" aria-label={`Your answer: ${question.question}`} placeholder="Write an answer or add details" value={answers[question.id]?.text ?? ''} oninput={(event) => answerText(question, event.currentTarget.value)}></textarea>
+        </fieldset>
+      {/each}
+    {:else}<p class="note" role="alert">The questions could not be displayed.</p>{/if}
+  {:else if form === 'text'}
+    <p class="operation">{summary.title}</p>
+    <textarea class="field" rows="3" aria-label={summary.title} placeholder={approval.request?.placeholder ?? ''} disabled={busy || settled} bind:value={text}></textarea>
+  {:else if form === 'browser'}
+    <p class="operation human">{approval.agent_name} is using the browser.</p>
+  {:else if approval.presentation && !plan}
     <ToolCall variant="card" presentation={approval.presentation} reason={approval.reason ?? ''} input={ruleInput(approval.rule)} />
   {:else}
   <p class="operation">{plan ? 'Approve this plan?' : summary.operation}</p>
@@ -68,9 +100,17 @@
     <div class="actions">
       {#each choices as choice (choice.label)}
         <Button variant={choice.tone === 'deny' ? 'outline' : 'default'} disabled={busy} onclick={() => answer(choice)}>{choice.label}</Button>
-      {:else}
-        <p class="note">This request needs its conversation.</p>
       {/each}
+      {#if form === 'question' && questions.length}
+        <Button disabled={busy || !complete} onclick={() => answer({ answer: { type: 'editor', value: questionAnswerValue(questions, answers) } })}>{busy ? 'Sending…' : 'Send answers'}</Button>
+      {:else if form === 'text'}
+        <Button disabled={busy} onclick={() => answer({ answer: { type: approval.request.kind, value: text } })}>Submit</Button>
+      {/if}
+      {#if approval.request?.kind === 'code_diff'}
+        <p class="note">{conversation ? 'Review the file changes in its conversation.' : 'This run has no conversation to show its file changes in. Deny ends the wait.'}</p>
+      {:else if !choices.length && !form}
+        <p class="note">{conversation ? 'Answer this request in its conversation.' : 'This run has no conversation, and this request takes no answer here. The run ends the wait when its unattended time runs out.'}</p>
+      {/if}
       {#if onopen}<Button variant="outline" disabled={busy} onclick={() => onopen(approval)}>Open conversation</Button>{/if}
     </div>
   {/if}
@@ -95,4 +135,9 @@
   .more:hover { background: var(--faint); color: var(--ink); }
   .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
   .note { margin: 0; color: var(--muted); font-size: var(--text-12); }
+  .operation.human { font-family: var(--font-human); }
+  .question { display: grid; gap: 6px; min-width: 0; margin: 0; padding: 0; border: 0; }
+  legend { padding: 0; margin-bottom: 6px; font-size: var(--text-13); overflow-wrap: anywhere; }
+  .options { display: flex; flex-wrap: wrap; gap: 6px; }
+  .field { box-sizing: border-box; width: 100%; min-width: 0; resize: vertical; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--paper); color: var(--ink); font: var(--text-13) var(--font-human); }
 </style>

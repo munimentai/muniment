@@ -19,6 +19,7 @@
   import { inputMarkSettler, landFocus, settleInputMark, takesText } from './lib/focus-landing.js'
   import { panelScroll } from './lib/panel-scroll.js'
   import UserQuestion from './lib/UserQuestion.svelte'
+  import { isQuestionGate } from './lib/user-question.js'
   import { THREAD_ORGANIZATION_KEY, forgetOpenThread, keepOpenThread, readOpenThread, readThreadOrganization, listedThreads, threadAfterDelete } from './lib/thread-organization.js'
   import ComposerReferences from './composer/ComposerReferences.svelte'
   import FileMentions from './composer/FileMentions.svelte'
@@ -1650,6 +1651,8 @@
   // Approvals waiting in the open thread. Each shows as an approval card at
   // the end of the transcript in place of the run's own gate.
   const openApprovals = $derived(threadApprovals(swarm.approvals, freshThread ? null : currentThreadId))
+  // A question the transcript asks with its own card leaves the list.
+  const listedApprovals = $derived(openApprovals.filter(approval => !isQuestionGate(approval.request) || !messages.some(message => message.run?.id === approval.run_id && message.run.phase === 'pending-permission' && isQuestionGate(message.run.pendingPermission))))
   // A catalog or a page covers the thread, so the title bar names it.
   const catalogTitle = $derived(agentsOpen ? 'Agents' : artifactsOpen ? 'Artifacts' : projectsOpen ? (settingsProject ? sidebarProjectById[settingsProject]?.name ?? 'Projects' : 'Projects') : fullPage === 'usage' ? 'Usage' : fullPage === 'notifications' ? 'Notifications' : '')
   let currentThreadTitle = $derived(agentChat ? agentChatTitle(agentChat.record) : threadAgent?.name || threadGroup?.name || (currentCreation ? creationTitle(currentCreation, threadSummaries, artifactItems.find(item=>item.id===currentCreation.resultId)?.name) : threadSummaries.find(({ threadId }) => threadId === currentThreadId)?.title || threadTitle(messages)))
@@ -2977,14 +2980,21 @@
     return dictationController.busy()
   }
 
-  async function answerPermission(run, answer) {
+  // An agent run's gate also waits as an approval, and its answer goes through
+  // core's `agent.approval_answer` to the machine that runs the agent.
+  async function answerPermission(run, answer, approval = null) {
     const gate = run.pendingPermission
     const current = permissionState(run)
     if (!gate || current?.pending) return
     const request = { runId: run.id, gateId: gate.gateId }
     permissionAnswer = { ...request, pending: true, error: '' }
     try {
-      await tauri.invoke('chat_answer_permission', { ...request, answer })
+      if (approval) {
+        const result = await agentRequest(tauri, approval.runtimeId, 'agent.approval_answer', { approval_id: approval.approval_id, answer })
+        swarm = { ...swarm, approvals: applyApproval(swarm.approvals, { approval: { ...(result?.approval ?? approval), state: 'answered' } }) }
+      } else {
+        await tauri.invoke('chat_answer_permission', { ...request, answer })
+      }
       if (permissionAnswer?.runId === request.runId && permissionAnswer.gateId === request.gateId) {
         permissionAnswer = { ...request, pending: false, error: '' }
       }
@@ -4438,6 +4448,7 @@
               <p class="silent-note" role="note">Silent run. Nothing needed a reply.</p>
             {:else}
             {@const parts = responseParts(message.run)}
+            {@const runApproval = openApprovals.find(approval => approval.run_id === message.run.id)}
             <div class="response">
               {#if message.run.promptStorageNotice}
                 <details class="prompt-storage-notice">
@@ -4483,11 +4494,11 @@
               {#if message.run.phase === 'failed'}<div class="run-error">{runFailureMessage(message.run)} {#if pointsToModels(runFailureMessage(message.run))}<button onclick={() => openSettings('providers')}>Open Models</button> {/if}<button disabled={!message.run.prompt?.trim() || !!active || (!!draft.trim() && draft !== message.run.prompt) || !!selectedFiles.length || dictationBusy() || runtimeUpgradePending()} onclick={() => prepareRetry(message.run)}>Try again</button>{#if runFailureDetails(message.run).length}<details class="run-error-details"><summary>Show log</summary>{#each runFailureDetails(message.run) as line, index (index)}<p>{line}</p>{/each}</details>{/if}</div>{/if}
               {#if message.run.phase === 'cancelled'}<div class="run-error">Reply stopped. {#if message.run.prompt}<button disabled={!!active || (!!draft.trim() && draft !== message.run.prompt) || !!selectedFiles.length || dictationBusy() || runtimeUpgradePending()} onclick={() => prepareRetry(message.run)}>Try again</button>{/if}</div>{/if}
               {#if message.run.phase === 'interrupted'}<div class="run-error" role={message.run.resumeError ? 'alert' : undefined}>{message.run.resumeError ?? 'Reply interrupted.'} {#if message.run.resumable}<button disabled={!!active || !!backgroundRun || dictationBusy() || runtimeUpgradePending()} onclick={() => chatController.resume(message.run)}>Resume</button>{:else if message.run.prompt}<button disabled={!!active || (!!draft.trim() && draft !== message.run.prompt) || !!selectedFiles.length || dictationBusy() || runtimeUpgradePending()} onclick={() => prepareRetry(message.run)}>Try again</button>{/if}</div>{/if}
-              {#if message.run.phase === 'pending-permission' && message.run.pendingPermission && !openApprovals.some(approval => approval.run_id === message.run.id)}
+              {#if message.run.phase === 'pending-permission' && message.run.pendingPermission && (!runApproval || isQuestionGate(message.run.pendingPermission))}
                 {@const gate = message.run.pendingPermission}
                 {@const answerState = permissionState(message.run)}
-                {#if gate.kind === 'editor' && gate.title === 'muniment:ask_user_question'}
-                  {#key gate.gateId}<UserQuestion anchor={composerBox} payload={gate.prefill} pending={answerState?.pending ?? false} error={answerState?.error ?? ''} onanswer={(value) => answerPermission(message.run, { type: 'editor', value })} />{/key}
+                {#if isQuestionGate(gate)}
+                  {#key gate.gateId}<UserQuestion anchor={composerBox} payload={gate.prefill} pending={answerState?.pending ?? false} error={answerState?.error ?? ''} onanswer={(value) => answerPermission(message.run, { type: 'editor', value }, runApproval)} />{/key}
                 {:else if gate.kind === 'editor' && gate.title === 'muniment:browser'}
                   <p class="run-status" role="status">Using the browser…</p>
                 {:else}
@@ -4610,7 +4621,7 @@
             </div>{/if}{/if}
           {/each}
           <i class="transcript-edge" hidden></i>
-          {#if openApprovals.length}<div class="thread-approvals"><ApprovalList {tauri} inline approvals={openApprovals} agents={roster} {swarm} {runtimeList} live={liveActivity}
+          {#if listedApprovals.length}<div class="thread-approvals"><ApprovalList {tauri} inline approvals={listedApprovals} agents={roster} {swarm} {runtimeList} live={liveActivity}
             onanswered={(approval, result) => { if (result?.status === 'answered') swarm = { ...swarm, approvals: applyApproval(swarm.approvals, { approval: { ...(result?.approval ?? approval), state: 'answered' } }) } }} /></div>{/if}
         </div>
         <!-- Always mounted so the region is live before text lands in it; atomic so each
