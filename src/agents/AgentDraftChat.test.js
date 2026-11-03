@@ -142,6 +142,8 @@ it('rests Save on the draft it saved until a new message drafts a change', async
   expect(screen.getByRole('button', { name: 'Test run' })).toBeEnabled()
   await rerender({ turns: [...first, { ...turn('Call it Inbox digest', { draft: { ...draft, name: 'Inbox digest' }, question: null, via: 'router' }), at: '2026-10-19T10:05:00Z' }] })
   expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled()
+  // An unsaved change clears Saved. under the waking Save changes.
+  expect(screen.queryByText('Saved.')).toBeNull()
 })
 
 it('asks core with a chat message and polls until the draft is done', async () => {

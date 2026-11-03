@@ -114,7 +114,8 @@
               {#if testLine.failed}<FailureNote failure={testLine.text} role="none" />{:else}<span>{testLine.text}</span>{/if}
               <Button disabled={busy} onclick={() => onopenchat({ ...saved, runtimeId: runtime }, testLatest)}>{testLine.done ? 'Open result' : 'Open chat'}</Button>
             </div>
-          {:else if saved}
+          {:else if saved && unchanged}
+            <!-- Saved. reads only while the newest draft is the saved agent. -->
             <div class="state" role="status"><span>Saved.</span><Button disabled={busy} onclick={() => onopenchat({ ...saved, runtimeId: runtime }, null)}>Open agent</Button></div>
           {/if}
         {/if}
