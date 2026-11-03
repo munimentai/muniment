@@ -947,7 +947,16 @@ pub(super) fn result(
             }
         }
         "memory-save" | "memory-profile-save" | "agent-save" | "routine-save" | "creation-plan" => {
-            "Saved".into()
+            // A save tool that keeps nothing answers `saved: false` and says why.
+            match json().filter(|value| value.get("saved") == Some(&Value::Bool(false))) {
+                Some(value) => match value.get("message").and_then(Value::as_str) {
+                    Some(message) if !message.trim().is_empty() => {
+                        format!("Not saved: {}", clip(message, 120))
+                    }
+                    _ => "Not saved".into(),
+                },
+                None => "Saved".into(),
+            }
         }
         "memory-delete" | "routine-delete" => "Deleted".into(),
         "artifact-publish" => "Published".into(),

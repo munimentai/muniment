@@ -366,6 +366,33 @@ fn muniment_tools_read_as_actions() {
         None,
     );
     assert_eq!(memory.result.as_deref(), Some("Found 3 memories"));
+    let kept = ended(
+        "creation-plan",
+        json!({"kind": "artifact", "goal": "A page"}),
+        CallStatus::Completed,
+        r#"{"saved":true,"creation":{}}"#,
+        None,
+    );
+    assert_eq!(kept.result.as_deref(), Some("Saved"));
+    let refused = ended(
+        "creation-plan",
+        json!({"kind": "agent", "goal": "Watch prices"}),
+        CallStatus::Completed,
+        r#"{"saved":false,"message":"This thread is not an agent's creation chat, so no goal is kept here. Use agent-save to create the agent."}"#,
+        None,
+    );
+    assert_eq!(
+        refused.result.as_deref(),
+        Some("Not saved: This thread is not an agent's creation chat, so no goal is kept here. Use agent-save to create the agent.")
+    );
+    let bare = ended(
+        "agent-save",
+        json!({"name": "Scout"}),
+        CallStatus::Completed,
+        r#"{"saved":false}"#,
+        None,
+    );
+    assert_eq!(bare.result.as_deref(), Some("Not saved"));
     let answer = ended(
         "ask_user_question",
         json!({}),
