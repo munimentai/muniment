@@ -748,9 +748,11 @@
   }
   // An agent's profile beside the agent's own thread, or alone while the
   // agent has none, never beside another thread. A card's Delete opens it
-  // the same way, at the profile's delete confirmation.
-  let profileDelete = $state({ agentId: null, count: 0 })
+  // the same way, at the profile's delete confirmation. A card's Delete on
+  // the Agents page returns there once confirmed.
+  let profileDelete = $state({ agentId: null, count: 0, fromAgents: false })
   async function openAgentProfile(agent, { deleting = false } = {}) {
+    const fromAgents = deleting && agentsOpen
     const threadId = agentHomeThread(agent)
     if (threadId && (threadId !== currentThreadId || freshThread) && !switchLocked && !agentOpening) {
       agentOpening = true
@@ -760,7 +762,7 @@
     profileOnlyAgent = home ? null : agent.id
     if (home) { selectedAgent = agent.id; selectedProject = agent.projectId || null }
     projectsOpen = false; agentsOpen = false; fullPage = null; artifactsOpen = false
-    if (deleting) profileDelete = { agentId: agent.id, count: profileDelete.count + 1 }
+    if (deleting) profileDelete = { agentId: agent.id, count: profileDelete.count + 1, fromAgents }
     if (!browserPanel || deleting) revealAgentProfile()
   }
   // A deleted agent's threads leave the sidebar, and core removed its
@@ -790,8 +792,9 @@
   }
   // A deleted agent's threads move to Archived, or with `removeThreads` go
   // through the thread delete, which names a folder it keeps. A thread whose
-  // run still goes stays archived.
-  async function agentDeleted(agent, { removeThreads = false } = {}) {
+  // run still goes stays archived. With `toAgents` the Agents page shows
+  // again over the thread that takes the deleted one's place.
+  async function agentDeleted(agent, { removeThreads = false, toAgents = false } = {}) {
     const chats = creations.filter(item => item.kind === 'agent' && item.resultId === agent.id).map(item => item.threadId)
     const threadIds = Object.keys(agentThreadMap).filter(id => agentThreadMap[id] === agent.id)
     const ownsView = selectedAgent === agent.id || [...threadIds, ...chats].includes(currentThreadId)
@@ -806,6 +809,7 @@
     agentProfileOpen = false
     await Promise.all([refreshCreations(), refreshAgents()])
     await leaveThreads([...threadIds, ...chats], { ownsView })
+    if (toAgents) await showAgents()
   }
   // The agent whose thread is starting keeps its profile open until the
   // listing names that thread.
@@ -4759,7 +4763,7 @@
         runs={activityRuns.filter(entry => entry.agent_id === profileAgent.id && entry.runtimeId === profileAgent.runtimeId)} agents={roster} {runtimeList} {swarm} {inventory} catalog={agentCatalog} activity={profileAgent.activity} connected={desktopClientStatus?.connected !== false} threads={agentListing.threads?.[profileAgent.id] ?? []}
         onclose={() => { agentProfileOpen = false; profileOnlyAgent = null }} onchange={refreshAgentsAndRuns} onrun={(run) => { startedRuns.add(run.id); activityRuns = applyRunUpdate(activityRuns, { runtimeId: run.runtimeId, run }) }}
         onmanagemodels={openModelSettings} onvisibility={setModelShown}
-        deleteAsked={profileDelete.agentId === profileAgent.id ? profileDelete.count : 0} ondelete={(answer, options) => { showKeptFolder(profileAgent, answer); void agentDeleted(profileAgent, options) }}
+        deleteAsked={profileDelete.agentId === profileAgent.id ? profileDelete.count : 0} ondelete={(answer, options) => { const agent = profileAgent; const toAgents = !!options?.asked && profileDelete.agentId === agent.id && profileDelete.fromAgents; showKeptFolder(agent, answer); void agentDeleted(agent, { removeThreads: options?.removeThreads, toAgents }) }}
         onopen={(id) => showThread(id)} onopenrun={(run) => openRunThread(run).catch(error => { submitError = String(error) })} onopenfolder={openAgentFolder} />{/key}
     {/if}
   {#if browserPanel}<div class="artifact-divider workspace-divider" role="separator" aria-label="Workspace panel width" aria-orientation="vertical" aria-valuemin="340" aria-valuemax={workspacePanelMaximum} aria-valuenow={workspacePanelWidth} tabindex="0" onpointerdown={workspaceResize.pointerDown} onpointermove={workspaceResize.pointerMove} onpointerup={workspaceResize.pointerEnd} onpointercancel={workspaceResize.pointerEnd} onkeydown={workspaceResize.keydown}><span class="divider-grip" aria-hidden="true"><LucideIcon name="ellipsis-vertical" size={14} variant="action" /></span></div>{/if}

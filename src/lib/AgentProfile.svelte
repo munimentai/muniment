@@ -116,9 +116,12 @@
   let revealDelete = $state(0)
   let stopSettle = null
   let askAnswered = 0
+  // Whether the confirmation on screen is the one a card asked for, which
+  // `ondelete` reports as `asked`, so the delete returns to the card's page.
+  let askedDelete = false
   $effect(() => {
     if (!deleteAsked || deleteAsked === askAnswered) return
-    untrack(() => { askAnswered = deleteAsked; deleting = true; revealDelete = deleteAsked })
+    untrack(() => { askAnswered = deleteAsked; deleting = true; askedDelete = true; revealDelete = deleteAsked })
   })
   $effect(() => {
     if (!confirmBox || !revealDelete) return
@@ -133,7 +136,7 @@
   let deleteRow = $state()
   async function cancelDelete() {
     stopSettle?.(); stopSettle = null
-    deleting = false; removeMemory = false; removeThreads = false
+    deleting = false; askedDelete = false; removeMemory = false; removeThreads = false
     await tick()
     focusLikeKeys(deleteRow?.querySelector('button:not(:disabled)'))
   }
@@ -392,9 +395,9 @@
           <p class="muted" aria-live="polite">{removeThreads ? 'Its threads will be deleted.' : 'Its threads move to Archived.'}</p>
           <label class="check"><input type="checkbox" bind:checked={removeMemory} disabled={busy} />Also delete its memory</label>
           <label class="check"><input type="checkbox" bind:checked={removeThreads} disabled={busy} />Also delete its threads</label>
-          <div class="actions"><Button variant="danger" disabled={busy} onclick={() => action(async () => { const answer = await agentRequest(tauri, agent.runtimeId, 'agent.delete', { id: agent.id, remove_memory: removeMemory }); ondelete(answer, { removeThreads }) })}>Confirm delete</Button><Button data-safe disabled={busy} onclick={cancelDelete}>Cancel</Button></div>
+          <div class="actions"><Button variant="danger" disabled={busy} onclick={() => action(async () => { const answer = await agentRequest(tauri, agent.runtimeId, 'agent.delete', { id: agent.id, remove_memory: removeMemory }); ondelete(answer, { removeThreads, asked: askedDelete }) })}>Confirm delete</Button><Button data-safe disabled={busy} onclick={cancelDelete}>Cancel</Button></div>
         </div>
-      {:else}<div class="delete-row" bind:this={deleteRow}><Button variant="danger" icon="trash-2" disabled={busy || runActive(run?.status)} onclick={() => { deleting = true; revealDelete = -1 }}>Delete agent</Button></div>{/if}
+      {:else}<div class="delete-row" bind:this={deleteRow}><Button variant="danger" icon="trash-2" disabled={busy || runActive(run?.status)} onclick={() => { deleting = true; askedDelete = false; revealDelete = -1 }}>Delete agent</Button></div>{/if}
     </div>
     {/if}
     {#if notice}<p class="muted" role="status">{notice}</p>{/if}

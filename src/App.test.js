@@ -4878,6 +4878,49 @@ describe('sidebar collapse', () => {
     await waitFor(() => expect(document.querySelector('.thread-row.active-thread .thread-row-title')).toHaveTextContent('Scout chat'))
   })
 
+  it('returns to the Agents page after a card\'s Delete is confirmed, while the next thread opens under it', async () => {
+    threadSummaryResult = [{ threadId: 'agent-thread', title: 'Scout chat', updatedAt: '2026-01-03T00:00:00Z' }, { threadId: 'other-thread', title: 'Live34 File Creation Test', updatedAt: '2026-01-02T00:00:00Z' }]
+    const original = invoke.getMockImplementation()
+    const scout = { id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null, routines: [] }
+    let deleted = false
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args) ? agentListAnswer(deleted ? [] : [scout], deleted ? {} : { 'agent-1': 'agent-thread' })
+      : command === 'agent_request' && args?.operation === 'agent.delete' ? (deleted = true, {})
+      : command === 'chat_thread_open' ? []
+      : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
+    render(App)
+    await openSidebarPage('Agents')
+    await fireEvent.click(await within(await screen.findByRole('region', { name: 'Agents', exact: true })).findByRole('button', { name: 'Actions for Scout' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
+    await fireEvent.click(within(await screen.findByRole('group', { name: 'Delete agent' })).getByRole('button', { name: 'Confirm delete' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', expect.objectContaining({ operation: 'agent.delete' })))
+    // The agent's thread goes, so the next thread opens under the page the delete started on.
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'other-thread', limit: 100 }))
+    expect(await screen.findByRole('region', { name: 'Agents', exact: true })).toBeInTheDocument()
+    expect(screen.queryByRole('complementary', { name: 'Agent profile' })).not.toBeInTheDocument()
+  })
+
+  it('stays on the next thread when the agent is deleted from its profile after a card\'s Delete was cancelled', async () => {
+    threadSummaryResult = [{ threadId: 'agent-thread', title: 'Scout chat', updatedAt: '2026-01-03T00:00:00Z' }, { threadId: 'other-thread', title: 'Live34 File Creation Test', updatedAt: '2026-01-02T00:00:00Z' }]
+    const original = invoke.getMockImplementation()
+    const scout = { id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null, routines: [] }
+    let deleted = false
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args) ? agentListAnswer(deleted ? [] : [scout], deleted ? {} : { 'agent-1': 'agent-thread' })
+      : command === 'agent_request' && args?.operation === 'agent.delete' ? (deleted = true, {})
+      : command === 'chat_thread_open' ? []
+      : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
+    render(App)
+    await openSidebarPage('Agents')
+    await fireEvent.click(await within(await screen.findByRole('region', { name: 'Agents', exact: true })).findByRole('button', { name: 'Actions for Scout' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
+    const profile = await screen.findByRole('complementary', { name: 'Agent profile' })
+    await fireEvent.click(within(await within(profile).findByRole('group', { name: 'Delete agent' })).getByRole('button', { name: 'Cancel' }))
+    await fireEvent.click(await within(profile).findByRole('button', { name: 'Delete agent' }))
+    await fireEvent.click(within(await within(profile).findByRole('group', { name: 'Delete agent' })).getByRole('button', { name: 'Confirm delete' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'other-thread', limit: 100 }))
+    await waitFor(() => expect(document.querySelector('.thread-row.active-thread .thread-row-title')).toHaveTextContent('Live34 File Creation Test'))
+    expect(screen.queryByRole('region', { name: 'Agents', exact: true })).not.toBeInTheDocument()
+  })
+
   it('opens the profile of an agent with no thread alone, with no new thread', async () => {
     const original = invoke.getMockImplementation()
     invoke.mockImplementation(async (command, args) => isAgentList(command, args)
