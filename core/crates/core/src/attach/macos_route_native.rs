@@ -158,6 +158,10 @@ impl MacosAttachRouteReader for NativeMacosAttachRouteReader<'_> {
         self.peer_closed.get() || peer_sent_end_of_stream(self.stream)
     }
 
+    fn peer_descends_from_this_process(&self, peer_pid: u32) -> bool {
+        descends_from(peer_pid, std::process::id(), parent_pid)
+    }
+
     fn code_check_diagnostic(&self) -> serde_json::Value {
         serde_json::to_value(&*self.code_check.borrow())
             .expect("The code check fields must serialize.")
@@ -175,6 +179,51 @@ impl MacosAttachRouteReader for NativeMacosAttachRouteReader<'_> {
             self.code_check.borrow()
         );
     }
+}
+
+/// Pi runs the record server as its own child, and the runtime runs Pi, so a
+/// few parents cover the chain. A wrapper such as a shell adds one.
+const MAX_ANCESTRY: usize = 8;
+
+/// Whether `ancestor` is a parent of `pid`, or a parent of one of its parents,
+/// within `MAX_ANCESTRY` steps. launchd, pid 1, ends the walk.
+fn descends_from(pid: u32, ancestor: u32, parent_of: impl Fn(u32) -> Option<u32>) -> bool {
+    let mut current = pid;
+    for _ in 0..MAX_ANCESTRY {
+        let Some(parent) = parent_of(current) else {
+            return false;
+        };
+        if parent == ancestor {
+            return true;
+        }
+        if parent <= 1 || parent == current {
+            return false;
+        }
+        current = parent;
+    }
+    false
+}
+
+/// The parent pid the kernel holds for `pid`.
+fn parent_pid(pid: u32) -> Option<u32> {
+    let pid = libc::c_int::try_from(pid).ok()?;
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    // SAFETY: the buffer is one writable `proc_bsdinfo` of `size` bytes.
+    let written = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            size,
+        )
+    };
+    if written != size {
+        return None;
+    }
+    // SAFETY: the kernel filled all `size` bytes.
+    Some(unsafe { info.assume_init() }.pbi_ppid)
 }
 
 /// Whether the peer closed with nothing unread, read without consuming a byte.
@@ -972,6 +1021,38 @@ int main(int argc, char **argv) {
         drop(client);
         assert!(!reader.peer_closed());
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn ancestry_reaches_the_runtime_through_its_children_only() {
+        // cli 30 -> pi 20 -> runtime 10 -> launchd 1
+        let parents = |pid: u32| match pid {
+            30 => Some(20),
+            20 => Some(10),
+            10 => Some(1),
+            40 => Some(1),
+            _ => None,
+        };
+        assert!(descends_from(30, 10, parents));
+        assert!(descends_from(20, 10, parents));
+        assert!(!descends_from(40, 10, parents));
+        assert!(!descends_from(10, 10, parents));
+        assert!(!descends_from(99, 10, parents));
+        // A chain past the bound stops the walk.
+        assert!(!descends_from(100, 1_000, |pid| Some(pid + 1)));
+    }
+
+    #[test]
+    fn this_process_is_the_parent_of_its_child() {
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("5")
+            .spawn()
+            .unwrap();
+        assert_eq!(parent_pid(child.id()), Some(std::process::id()));
+        assert!(descends_from(child.id(), std::process::id(), parent_pid));
+        assert!(!descends_from(std::process::id(), child.id(), parent_pid));
+        child.kill().unwrap();
+        child.wait().unwrap();
     }
 
     #[test]

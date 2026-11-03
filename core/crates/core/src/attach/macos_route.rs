@@ -8,8 +8,28 @@ use muniment_attach::{decode_frame, Hello};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MacosAttachConnectionRoute {
     ApprovalPresenter,
-    DesktopClient { peer_pid: u32 },
-    Companion { peer_pid: u32 },
+    DesktopClient {
+        peer_pid: u32,
+    },
+    Companion {
+        peer_pid: u32,
+    },
+    /// The `muniment-cli` this bundle ships, run under this runtime, as Pi
+    /// runs the record server for an agent run. Its pairing needs no prompt.
+    BundledCompanion {
+        peer_pid: u32,
+    },
+}
+
+/// Where the bundle that holds `expected_desktop_executable` ships the CLI:
+/// `Contents/Library/LaunchServices/muniment-cli` beside `Contents/MacOS`.
+pub fn bundled_cli_executable(expected_desktop_executable: &Path) -> Option<PathBuf> {
+    let contents = expected_desktop_executable
+        .parent()
+        .filter(|parent| parent.file_name() == Some(std::ffi::OsStr::new("MacOS")))?
+        .parent()
+        .filter(|parent| parent.file_name() == Some(std::ffi::OsStr::new("Contents")))?;
+    Some(contents.join("Library/LaunchServices/muniment-cli"))
 }
 
 /// Opaque failure from an injected macOS peer read.
@@ -30,6 +50,12 @@ pub trait MacosAttachRouteReader {
     /// does. Another runtime's bind connects once to learn whether the
     /// endpoint is live, then closes.
     fn peer_closed(&self) -> bool {
+        false
+    }
+
+    /// Whether `peer_pid` runs under this process: this process is its parent,
+    /// or a parent of one of its parents.
+    fn peer_descends_from_this_process(&self, _peer_pid: u32) -> bool {
         false
     }
 
@@ -80,6 +106,15 @@ pub fn name_macos_attach_connection_route(
         && reader.peer_code_matches(expected_desktop_executable)
     {
         MacosAttachConnectionRoute::DesktopClient { peer_pid }
+    } else if peer_pid != 0
+        && is_bundled_cli(&peer_image_path, expected_desktop_executable)
+        && reader.peer_descends_from_this_process(peer_pid)
+        && bundled_cli_executable(expected_desktop_executable)
+            .is_some_and(|cli| reader.peer_code_matches(&cli))
+    {
+        // The CLI's designated requirement names its own identifier, so the
+        // desktop's requirement never admits it. Its own requirement does.
+        MacosAttachConnectionRoute::BundledCompanion { peer_pid }
     } else {
         // A probe that closed sends nothing to route, so its failed check logs nothing.
         if !reader.peer_closed() {
@@ -92,6 +127,15 @@ pub fn name_macos_attach_connection_route(
         }
         MacosAttachConnectionRoute::Companion { peer_pid }
     }
+}
+
+/// Whether `peer_image_path` resolves to the CLI the desktop's bundle ships.
+fn is_bundled_cli(peer_image_path: &Path, expected_desktop_executable: &Path) -> bool {
+    peer_image_path.is_absolute()
+        && bundled_cli_executable(expected_desktop_executable)
+            .and_then(|cli| cli.canonicalize().ok())
+            .zip(peer_image_path.canonicalize().ok())
+            .is_some_and(|(cli, peer)| cli == peer)
 }
 
 /// Names the final route for a desktop-executable peer from its first frame.
@@ -143,6 +187,9 @@ mod tests {
     struct StubRouteReader {
         peer: Result<(u32, PathBuf), MacosPeerReadError>,
         code_matches: bool,
+        /// When set, the peer's code satisfies only this path's requirement.
+        code_of: Option<PathBuf>,
+        descends: bool,
         checked: RefCell<Option<PathBuf>>,
     }
 
@@ -151,6 +198,8 @@ mod tests {
             Self {
                 peer,
                 code_matches: true,
+                code_of: None,
+                descends: true,
                 checked: RefCell::new(None),
             }
         }
@@ -164,7 +213,93 @@ mod tests {
         fn peer_code_matches(&self, expected: &Path) -> bool {
             *self.checked.borrow_mut() = Some(expected.to_owned());
             self.code_matches
+                && self
+                    .code_of
+                    .as_ref()
+                    .is_none_or(|code_of| code_of == expected)
         }
+
+        fn peer_descends_from_this_process(&self, _: u32) -> bool {
+            self.descends
+        }
+    }
+
+    /// A bundle fixture with the CLI where the bundle ships it.
+    fn bundle_with_cli() -> (Bundle, PathBuf) {
+        let bundle = Bundle::new();
+        let cli = bundled_cli_executable(&bundle.executable).unwrap();
+        std::fs::create_dir_all(cli.parent().unwrap()).unwrap();
+        std::fs::write(&cli, b"cli fixture").unwrap();
+        (bundle, cli)
+    }
+
+    #[test]
+    fn names_the_cli_path_inside_the_desktop_bundle() {
+        assert_eq!(
+            bundled_cli_executable(Path::new(
+                "/Applications/muniment.app/Contents/MacOS/muniment-desktop"
+            )),
+            Some(PathBuf::from(
+                "/Applications/muniment.app/Contents/Library/LaunchServices/muniment-cli"
+            ))
+        );
+        for loose in [
+            "/usr/local/bin/muniment-desktop",
+            "/x/Contents/bin/muniment",
+            "muniment",
+        ] {
+            assert_eq!(bundled_cli_executable(Path::new(loose)), None, "{loose}");
+        }
+    }
+
+    #[test]
+    fn routes_the_bundled_cli_under_this_runtime_to_the_bundled_companion() {
+        let (bundle, cli) = bundle_with_cli();
+        let mut reader = StubRouteReader::signed(Ok((42, cli.clone())));
+        reader.code_of = Some(cli.clone());
+
+        assert_eq!(
+            name_macos_attach_connection_route(&reader, &bundle.executable),
+            MacosAttachConnectionRoute::BundledCompanion { peer_pid: 42 }
+        );
+        // The CLI is held to its own designated requirement, not the desktop's.
+        assert_eq!(*reader.checked.borrow(), Some(cli));
+    }
+
+    #[test]
+    fn routes_the_bundled_cli_to_companion_unless_every_check_passes() {
+        let (bundle, cli) = bundle_with_cli();
+
+        // Another process tree ran the bundled CLI, as a terminal or another harness does.
+        let mut elsewhere = StubRouteReader::signed(Ok((42, cli.clone())));
+        elsewhere.code_of = Some(cli.clone());
+        elsewhere.descends = false;
+        // The file at the CLI's path does not satisfy the CLI's requirement.
+        let mut unsigned = StubRouteReader::signed(Ok((42, cli.clone())));
+        unsigned.code_matches = false;
+        // A pid of zero names no process to check.
+        let mut zero = StubRouteReader::signed(Ok((0, cli.clone())));
+        zero.code_of = Some(cli.clone());
+        for reader in [elsewhere, unsigned, zero] {
+            assert!(matches!(
+                name_macos_attach_connection_route(&reader, &bundle.executable),
+                MacosAttachConnectionRoute::Companion { .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn routes_a_cli_from_another_bundle_to_companion_without_its_code_check() {
+        let (bundle, _) = bundle_with_cli();
+        let (_other, other_cli) = bundle_with_cli();
+        let mut reader = StubRouteReader::signed(Ok((42, other_cli.clone())));
+        reader.code_of = Some(other_cli);
+
+        assert_eq!(
+            name_macos_attach_connection_route(&reader, &bundle.executable),
+            MacosAttachConnectionRoute::Companion { peer_pid: 42 }
+        );
+        assert_eq!(*reader.checked.borrow(), Some(bundle.executable.clone()));
     }
 
     #[test]

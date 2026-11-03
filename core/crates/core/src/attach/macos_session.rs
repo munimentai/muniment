@@ -116,7 +116,8 @@ impl AdmissionDiagnostic {
         let route = name_macos_attach_connection_route(reader, expected);
         let peer_pid = match route {
             MacosAttachConnectionRoute::DesktopClient { peer_pid }
-            | MacosAttachConnectionRoute::Companion { peer_pid } => peer_pid,
+            | MacosAttachConnectionRoute::Companion { peer_pid }
+            | MacosAttachConnectionRoute::BundledCompanion { peer_pid } => peer_pid,
             MacosAttachConnectionRoute::ApprovalPresenter => 0,
         };
         Self {
@@ -444,8 +445,10 @@ where
             diagnostic.record("desktop-handshake", None, "none");
             serve_desktop_client(&mut stream, admitted, (peer_uid, peer_pid), service)
         }
-        MacosAttachConnectionRoute::Companion { peer_pid } => {
+        MacosAttachConnectionRoute::Companion { peer_pid }
+        | MacosAttachConnectionRoute::BundledCompanion { peer_pid } => {
             diagnostic.record("companion-route", None, "none");
+            let bundled = matches!(route, MacosAttachConnectionRoute::BundledCompanion { .. });
             let mut random = |bytes: &mut [u8]| getrandom::fill(bytes).map_err(|_| ());
             let companion_identity = format!("{peer_uid}:{peer_pid}");
             pairing_identity_observer(&companion_identity);
@@ -455,6 +458,11 @@ where
                  kind: &str,
                  version: &str,
                  remaining: Duration| {
+                    if let Some(decision) =
+                        bundled_cli_decision(bundled, approval.as_ref(), kind, remaining)
+                    {
+                        return decision;
+                    }
                     let started = Instant::now();
                     let decision = approvals.wait(challenge, kind, version, remaining);
                     // A zero bound drains repeat actions after approval. It is not a pairing attempt.
@@ -504,6 +512,26 @@ where
             Ok(MacosAttachSessionOutcome::Companion)
         }
     }
+}
+
+/// The answer for the CLI this bundle ships when this runtime ran it: the
+/// owner's approval of the workspace, with no prompt. `None` leaves the
+/// decision to the user, as for every other companion. A zero bound drains
+/// repeat answers after an approval, so it answers nothing.
+#[cfg(unix)]
+fn bundled_cli_decision(
+    bundled: bool,
+    approval: Option<&Approval>,
+    claimed_kind: &str,
+    remaining: Duration,
+) -> Option<Option<super::ApprovalDecision>> {
+    if !bundled || claimed_kind != "cli" {
+        return None;
+    }
+    if remaining.is_zero() {
+        return Some(None);
+    }
+    approval.map(|approval| Some(super::ApprovalDecision::Approve(approval.clone())))
 }
 
 fn read_first_frame<S: DeadlineStream>(
@@ -567,6 +595,32 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn only_the_bundled_cli_takes_the_owner_approval_without_a_prompt() {
+        let owner = Approval {
+            profile: "desktop-owner".into(),
+            workspace: "workspace-a".into(),
+            scopes: ["thread.read".to_owned(), "run.write".to_owned()].into(),
+            lifetime: Duration::from_secs(3600),
+        };
+        let bound = Duration::from_secs(120);
+        assert!(matches!(
+            bundled_cli_decision(true, Some(&owner), "cli", bound),
+            Some(Some(super::super::ApprovalDecision::Approve(approval))) if approval == owner
+        ));
+        // A drain after the approval answers nothing.
+        assert!(matches!(
+            bundled_cli_decision(true, Some(&owner), "cli", Duration::ZERO),
+            Some(None)
+        ));
+        // Every other case asks the user: another companion, another claimed
+        // kind on the bundled route, or no owner approval to give.
+        assert!(bundled_cli_decision(false, Some(&owner), "cli", bound).is_none());
+        assert!(bundled_cli_decision(true, Some(&owner), "claude-code", bound).is_none());
+        assert!(bundled_cli_decision(true, None, "cli", bound).is_none());
+    }
 
     struct Reader(bool);
     impl MacosAttachRouteReader for Reader {
