@@ -335,22 +335,25 @@
       return
     }
     if (action === 'delete') {
-      const threadIds = kind === 'agent' ? Object.keys(agentThreadMap).filter(id=>agentThreadMap[id]===item.id) : [item.threadId].filter(Boolean)
-      const next = {...threadOrganization}
-      for (const id of [...threadIds,...plans.map(plan=>plan.threadId)]) next[id] = {...next[id],archived:true}
-      localStorage.setItem(THREAD_ORGANIZATION_KEY,JSON.stringify(next))
-      threadOrganization = next
-      const ownsView = kind === 'agent' && (selectedAgent === item.id || threadIds.includes(currentThreadId))
-      if (kind === 'agent') {
-        showKeptFolder(item, await agentRequest(tauri, item.runtimeId, 'agent.delete', { id: item.id, remove_memory: false }))
-        if (selectedAgent===item.id) { selectedAgent=null;agentProfileOpen=false }
-      } else if (kind === 'artifact' && (item.resultId || item.id)) {
-        await tauri.invoke('artifact_edit',{id:item.resultId || item.id,name:null})
-        if (requestedArtifact === (item.resultId || item.id)) { requestedArtifact=null;browserPanel=null }
-      }
-      for (const plan of plans) await tauri.invoke('creation_delete',{threadId:plan.threadId})
-      await Promise.all([refreshCreations(),refreshAgents()])
-      await leaveThreads([...threadIds,...plans.map(plan=>plan.threadId)], { ownsView })
+      const settle = keptFolderDelete()
+      try {
+        const threadIds = kind === 'agent' ? Object.keys(agentThreadMap).filter(id=>agentThreadMap[id]===item.id) : [item.threadId].filter(Boolean)
+        const next = {...threadOrganization}
+        for (const id of [...threadIds,...plans.map(plan=>plan.threadId)]) next[id] = {...next[id],archived:true}
+        localStorage.setItem(THREAD_ORGANIZATION_KEY,JSON.stringify(next))
+        threadOrganization = next
+        const ownsView = kind === 'agent' && (selectedAgent === item.id || threadIds.includes(currentThreadId))
+        if (kind === 'agent') {
+          showKeptFolder(item, await agentRequest(tauri, item.runtimeId, 'agent.delete', { id: item.id, remove_memory: false }))
+          if (selectedAgent===item.id) { selectedAgent=null;agentProfileOpen=false }
+        } else if (kind === 'artifact' && (item.resultId || item.id)) {
+          await tauri.invoke('artifact_edit',{id:item.resultId || item.id,name:null})
+          if (requestedArtifact === (item.resultId || item.id)) { requestedArtifact=null;browserPanel=null }
+        }
+        for (const plan of plans) await tauri.invoke('creation_delete',{threadId:plan.threadId})
+        await Promise.all([refreshCreations(),refreshAgents()])
+        await leaveThreads([...threadIds,...plans.map(plan=>plan.threadId)], { ownsView })
+      } finally { settle() }
     }
   }
   // A deleted thread, or an archived thread of a deleted agent or artifact,
@@ -769,7 +772,8 @@
   // creation chat, so an open creation chat gives way to a new thread.
   // Core keeps a deleted agent's folder that holds the user's files and says
   // so. The notice names the folder, and on this computer it reveals it. The
-  // path shows nowhere else, so the notice stays until the user dismisses it.
+  // path shows nowhere else, so the notice has no clock: it stays until the
+  // user dismisses it or leaves the view it belongs to.
   const revealLabel = /Mac/.test(navigator.platform) ? 'Reveal in Finder' : /Win/.test(navigator.platform) ? 'Reveal in File Explorer' : 'Reveal in File Manager'
   let keptFolders = 0
   // A deleted thread's folder that holds the user's files stays the same
@@ -790,6 +794,31 @@
       action: local ? { label: revealLabel, run: () => { tauri.invoke('workspace_reveal', { path: folder }).catch(error => { submitError = String(error) }) } } : undefined,
     })
   }
+  // A kept folder's notice belongs to the view its delete leaves on screen,
+  // and to the thread under that view's page. Another thread or page takes
+  // it away, and so does a later delete that keeps no folder.
+  let keptFolderViews = null
+  let keptFolderDeletes = 0
+  const noticeThreadView = () => `${currentThreadId ?? ''}|${freshThread}|`
+  const noticeView = () => noticeThreadView() + (settingsOpen ? 'settings' : agentsOpen ? 'agents' : artifactsOpen ? 'artifacts' : projectsOpen ? `projects:${settingsProject ?? ''}` : fullPage ?? '')
+  function withdrawKeptFolders() {
+    keptFolderViews = null
+    for (const words of Object.values(KEPT_FOLDER)) composerNotices.withdraw(words.id)
+  }
+  // A delete calls this as it starts and the answer as it ends.
+  function keptFolderDelete() {
+    const shown = keptFolders
+    keptFolderDeletes += 1
+    return () => {
+      keptFolderDeletes -= 1
+      if (keptFolders === shown) withdrawKeptFolders()
+      else keptFolderViews = new Set([noticeView(), noticeThreadView()])
+    }
+  }
+  $effect(() => {
+    const view = noticeView()
+    untrack(() => { if (keptFolderViews && !keptFolderDeletes && !keptFolderViews.has(view)) withdrawKeptFolders() })
+  })
   // A deleted agent's threads move to Archived, or with `removeThreads` go
   // through the thread delete, which names a folder it keeps. A thread whose
   // run still goes stays archived. With `toAgents` the Agents page shows
@@ -2153,6 +2182,7 @@
     deletingProject = null
     if (projectBusy) return
     projectBusy = true
+    const settle = keptFolderDelete()
     try {
       const kept = await tauri.invoke('project_delete', { projectId: project.id })
       showKeptFolder(null, { folder_kept: kept }, 'project')
@@ -2161,7 +2191,7 @@
       expandedProjects = new Set([...expandedProjects].filter(id => id !== project.id))
       await refreshProjects(currentThreadId)
     } catch (error) { projectError = String(error?.message ?? error) }
-    finally { projectBusy = false }
+    finally { projectBusy = false; settle() }
   }
 
   async function openProjectFolder(projectId) {
@@ -2692,11 +2722,14 @@
     // as after an agent delete.
     const shown = freshThread ? null : currentThreadId ?? threadSummaries[0]?.threadId ?? null
     const removed = []
-    for (const id of targets) {
-      if (!(await chatController.deleteThread(id))) break
-      removed.push(id)
-    }
-    await leaveThreads(removed, { ownsView: !!shown && removed.includes(shown) })
+    const settle = keptFolderDelete()
+    try {
+      for (const id of targets) {
+        if (!(await chatController.deleteThread(id))) break
+        removed.push(id)
+      }
+      await leaveThreads(removed, { ownsView: !!shown && removed.includes(shown) })
+    } finally { settle() }
     // Core deletes a creation chat's record with its thread.
     if (targets.some((id) => creations.some((item) => item.threadId === id))) void refreshCreations()
     deletePending = false
@@ -4763,7 +4796,7 @@
         runs={activityRuns.filter(entry => entry.agent_id === profileAgent.id && entry.runtimeId === profileAgent.runtimeId)} agents={roster} {runtimeList} {swarm} {inventory} catalog={agentCatalog} activity={profileAgent.activity} connected={desktopClientStatus?.connected !== false} threads={agentListing.threads?.[profileAgent.id] ?? []}
         onclose={() => { agentProfileOpen = false; profileOnlyAgent = null }} onchange={refreshAgentsAndRuns} onrun={(run) => { startedRuns.add(run.id); activityRuns = applyRunUpdate(activityRuns, { runtimeId: run.runtimeId, run }) }}
         onmanagemodels={openModelSettings} onvisibility={setModelShown}
-        deleteAsked={profileDelete.agentId === profileAgent.id ? profileDelete.count : 0} ondelete={(answer, options) => { const agent = profileAgent; const toAgents = !!options?.asked && profileDelete.agentId === agent.id && profileDelete.fromAgents; showKeptFolder(agent, answer); void agentDeleted(agent, { removeThreads: options?.removeThreads, toAgents }) }}
+        deleteAsked={profileDelete.agentId === profileAgent.id ? profileDelete.count : 0} ondelete={(answer, options) => { const agent = profileAgent; const toAgents = !!options?.asked && profileDelete.agentId === agent.id && profileDelete.fromAgents; const settle = keptFolderDelete(); showKeptFolder(agent, answer); void agentDeleted(agent, { removeThreads: options?.removeThreads, toAgents }).finally(settle) }}
         onopen={(id) => showThread(id)} onopenrun={(run) => openRunThread(run).catch(error => { submitError = String(error) })} onopenfolder={openAgentFolder} />{/key}
     {/if}
   {#if browserPanel}<div class="artifact-divider workspace-divider" role="separator" aria-label="Workspace panel width" aria-orientation="vertical" aria-valuemin="340" aria-valuemax={workspacePanelMaximum} aria-valuenow={workspacePanelWidth} tabindex="0" onpointerdown={workspaceResize.pointerDown} onpointermove={workspaceResize.pointerMove} onpointerup={workspaceResize.pointerEnd} onpointercancel={workspaceResize.pointerEnd} onkeydown={workspaceResize.keydown}><span class="divider-grip" aria-hidden="true"><LucideIcon name="ellipsis-vertical" size={14} variant="action" /></span></div>{/if}

@@ -3801,6 +3801,41 @@ describe('thread name', () => {
     } finally { vi.useRealTimers() }
   })
 
+  it.each([
+    ['another thread opens', async () => { await fireEvent.click([...document.querySelectorAll('#sidebar .thread-row')].find((row) => row.querySelector('.thread-row-title')?.textContent === 'Tax return')) }],
+    ['another page opens', async () => { await openSidebarPage('Agents'); await screen.findByRole('region', { name: 'Agents', exact: true }) }],
+    ['a later delete keeps no folder', async () => { await openDeleteMenu('Tax return'); await fireEvent.click(screen.getByRole('button', { name: 'Delete' })); await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_delete_thread', { threadId: 'thread-3' })) }],
+  ])('keeps a deleted thread\'s kept folder notice on the thread the delete opened, and takes it away once %s', async (_, leave) => {
+    threadSummaryResult = [
+      { threadId: 'thread-1', title: 'Lease renewal', updatedAt: '2026-01-03T00:00:00Z' },
+      { threadId: 'thread-2', title: 'Garden plan', updatedAt: '2026-01-02T00:00:00Z' },
+      { threadId: 'thread-3', title: 'Tax return', updatedAt: '2026-01-01T00:00:00Z' },
+    ]
+    const folder = '/Users/me/Documents/muniment/sessions/Lease_renewal-12345678'
+    const pages = {
+      'thread-1': [{ runId: 'run-1', phase: 'complete', prompt: 'Question', text: 'Answer', toolActivity: [] }],
+      'thread-2': [{ runId: 'run-2', phase: 'complete', prompt: 'Plant what?', text: 'Tomatoes', toolActivity: [] }],
+      'thread-3': [{ runId: 'run-3', phase: 'complete', prompt: 'File when?', text: 'April', toolActivity: [] }],
+    }
+    const fallback = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, payload) => {
+      if (command === 'chat_thread_open') return pages[payload.threadId] ?? []
+      if (command === 'chat_delete_thread') return payload.threadId === 'thread-1' ? { folder_kept: folder, message: "The thread's folder holds your files, so it stays." } : null
+      if (command === 'chat_select_thread') return undefined
+      return fallback(command, payload)
+    })
+    render(App)
+    await screen.findByText('Answer')
+    await sidebarRows()
+    await openDeleteMenu('Lease renewal')
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    expect(await screen.findByText('Tomatoes')).toBeInTheDocument()
+    // The thread the delete opened is the notice's own view.
+    expect(await screen.findByTestId('thread-folder-kept-notice')).toHaveTextContent(folder)
+    await leave()
+    await waitFor(() => expect(screen.queryByTestId('thread-folder-kept-notice')).not.toBeInTheDocument())
+  })
+
   it('opens the newest remaining thread after the open thread is deleted from its menu, and Back to threads keeps it', async () => {
     threadSummaryResult = [
       { threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' },
