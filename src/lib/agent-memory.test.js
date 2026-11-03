@@ -65,3 +65,10 @@ it('opens an existing agent dedicated chat', async () => {
   await fireEvent.click(within(await screen.findByRole('article',{name:'Scout'})).getByRole('button',{name:'Open chat'}))
   expect(onselect).toHaveBeenCalledWith(expect.objectContaining({id:'scout'}))
 })
+it('reads an unsaved agent draft card as a draft, never as a saved agent', async () => {
+  const invoke=vi.fn(async()=>({agents:[],state:{runs:{},threads:{}}}))
+  const plan={threadId:'c1',kind:'agent',goal:'Create a reusable agent for my work',output:'A saved agent with a clear task, instructions, and expected output',resultId:null,turns:[]}
+  render(AgentManager,{tauri:{invoke},pending:[plan],onopen:vi.fn(),oncreate:vi.fn(),onclose:vi.fn()})
+  expect(await screen.findByText('Draft agent. Describe its task to shape it.')).toBeInTheDocument()
+  expect(screen.queryByText(/A saved agent/)).toBeNull()
+})

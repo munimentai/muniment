@@ -80,7 +80,7 @@
       {#each pending.filter(plan=>isArchived('creation',plan)===archived) as plan (plan.threadId)}
         <CatalogCard onclick={()=>onopen(plan)}>
           {#snippet menu()}<CatalogActions name={creationTitle(plan, threadSummaries)} {archived} onaction={(action,name)=>onaction('creation',plan,action,name)}/>{/snippet}
-          <LucideIcon name="bot" size={32}/><strong>{creationTitle(plan, threadSummaries)}</strong><span>{plan.output}</span><small>Continue creation</small>
+          <LucideIcon name="bot" size={32}/><strong>{creationTitle(plan, threadSummaries)}</strong><span>Draft agent. Describe its task to shape it.</span><small>Continue creation</small>
         </CatalogCard>
       {/each}
     </CardGrid>
