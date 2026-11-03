@@ -3593,6 +3593,65 @@ mod tests {
     }
 
     #[test]
+    fn a_drafted_routine_at_a_picked_time_saves_on_like_one_at_a_named_time() {
+        let (root_dir, profile) = profile();
+        let words = "On Fridays, back up the notes folder. Post a recap every Monday at 5pm.";
+        let drafted = crate::agent_draft::draft(
+            &crate::agent_draft::Source::Description(words.into()),
+            &[],
+            &crate::agent_draft::Catalog::default(),
+            "UTC",
+            None,
+        )
+        .draft;
+        assert_eq!(drafted.routines.len(), 2);
+        assert_eq!(
+            drafted
+                .routines
+                .iter()
+                .map(|routine| routine.default_time)
+                .collect::<Vec<_>>(),
+            [true, false]
+        );
+        assert!(drafted
+            .routines
+            .iter()
+            .all(|routine| routine.enabled && !routine.proposed));
+        let saved = save(
+            &profile,
+            Agent {
+                name: "Keeper".into(),
+                instructions: words.into(),
+                routines: drafted.routines,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let kept_drafted = saved
+            .routines
+            .iter()
+            .filter(|routine| !routine.proposed)
+            .collect::<Vec<_>>();
+        assert_eq!(kept_drafted.len(), 2);
+        assert!(kept_drafted
+            .iter()
+            .all(|routine| routine.enabled && !routine.default_time));
+        let read = get(&profile, &saved.id).unwrap();
+        assert_eq!(
+            read.routines
+                .iter()
+                .map(|routine| (routine.enabled, routine.proposed))
+                .collect::<Vec<_>>(),
+            saved
+                .routines
+                .iter()
+                .map(|routine| (routine.enabled, routine.proposed))
+                .collect::<Vec<_>>()
+        );
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    #[test]
     fn a_picked_time_stays_marked_until_the_proposal_is_accepted_or_edited() {
         let (root_dir, profile) = profile();
         let saved = operation(
