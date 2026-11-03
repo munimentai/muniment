@@ -343,9 +343,12 @@ fn log(outcome: &str, detail: &str, run: &str) {
 
 /// The queue of finished runs for each memory root, keyed by its private
 /// folder, and whether a worker drains it.
+/// A run whose model call failed leaves its messages for the thread's next
+/// run, by memory root and thread, so a model that fails once loses no fact.
 #[derive(Default)]
 pub struct Extractor {
     roots: Mutex<BTreeMap<PathBuf, (bool, VecDeque<Job>)>>,
+    carried: Mutex<BTreeMap<(PathBuf, String), Vec<String>>>,
 }
 
 impl Extractor {
@@ -418,7 +421,23 @@ impl Extractor {
                     }
                 }
             };
-            run(&job, model.as_ref());
+            let mut job = job;
+            let key = (private.to_path_buf(), job.thread.clone());
+            let mut carried = self
+                .carried
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(mut earlier) = carried.remove(&key) {
+                earlier.append(&mut job.messages);
+                job.messages = newest(&earlier, MAX_INPUT_BYTES);
+            }
+            drop(carried);
+            if !run(&job, model.as_ref()) {
+                self.carried
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert(key, job.messages.clone());
+            }
             let _roots = self
                 .roots
                 .lock()
@@ -453,28 +472,29 @@ fn related(job: &Job, existing: &[Fact]) -> Vec<Fact> {
 }
 
 /// Reads one run and writes or keeps what the model proposed. Logs one
-/// line with counts and never the text.
-pub fn run(job: &Job, model: Option<&Model>) {
+/// line with counts and never the text. Answers false when the model call
+/// failed, so the thread's next run reads these messages again.
+pub fn run(job: &Job, model: Option<&Model>) -> bool {
     let Some(model) = model else {
         log("skipped", " reason=no_model", &job.run);
-        return;
+        return true;
     };
     let Ok(existing) = memory_files::facts_in(&job.home) else {
         log("failed", " reason=facts", &job.run);
-        return;
+        return true;
     };
     let related = related(job, &existing);
     let answer = match model(SYSTEM_PROMPT, &model_input(&job.messages, &related)) {
         Ok(answer) => answer,
         Err(_) => {
             log("failed", " reason=model", &job.run);
-            return;
+            return false;
         }
     };
     let via = answer.via;
     let Some(checked) = check(&answer.text, &related, &existing) else {
         log("dropped", &format!(" reason=malformed via={via}"), &job.run);
-        return;
+        return true;
     };
     let source = format!("extracted thread:{} run:{}", job.thread, job.run);
     let created = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
@@ -510,7 +530,7 @@ pub fn run(job: &Job, model: Option<&Model>) {
     let staged_count = staged.len();
     if memory_files::pending_stage(&job.private, staged).is_err() {
         log("failed", &format!(" reason=stage via={via}"), &job.run);
-        return;
+        return true;
     }
     let outcome = if added + updated + deleted > 0 {
         "saved"
@@ -527,6 +547,7 @@ pub fn run(job: &Job, model: Option<&Model>) {
         ),
         &job.run,
     );
+    true
 }
 
 /// Whether the user's messages hold enough to learn from.
@@ -565,21 +586,29 @@ pub fn extraction_model(profile: PathBuf) -> Model {
 enum Unanswered {
     /// No router account can take the call, so nothing was sent.
     NoAccount,
-    /// An account took the call and the call failed.
-    Failed,
+    /// An account took the call and the call failed, and why. With
+    /// `retry`, a second call may pass, such as after a rate limit, a server
+    /// error or a stream that ended early.
+    Failed { reason: String, retry: bool },
 }
 
-/// The router first, then Pi only when the router has no account for the call.
+/// The router first, then Pi only when the router has no account for the
+/// call. A router call that fails in a way a second call may pass runs once
+/// more, and the balancer may hand that call another account.
 fn answer_in_order(
-    router: impl FnOnce() -> Result<String, Unanswered>,
+    mut router: impl FnMut() -> Result<String, Unanswered>,
     pi: impl FnOnce() -> Result<String, String>,
 ) -> Result<Answer, String> {
-    match router() {
+    let mut routed = router();
+    if matches!(routed, Err(Unanswered::Failed { retry: true, .. })) {
+        routed = router();
+    }
+    match routed {
         Ok(text) => Ok(Answer {
             text,
             via: "router",
         }),
-        Err(Unanswered::Failed) => Err("The router call failed.".into()),
+        Err(Unanswered::Failed { reason, .. }) => Err(format!("The router call failed. {reason}")),
         Err(Unanswered::NoAccount) => pi().map(|text| Answer { text, via: "pi" }),
     }
 }
@@ -587,6 +616,10 @@ fn answer_in_order(
 fn router_complete(agent: &Path, system: &str, user: &str) -> Result<String, Unanswered> {
     use crate::model_router::{balance, classify, config, model_catalog, native_auth, usage, wire};
     let router = config::load(agent).map_err(|_| Unanswered::NoAccount)?;
+    // A router the user turned off answers nothing, so Pi's default answers.
+    if !router.enabled {
+        return Err(Unanswered::NoAccount);
+    }
     let route = crate::model_router::options(&router)
         .into_iter()
         .filter_map(|route| {
@@ -620,8 +653,13 @@ fn router_complete(agent: &Path, system: &str, user: &str) -> Result<String, Una
             {"role": "user", "content": user},
         ],
     });
-    let answered = classify::complete_on(&account, &body, &route.model, MODEL_TIMEOUT)
-        .map_err(|_| Unanswered::Failed)?;
+    let answered =
+        classify::complete_on(&account, &body, &route.model, MODEL_TIMEOUT).map_err(|reason| {
+            Unanswered::Failed {
+                retry: classify::retryable(&reason),
+                reason,
+            }
+        })?;
     if let Some(tokens) = wire::tokens(&answered) {
         let mut ledger = usage::load(agent);
         ledger.record_success(
@@ -635,7 +673,10 @@ fn router_complete(agent: &Path, system: &str, user: &str) -> Result<String, Una
     }
     classify::completion_text(&answered)
         .map(str::to_owned)
-        .ok_or(Unanswered::Failed)
+        .ok_or_else(|| Unanswered::Failed {
+            reason: "The model answered no text.".into(),
+            retry: true,
+        })
 }
 
 /// The flags every Pi call of the pass carries: no tools, no extensions (so
@@ -1273,6 +1314,44 @@ mod tests {
     }
 
     #[test]
+    fn a_run_whose_model_call_failed_is_read_again_with_the_threads_next_run() {
+        let fixture = Fixture::new();
+        let inputs = Arc::new(Mutex::new(Vec::<String>::new()));
+        let seen = Arc::clone(&inputs);
+        let model: Model = Arc::new(move |_, user| {
+            let mut inputs = seen.lock().unwrap();
+            inputs.push(user.to_owned());
+            if inputs.len() == 1 {
+                return Err("The router call failed. The model answered HTTP 503.".into());
+            }
+            Ok(routed(answer(serde_json::json!([]))))
+        });
+        let extractor = Arc::new(Extractor::default());
+        let wait = || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            while !extractor.idle() && std::time::Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert!(extractor.idle());
+        };
+        let job = |run: &str, message: &str| Job {
+            run: run.into(),
+            messages: vec![message.into()],
+            ..fixture.job(false)
+        };
+        extractor.submit(Some(Arc::clone(&model)), job("run-1", "I moved to Porto."));
+        wait();
+        extractor.submit(Some(Arc::clone(&model)), job("run-2", "I edit with Zed."));
+        wait();
+        extractor.submit(Some(Arc::clone(&model)), job("run-3", "I drink tea."));
+        wait();
+        let inputs = inputs.lock().unwrap();
+        assert_eq!(inputs.len(), 3);
+        assert!(inputs[1].contains("I moved to Porto.") && inputs[1].contains("I edit with Zed."));
+        assert!(!inputs[2].contains("I moved to Porto.") && inputs[2].contains("I drink tea."));
+    }
+
+    #[test]
     fn a_run_cut_off_by_a_stop_is_marked_once_and_not_read_again() {
         let fixture = Fixture::new();
         ledger_write(
@@ -1336,8 +1415,70 @@ mod tests {
         )
         .is_err());
         assert_eq!(pi_calls.get(), 2);
-        assert!(answer_in_order(|| Err(Unanswered::Failed), pi(&pi_calls, Ok("from pi"))).is_err());
+        let failed = |retry| {
+            move || {
+                Err(Unanswered::Failed {
+                    reason: "The model answered HTTP 503.".into(),
+                    retry,
+                })
+            }
+        };
+        assert_eq!(
+            answer_in_order(failed(false), pi(&pi_calls, Ok("from pi"))),
+            Err("The router call failed. The model answered HTTP 503.".into())
+        );
         assert_eq!(pi_calls.get(), 2);
+    }
+
+    #[test]
+    fn a_router_call_that_may_pass_runs_once_more_and_a_refusal_runs_once() {
+        let calls = std::cell::Cell::new(0);
+        let flaky = || {
+            calls.set(calls.get() + 1);
+            if calls.get() == 1 {
+                Err(Unanswered::Failed {
+                    reason: "The model answered HTTP 429.".into(),
+                    retry: true,
+                })
+            } else {
+                Ok("drafted".into())
+            }
+        };
+        assert_eq!(
+            answer_in_order(flaky, || Ok("from pi".into())),
+            Ok(Answer {
+                text: "drafted".into(),
+                via: "router"
+            })
+        );
+        assert_eq!(calls.get(), 2);
+        let refused = std::cell::Cell::new(0);
+        let refusal = || {
+            refused.set(refused.get() + 1);
+            Err(Unanswered::Failed {
+                reason: "The model answered HTTP 400.".into(),
+                retry: false,
+            })
+        };
+        assert!(answer_in_order(refusal, || Ok("from pi".into())).is_err());
+        assert_eq!(refused.get(), 1);
+        // Two failures that may pass stop after the second call.
+        let twice = std::cell::Cell::new(0);
+        let down = || {
+            twice.set(twice.get() + 1);
+            Err(Unanswered::Failed {
+                reason: "The provider stream ended before completion.".into(),
+                retry: true,
+            })
+        };
+        assert!(answer_in_order(down, || Ok("from pi".into())).is_err());
+        assert_eq!(twice.get(), 2);
+        use crate::model_router::classify::retryable;
+        assert!(retryable("The model answered HTTP 429."));
+        assert!(retryable("The model answered HTTP 502."));
+        assert!(retryable("The model did not answer."));
+        assert!(!retryable("The model answered HTTP 400."));
+        assert!(!retryable("The model answered HTTP 401."));
     }
 
     #[test]

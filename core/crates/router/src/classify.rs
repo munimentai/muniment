@@ -497,8 +497,24 @@ pub fn complete_on(
     }
     let response = call
         .send_json(&prepared.body)
-        .map_err(|_| "The model did not answer.".to_owned())?;
+        .map_err(|error| match error {
+            ureq::Error::Status(code, _) => format!("The model answered HTTP {code}."),
+            ureq::Error::Transport(_) => "The model did not answer.".to_owned(),
+        })?;
     super::transport::collect(response, prepared.protocol, model)
+}
+
+/// Whether a [`complete_on`] failure may pass on a second try: a refusal
+/// of the request itself, any 4xx but a timeout or a rate limit, fails again.
+pub fn retryable(error: &str) -> bool {
+    match error
+        .strip_prefix("The model answered HTTP ")
+        .and_then(|rest| rest.strip_suffix('.'))
+        .and_then(|code| code.parse::<u16>().ok())
+    {
+        Some(code) => !(400..500).contains(&code) || code == 408 || code == 429,
+        None => true,
+    }
 }
 
 /// The text of a chat completion's first choice.

@@ -343,6 +343,10 @@ pub(super) fn update(
     settings(agent, state)
 }
 
+/// Selects the decision model that routes each message. An empty id turns
+/// routing off: no decision model routes, so Settings drops the routing rows,
+/// and a `muniment-router/auto` default becomes the model the router answers
+/// with, else the model the chip shows first.
 pub(super) fn select(
     agent: &Path,
     state: &RouterState,
@@ -350,6 +354,9 @@ pub(super) fn select(
 ) -> Result<RouterSettings, String> {
     let _guard = MUTATION.lock().map_err(|_| SAVE_ERROR.to_string())?;
     let mut config = load(agent)?;
+    if id.is_empty() {
+        return routing_off(agent, state, config);
+    }
     let connections = read(agent, &config.classifier)?;
     let selected = connections
         .iter()
@@ -359,6 +366,28 @@ pub(super) fn select(
     config.classifier = selected.classifier.clone();
     save(agent, &config)?;
     apply(agent, state, &config)?;
+    settings(agent, state)
+}
+
+fn routing_off(
+    agent: &Path,
+    state: &RouterState,
+    mut config: config::RouterConfig,
+) -> Result<RouterSettings, String> {
+    // Assistance that asked the routing decision model keeps asking it.
+    let mut assist = config::load_assist(agent).map_err(|_| READ_ERROR.to_string())?;
+    if assist.enabled && assist.classifier.is_none() && config.classifier.ready() {
+        assist.classifier = Some(config.classifier.clone());
+        config::save_assist(agent, &assist).map_err(|_| SAVE_ERROR.to_string())?;
+    }
+    config.classifier = Classifier::None;
+    save(agent, &config)?;
+    apply(agent, state, &config)?;
+    super::router::settle_default(agent, None, false);
+    super::providers::forget_default_model(agent, |provider, model| {
+        provider == Some(config::ROUTER_PROVIDER) && model == Some(config::AUTO_MODEL)
+    })
+    .map_err(|_| SAVE_ERROR.to_string())?;
     settings(agent, state)
 }
 
@@ -449,6 +478,115 @@ mod tests {
         follow_assist(&root, &endpoint("jev-2"), None, true).unwrap();
         assert!(!config::load_assist(&root).unwrap().enabled);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn turning_routing_off_defaults_to_the_router_model_and_drops_the_routing_classifier() {
+        use muniment_core::model_router::config::{Account, Credential, RouterConfig};
+        let agent = muniment_core::state_root::test_root()
+            .join(format!("routing-off-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&agent).unwrap();
+        let jev = Classifier::Typesafe {
+            api_key: "apikey_1".into(),
+            model: "jev-latest".into(),
+            base_url: None,
+            max_options: None,
+            limits: Default::default(),
+        };
+        let mut config = RouterConfig {
+            enabled: true,
+            accounts: vec![Account {
+                id: "s1".into(),
+                family: "openai".into(),
+                label: "pat@example.com".into(),
+                credential: Credential::Subscription {
+                    provider: "openai-codex".into(),
+                    access: "access-s1".into(),
+                    refresh: None,
+                    expires_ms: None,
+                    account_id: Some("s1".into()),
+                    email: None,
+                    plan: None,
+                    renews_at_ms: None,
+                },
+                base_url: None,
+                models: Vec::new(),
+                enabled: true,
+                weight: 1,
+                overflow: false,
+            }],
+            classifier: jev.clone(),
+            ..RouterConfig::default()
+        };
+        save(&agent, &config).unwrap();
+        write(
+            &agent,
+            &[Connection {
+                id: "jev".into(),
+                name: "Jev".into(),
+                catalog_id: "jev".into(),
+                classifier: jev.clone(),
+            }],
+        )
+        .unwrap();
+        config::save_assist(
+            &agent,
+            &config::Assist {
+                enabled: true,
+                classifier: None,
+            },
+        )
+        .unwrap();
+        // A down custom server, connected first, never becomes the default.
+        std::fs::write(
+            agent.join("models.json"),
+            r#"{"providers":{"custom-do-test":{"baseUrl":"http://127.0.0.1:9/v1","models":[{"id":"qwen2.5-1.5b"}]}}}"#,
+        )
+        .unwrap();
+        super::super::providers::set_default_model(&agent, "muniment-router", "auto").unwrap();
+        let saved_default = || {
+            let settings: Value =
+                serde_json::from_slice(&std::fs::read(agent.join("settings.json")).unwrap())
+                    .unwrap();
+            (
+                settings["defaultProvider"].as_str().map(str::to_owned),
+                settings["defaultModel"].as_str().map(str::to_owned),
+            )
+        };
+        let state = RouterState::default();
+
+        let off = select(&agent, &state, "").unwrap();
+        assert_eq!(
+            saved_default(),
+            (
+                Some("muniment-router".into()),
+                Some("openai/gpt-6-astra".into())
+            )
+        );
+        assert_eq!(load(&agent).unwrap().classifier, Classifier::None);
+        let json = serde_json::to_value(&off).unwrap();
+        assert!(json["classifier_connections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|entry| entry["active"] == false));
+        // Assistance keeps the decision model it asked through routing.
+        assert_eq!(
+            config::load_assist(&agent).unwrap().classifier,
+            Some(jev.clone())
+        );
+
+        // With the router off nothing pooled answers, so the automatic
+        // default goes and the chip's shown model takes its place.
+        config = load(&agent).unwrap();
+        config.enabled = false;
+        config.classifier = jev;
+        save(&agent, &config).unwrap();
+        super::super::providers::set_default_model(&agent, "muniment-router", "auto").unwrap();
+        select(&agent, &state, "").unwrap();
+        assert_eq!(saved_default(), (None, None));
+        state.stop();
+        std::fs::remove_dir_all(agent).unwrap();
     }
 
     #[test]

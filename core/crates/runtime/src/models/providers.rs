@@ -997,6 +997,26 @@ pub(super) fn replace_default_model(
     Ok(true)
 }
 
+/// Removes the saved default when `forget` holds for it, so the next
+/// inventory read adopts the shown model the chip names.
+pub(super) fn forget_default_model(
+    agent: &Path,
+    forget: impl FnOnce(Option<&str>, Option<&str>) -> bool,
+) -> std::io::Result<bool> {
+    let settings_file = pi_settings_file(&pi_models_file(agent));
+    let lock = muniment_core::pi_settings::lock_settings(&settings_file)?;
+    let mut settings = pi_models::read_json(&settings_file)?;
+    let saved = |key: &str| settings.get(key).and_then(serde_json::Value::as_str);
+    if !forget(saved("defaultProvider"), saved("defaultModel")) {
+        return Ok(false);
+    }
+    settings.remove("defaultProvider");
+    settings.remove("defaultModel");
+    lock.check()?;
+    pi_models::write_json(&settings_file, &settings)?;
+    Ok(true)
+}
+
 /// Saves the level Pi starts `provider/model` at, which is the level a turn
 /// on that model runs at when it names none. No level removes the model's own
 /// level, so Pi's default applies again.
@@ -1149,26 +1169,33 @@ fn adopt_shown_default(agent: &Path, inventory: &mut ProviderInventory) {
     if saved_shown {
         return;
     }
-    // The router's own pick leads its models: the most capable model the
-    // catalog knows that some plan behind it offers. A model the catalog does
-    // not describe, which a plan may not offer, never becomes the default
-    // ahead of it.
+    // The router's own pick leads: the most capable model the catalog knows
+    // that some plan behind it offers. A model the catalog does not describe,
+    // which a plan may not offer, never becomes the default ahead of it.
     let pooled = super::router::default_choice(agent);
-    let first = inventory.providers.iter().find_map(|group| {
-        let pick = (group.id == ROUTER_PROVIDER)
-            .then_some(pooled.as_deref())
-            .flatten()
-            .filter(|model| {
-                group.models.iter().any(|entry| entry.id == *model) && !hidden(&group.id, model)
-            });
-        pick.or_else(|| {
+    let router_pick = pooled.as_deref().and_then(|model| {
+        inventory
+            .providers
+            .iter()
+            .find(|group| group.id == ROUTER_PROVIDER)
+            .filter(|group| {
+                group.models.iter().any(|entry| entry.id == model) && !hidden(&group.id, model)
+            })
+            .map(|group| (group.id.clone(), model.to_owned()))
+    });
+    // Else a signed-in account answers before a server the user runs, which
+    // may be stopped, and a server that runs without tools comes last, so the
+    // order the providers were connected in never names a down server.
+    let mut groups: Vec<&InventoryProvider> = inventory.providers.iter().collect();
+    groups.sort_by_key(|group| default_rank(group));
+    let first = router_pick.or_else(|| {
+        groups.into_iter().find_map(|group| {
             group
                 .models
                 .iter()
                 .find(|model| !hidden(&group.id, &model.id))
-                .map(|model| model.id.as_str())
+                .map(|model| (group.id.clone(), model.id.clone()))
         })
-        .map(|model| (group.id.clone(), model.to_owned()))
     });
     let Some((provider, model)) = first else {
         return;
@@ -1176,6 +1203,18 @@ fn adopt_shown_default(agent: &Path, inventory: &mut ProviderInventory) {
     if set_default_model(agent, &provider, &model).is_ok() {
         inventory.default_provider = Some(provider);
         inventory.default_model = Some(model);
+    }
+}
+
+/// How early a provider's models stand for a default the user never chose:
+/// accounts first, then local servers, then custom endpoints, and a server
+/// that runs without tools last.
+fn default_rank(group: &InventoryProvider) -> u8 {
+    match (group.tools_off, group.source) {
+        (true, _) => 3,
+        (false, "custom") => 2,
+        (false, "local") => 1,
+        _ => 0,
     }
 }
 
@@ -1408,6 +1447,72 @@ llama     qwen3              32K      16.4K    yes       no\n";
         let mut again = provider_inventory(&agent, &models, &[]).unwrap();
         adopt_shown_default(&agent, &mut again);
         assert_eq!(again.default_model.as_deref(), Some("gpt-5.6-luna"));
+    }
+
+    #[test]
+    fn a_default_the_user_never_chose_is_the_router_pick_ahead_of_a_custom_server() {
+        use muniment_core::model_router::config::{self, Account, Credential, RouterConfig};
+        let agent = temporary_directory();
+        let saved = RouterConfig {
+            enabled: true,
+            accounts: vec![Account {
+                id: "s1".into(),
+                family: "openai".into(),
+                label: "pat@example.com".into(),
+                credential: Credential::Subscription {
+                    provider: "openai-codex".into(),
+                    access: "at".into(),
+                    refresh: None,
+                    expires_ms: None,
+                    account_id: Some("s1".into()),
+                    email: None,
+                    plan: None,
+                    renews_at_ms: None,
+                },
+                base_url: None,
+                models: vec!["gpt-6-astra".into()],
+                enabled: true,
+                weight: 1,
+                overflow: false,
+            }],
+            ..RouterConfig::default()
+        };
+        config::save(&agent, &saved).unwrap();
+        // The custom server was connected first, so its entry leads Pi's file.
+        fs::write(
+            agent.join("models.json"),
+            serde_json::json!({"providers": {
+                "custom-do-test": {"baseUrl": "http://127.0.0.1:9/v1", "models": [{"id": "qwen2.5-1.5b"}]},
+                ROUTER_PROVIDER: {"baseUrl": "http://127.0.0.1:1/v1", "models": [{"id": "openai/gpt-6-astra"}]}
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        let mut inventory = provider_inventory(&agent, &[], &[]).unwrap();
+        assert_eq!(inventory.providers[0].id, "custom-do-test");
+        adopt_shown_default(&agent, &mut inventory);
+        assert_eq!(inventory.default_provider.as_deref(), Some(ROUTER_PROVIDER));
+        assert_eq!(
+            inventory.default_model.as_deref(),
+            Some("openai/gpt-6-astra")
+        );
+
+        // With the router off, a key account still answers before the server.
+        let mut off = saved;
+        off.enabled = false;
+        config::save(&agent, &off).unwrap();
+        fs::write(agent.join("settings.json"), "{}").unwrap();
+        fs::write(
+            agent.join("models.json"),
+            r#"{"providers":{"custom-do-test":{"baseUrl":"http://127.0.0.1:9/v1","models":[{"id":"qwen2.5-1.5b"}]},"ollama":{"baseUrl":"http://127.0.0.1:11434/v1","models":[{"id":"llama3.2:3b"}]}}}"#,
+        )
+        .unwrap();
+        let mut inventory = provider_inventory(&agent, &[], &[]).unwrap();
+        assert_eq!(inventory.providers[0].id, "custom-do-test");
+        adopt_shown_default(&agent, &mut inventory);
+        assert_eq!(inventory.default_provider.as_deref(), Some("ollama"));
+        assert_eq!(inventory.default_model.as_deref(), Some("llama3.2:3b"));
+        fs::remove_dir_all(agent).unwrap();
     }
 
     #[test]

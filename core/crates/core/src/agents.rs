@@ -267,12 +267,15 @@ fn locate(profile: &Path, id: &str) -> Result<Location, String> {
     Ok(Location::Missing)
 }
 /// An agent's folder for a write. A folder no save recorded yet is recorded
-/// under its agent's name.
+/// under its agent's name. An agent no folder holds, such as one a delete
+/// removed, has no folder: a write for it would make an `Untitled-` folder
+/// that no agent owns.
 pub fn folder(profile: &Path, id: &str) -> Result<PathBuf, String> {
     uuid::Uuid::parse_str(id).map_err(|_| "The agent identifier is invalid.")?;
     let (name, legacy) = match locate(profile, id)? {
         Location::Unrecorded(folder, name) => (Some(name), Some(folder)),
-        _ => (None, None),
+        Location::Recorded(_) => (None, None),
+        Location::Missing => return Err("The agent is unavailable.".into()),
     };
     let folder = crate::workspace_names::resolve(
         profile,
@@ -2801,6 +2804,31 @@ mod tests {
         assert!(!removed_memory.exists());
         assert!(store.latest(&removed.id).unwrap().is_none());
         assert!(list(&profile).unwrap().agents.is_empty());
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    #[test]
+    fn a_deleted_agent_leaves_no_untitled_folder_when_asked_for_again() {
+        let (root_dir, profile) = profile();
+        let (agent, folder_of_agent) = saved(&profile, "Morning brief");
+        let root = folder_of_agent.parent().unwrap().to_path_buf();
+        delete_agent(&profile, &agent.id, false).unwrap();
+        assert!(!folder_of_agent.exists());
+        // A second delete, a replay list or a run's write for the gone
+        // agent answers that it is unavailable and makes no folder.
+        assert!(delete_agent(&profile, &agent.id, false).is_err());
+        assert!(crate::agent_replays::list(&profile, &agent.id).is_err());
+        assert_eq!(
+            folder(&profile, &agent.id).unwrap_err(),
+            "The agent is unavailable."
+        );
+        let left: Vec<String> = fs::read_dir(&root)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with("Untitled-"))
+            .collect();
+        assert!(left.is_empty(), "{left:?}");
         fs::remove_dir_all(root_dir).unwrap();
     }
 
