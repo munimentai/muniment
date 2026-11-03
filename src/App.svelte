@@ -4141,11 +4141,11 @@
 </script>
 
 <!-- Agents and Artifacts sit over Projects as quiet rows. Each opens its dashboard, Artifacts with its ⌘J shortcut,
-     and while its page shows, the row is the open row: the selection fill and the accent edge. Agents opens
+     and while its page shows, the row is the open row: the selection fill and the accent edge. Each opens
      while a thread opens, as after a delete, since its page leaves the thread as it is. -->
 {#snippet libraryRow()}
   <button type="button" class="side-action library-entry" aria-label="Agents" aria-expanded={agentsOpen} aria-current={agentsOpen ? 'true' : undefined} data-accent-edge={agentsOpen ? '' : undefined} disabled={runLocked} onclick={() => { if (agentsOpen) agentsOpen = false; else void showAgents() }}><LucideIcon name="bot" /><span>Agents</span></button>
-  <button type="button" class="side-action library-entry" aria-label="Artifacts" aria-expanded={artifactsOpen} aria-current={artifactsOpen ? 'true' : undefined} data-accent-edge={artifactsOpen ? '' : undefined} aria-keyshortcuts={artifactShortcut} disabled={switchLocked} onclick={toggleArtifactRail}><LucideIcon name="file-code" /><span>Artifacts</span><kbd>{shortcutDisplayLabel(artifactShortcut)}</kbd></button>
+  <button type="button" class="side-action library-entry" aria-label="Artifacts" aria-expanded={artifactsOpen} aria-current={artifactsOpen ? 'true' : undefined} data-accent-edge={artifactsOpen ? '' : undefined} aria-keyshortcuts={artifactShortcut} disabled={runLocked} onclick={toggleArtifactRail}><LucideIcon name="file-code" /><span>Artifacts</span><kbd>{shortcutDisplayLabel(artifactShortcut)}</kbd></button>
 {/snippet}
 
 {#snippet freshRow()}
@@ -4352,7 +4352,7 @@
             {#if folderAccess}<FolderAccessPrompt access={folderAccess} onallow={() => folderAccessWatch?.allow()} />{/if}
             {#if swarm.absence.paused}<AbsencePrompt {tauri} runtime={swarm.self[LOCAL_RUNTIME_ID] ? LOCAL_RUNTIME_ID : Object.keys(swarm.self)[0]} pausedAt={swarm.absence.paused_at} count={roster.filter(agent => agent.paused_reason === 'absence').length} onresumed={() => refreshAgents()} />{/if}
             <SidebarSections sidebar={shownSidebar} row={coreRow} fresh={freshRow} library={libraryRow} query={threadSearch} pages={sidebarPages} owners={projectOwners}
-              showFresh={launchSettled && showFreshThread} disabled={switchLocked} expanded={expandedProjects} bind:archivedOpen
+              showFresh={launchSettled && showFreshThread} disabled={switchLocked} pagesDisabled={runLocked} expanded={expandedProjects} bind:archivedOpen
               {projectForm} bind:projectName {projectBusy} {projectError} reveal={revealProject} onrevealed={() => { revealProject = null }}
               onpage={openSidebarPage} ontoggleproject={selectProject} onnewthread={newProjectThread} onsettings={showProjectSettings} dragType={THREAD_DRAG} onmovethread={(threadId, projectId) => { void moveThread(threadId, projectId) }}
               onrenameproject={(id, name) => { projectForm = id; projectName = name }} onopenfolder={openProjectFolder}
@@ -4375,7 +4375,7 @@
           {#if !sidebarCollapsed}
           <div class="side-foot">
             <div class="settings-block">
-              <SidebarActions bind:settingsButton {settingsOpen} usageOpen={!settingsOpen && fullPage === 'usage'} notificationsOpen={!settingsOpen && fullPage === 'notifications'} {needsYou} settingsShortcut={settingsKeyShortcut} usageShortcut={usageShortcut()} notificationsShortcut={notificationsShortcut()} disabled={switchLocked} onsettings={toggleSettings} onusage={() => toggleFullPage('usage')} onnotifications={() => toggleFullPage('notifications')} />
+              <SidebarActions bind:settingsButton {settingsOpen} usageOpen={!settingsOpen && fullPage === 'usage'} notificationsOpen={!settingsOpen && fullPage === 'notifications'} {needsYou} settingsShortcut={settingsKeyShortcut} usageShortcut={usageShortcut()} notificationsShortcut={notificationsShortcut()} disabled={runLocked} onsettings={toggleSettings} onusage={() => toggleFullPage('usage')} onnotifications={() => toggleFullPage('notifications')} />
             </div>
             {#if featureFlags.cloud}
             {#if auth.name === 'signed-in'}

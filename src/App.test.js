@@ -5275,7 +5275,12 @@ describe('sidebar collapse', () => {
     expect(invoke.mock.calls.filter(([command]) => command === 'chat_new_thread')).toHaveLength(1)
   })
 
-  it('opens Agents on the first press while an agent delete still opens the next thread', async () => {
+  it.each([
+    ['Agents', 'Agents'],
+    ['Artifacts', 'Artifacts'],
+    ['Usage', 'Usage'],
+    ['Notifications', 'Notifications'],
+  ])('opens %s on the first press while an agent delete still opens the next thread', async (button, page) => {
     const original = invoke.getMockImplementation()
     let deleted = false
     let release
@@ -5299,14 +5304,14 @@ describe('sidebar collapse', () => {
     await fireEvent.click(within(await screen.findByRole('group', { name: 'Delete agent' })).getByRole('button', { name: 'Confirm delete' }))
     // The delete's confirmation is gone and the next thread still opens.
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'plain-thread', limit: 100 }))
-    const agents = within(document.getElementById('sidebar')).getByRole('button', { name: 'Agents', exact: true })
-    expect(agents).toBeEnabled()
-    await fireEvent.click(agents)
-    expect(await screen.findByRole('region', { name: 'Agents', exact: true })).toBeInTheDocument()
+    const press = within(document.getElementById('sidebar')).getByRole('button', { name: button, exact: true })
+    expect(press).toBeEnabled()
+    await fireEvent.click(press)
+    expect(await screen.findByRole('region', { name: page, exact: true })).toBeInTheDocument()
     release()
     await waitFor(() => expect(localStorage.getItem('muniment.open-thread')).toBe('plain-thread'))
     await tick()
-    expect(screen.getByRole('region', { name: 'Agents', exact: true })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: page, exact: true })).toBeInTheDocument()
   })
 
   it('opens the next remaining thread when the newest one fails to open after an agent delete', async () => {

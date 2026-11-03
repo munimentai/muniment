@@ -15,7 +15,9 @@
   import { tick } from 'svelte'
   let {
     sidebar, row, fresh = null, showFresh = false, query = '', pages = [], owners = {},
-    disabled = false, expanded = new Set(), archivedOpen = $bindable(false),
+    // A page result opens a page over the thread, so a thread that opens
+    // leaves it pressable and only `pagesDisabled` locks it.
+    disabled = false, pagesDisabled = disabled, expanded = new Set(), archivedOpen = $bindable(false),
     projectForm = null, projectName = $bindable(''), projectBusy = false, projectError = '',
     // A project just created scrolls into view, takes focus and carries the
     // selection until focus leaves it, wherever core places it in the list.
@@ -53,7 +55,7 @@
     <section class="side-section" aria-label="Search results">
       {#if matchedPages.length}
         <h3>Pages</h3>
-        <div class="page-results">{#each matchedPages as page (page.id)}<button class="page-result" aria-label={page.label} {disabled} onclick={() => onpage(page.id)}><LucideIcon name={page.icon} /><span>{page.label}</span>{#if page.shortcut}<kbd>{kbd(page.shortcut)}</kbd>{/if}</button>{/each}</div>
+        <div class="page-results">{#each matchedPages as page (page.id)}<button class="page-result" aria-label={page.label} disabled={pagesDisabled} onclick={() => onpage(page.id)}><LucideIcon name={page.icon} /><span>{page.label}</span>{#if page.shortcut}<kbd>{kbd(page.shortcut)}</kbd>{/if}</button>{/each}</div>
       {/if}
       <h3>Threads</h3>
       <ul class="thread-list" aria-label="Matching threads">{#each sidebar.results as item (item.thread_id)}{@render row(item)}{/each}</ul>
