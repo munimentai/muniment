@@ -13,7 +13,7 @@
   import { agentRequest } from './agent-runtime.js'
   import { draftAgent, draftForm, formProblem, sameAgent, testRunLine } from './agent-draft.js'
   import { emptyCatalog, loadToolCatalog } from './agent-tools.js'
-  import { triggerSummary } from './routine-labels.js'
+  import { DEFAULT_TIME_NOTE, hasPickedTime, triggerSummary } from './routine-labels.js'
   import { LOCAL_RUNTIME_ID } from '../runtimes/runtimes.js'
 
   // `turns` are the creation record's `{ message, at, reply }`. `pending` is
@@ -95,7 +95,7 @@
         {#if draft.label}<p class="label">{draft.label}</p>{/if}
         <dl>
           <dt>What it does</dt><dd class="instructions">{draft.instructions}</dd>
-          <dt>When</dt><dd>{schedule(draft)}</dd>
+          <dt>When</dt><dd>{schedule(draft)}{#if (draft.routines ?? []).some(hasPickedTime)} <span class="picked" role="note">{DEFAULT_TIME_NOTE}</span>{/if}</dd>
           {#if skillNames(draft).length}<dt>Skills</dt><dd>{skillNames(draft).join(', ')}</dd>{/if}
           {#if model}<dt>Model</dt><dd>{model}</dd>{/if}
         </dl>
@@ -150,6 +150,7 @@
   dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 16px; margin: 0; }
   dt { color: var(--muted); font-size: var(--text-13); }
   dd { margin: 0; overflow-wrap: anywhere; }
+  .picked { color: var(--warning); font-size: var(--text-12); }
   .instructions { white-space: pre-wrap; }
   .question { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); }
   .question p { margin: 0; font-weight: var(--weight-semibold); }

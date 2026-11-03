@@ -52,6 +52,20 @@ it('shows each message and the draft core answered it with, the newest with Save
   expect(within(drafts[0]).queryByRole('button', { name: 'Save' })).toBeNull()
 })
 
+it('says Muniment picked a time the message did not name, and Save keeps the draft unchanged', async () => {
+  const { tauri } = runtime()
+  const picked = { ...draft, routines: [{ ...draft.routines[0], trigger: { kind: 'cron', expr: '0 9 * * 5', tz: 'America/New_York' }, default_time: true }] }
+  render(AgentDraftChat, { tauri, turns: [turn('On Fridays, back up the notes folder', { draft: picked, question: null, via: 'router' })] })
+  const shown = screen.getByRole('article', { name: 'Draft: Inbox brief' })
+  expect(within(shown).getByRole('note')).toHaveTextContent('Muniment picked the time. Change it if needed.')
+  cleanup()
+  render(AgentDraftChat, { tauri, turns: [turn('Every weekday at 9am, summarize my inbox')] })
+  expect(screen.queryByRole('note')).toBeNull()
+  // The mark is core's, so a saved agent without it is the same agent.
+  const saved = { ...draftAgent(draftForm(draft)), id: 'agent-7' }
+  expect(sameAgent(draftAgent(draftForm({ ...draft, routines: [{ ...draft.routines[0], default_time: true }] }), { saved }), saved)).toBe(true)
+})
+
 it('shows the message a draft is answering and blocks the actions until it lands', () => {
   const { tauri } = runtime()
   render(AgentDraftChat, { tauri, turns: [turn('Summarize my inbox')], pending: 'Make it 8am' })

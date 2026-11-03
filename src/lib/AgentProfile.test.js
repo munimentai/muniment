@@ -281,7 +281,7 @@ it('opens scoped memory only on request', async () => {
 
 it('accepts or dismisses routines core proposed and edits a schedule', async () => {
   const proposed = { id: 'extract-1', name: 'Morning digest', enabled: false, proposed: true, created_from: 'instructions', prompt: 'Digest.', trigger: { kind: 'cron', expr: '0 8 * * 1-5', tz: 'UTC' }, last_fired_at: null, last_result: null }
-  const urgent = { ...proposed, id: 'import-2', name: 'Urgent mail' }
+  const urgent = { ...proposed, id: 'import-2', name: 'Urgent mail', default_time: true }
   const daily = { id: 'schedule', name: 'Briefing', enabled: true, created_from: 'user', prompt: '', trigger: { kind: 'cron', expr: '0 9 * * *', tz: 'UTC' }, last_fired_at: '2026-01-01T09:00:00Z', last_result: { run_id: 'r', status: 'completed', silent: false } }
   const withRoutines = { ...agent, routines: [proposed, urgent, daily] }
   const { invoke, requests } = machine(withRoutines)
@@ -294,6 +294,9 @@ it('accepts or dismisses routines core proposed and edits a schedule', async () 
   expect(within(routines).getByRole('switch', { name: 'Briefing on' })).toHaveClass('small')
   const digest = await screen.findByRole('article', { name: 'Proposed routine Morning digest' })
   expect(digest).toHaveTextContent('Proposed from instructions')
+  expect(within(digest).queryByRole('note')).toBeNull()
+  // A time core picked says so until the user accepts or edits it.
+  expect(within(screen.getByRole('article', { name: 'Proposed routine Urgent mail' })).getByRole('note')).toHaveTextContent('Muniment picked the time. Change it if needed.')
   expect(screen.getByRole('article', { name: 'Proposed routine Urgent mail' })).toHaveTextContent('Proposed from the imported template')
   expect(within(routines).queryByRole('button', { name: 'Morning digest' })).not.toBeInTheDocument()
   await fireEvent.click(within(digest).getByRole('button', { name: 'Accept' }))
