@@ -22,8 +22,9 @@
   let tabList
   function tabName(tab) {
     if (tab.id === 'browser' && browserUrl) return browserLabel(browserUrl)
-    if (tab.id === 'files') return workspaceLabel(folderPaths[contextKey], context || {threadId}) || tab.name
-    if (tab.id === 'terminal') return workspaceLabel(terminalPaths[contextKey], context || {threadId}) || tab.name
+    // A context with a label, such as a creation chat, names its tabs with it.
+    if (tab.id === 'files') return context?.label || workspaceLabel(folderPaths[contextKey], context || {threadId}) || tab.name
+    if (tab.id === 'terminal') return context?.label || workspaceLabel(terminalPaths[contextKey], context || {threadId}) || tab.name
     if (tab.id === 'artifacts' && artifactName) return artifactName
     return tab.name
   }
@@ -31,7 +32,7 @@
   $effect(() => { ondirty?.(dirtyFiles.size > 0) })
   let closing = $state(null)
   function markDirty(id, dirty) { const next = new Set(dirtyFiles); if (dirty) next.add(id); else next.delete(id); dirtyFiles = next }
-  const contextKey = $derived(JSON.stringify(context ? Object.fromEntries(Object.entries(context).filter(([key]) => key !== 'threadTitle')) : {threadId, projectId}))
+  const contextKey = $derived(JSON.stringify(context ? Object.fromEntries(Object.entries(context).filter(([key]) => key !== 'threadTitle' && key !== 'label')) : {threadId, projectId}))
   let terminalSessions = $state([])
   $effect(() => {
     const key = contextKey

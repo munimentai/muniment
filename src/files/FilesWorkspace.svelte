@@ -11,7 +11,7 @@
   import { fileTreeRows } from './file-tree.js'
   let { context: workspaceContext = null, tauri, threadId = null, projectId = null, initialPath = '', onfolder, onfile, hidden = false, onwillchange = () => true, onchanged } = $props()
   let showHidden = $state(false)
-  const contextKey = JSON.stringify(workspaceContext ? Object.fromEntries(Object.entries(workspaceContext).filter(([key]) => key !== 'threadTitle')) : {threadId,projectId})
+  const contextKey = JSON.stringify(workspaceContext ? Object.fromEntries(Object.entries(workspaceContext).filter(([key]) => key !== 'threadTitle' && key !== 'label')) : {threadId,projectId})
   const storageKey = `muniment.files:${contextKey}`
   let folders = $state([])
   let listing = $state(null)

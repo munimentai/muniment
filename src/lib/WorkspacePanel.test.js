@@ -88,3 +88,12 @@ it('names the Files tab after the open thread\'s folder, never the folder of a t
   expect(screen.queryByRole('tab', {name: 'New thread'})).toBeNull()
   expect(onfolder).not.toHaveBeenCalledWith('/home/sessions/New_thread-c3fa5c5a')
 })
+it('names the Files tab after a creation chat\'s title, not its folder', async () => {
+  const invoke = vi.fn(async (command, args) => command === 'workspace_folders' ? [{label: 'Thread workspace', path: '/home/sessions/New_thread-c3fa5c5a'}] : {path: args.path, entries: []})
+  const view = render(WorkspacePanel, {props: {tauri: {invoke}, selected: 'files', context: {threadId: 't1', label: 'New agent'}, threadId: 't1', onselect: vi.fn()}})
+  await waitFor(() => expect(screen.getByRole('tab', {name: 'New agent'})).toHaveAttribute('title', '/home/sessions/New_thread-c3fa5c5a'))
+  // The chat's title changes with the agent's name, and the Files view stays.
+  await view.rerender({props: {context: {threadId: 't1', label: 'Scout'}}})
+  expect(screen.getByRole('tab', {name: 'Scout'})).toBeInTheDocument()
+  expect(invoke.mock.calls.filter(([command]) => command === 'workspace_folders')).toHaveLength(1)
+})

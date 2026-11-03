@@ -9924,6 +9924,28 @@ describe('dedicated creation chats', () => {
     expect(invoke.mock.calls.some(([name])=>name==='creation_save')).toBe(false)
   })
 
+  it('names an agent creation chat\'s Files tab after the chat, not its thread folder', async () => {
+    const original=invoke.getMockImplementation()
+    invoke.mockImplementation((command,payload)=>{
+      if(command==='creation_list') return Promise.resolve([])
+      if(command==='artifact_list') return Promise.resolve([])
+      if(isAgentList(command,payload)) return Promise.resolve(agentListAnswer([]))
+      if(command==='chat_new_thread') return Promise.resolve('01900000-0000-7000-8000-000000000098')
+      if(command==='workspace_folders') return Promise.resolve([{ label: 'Thread workspace', path: '/home/sessions/New_thread-c3fa5c5a' }])
+      if(command==='workspace_list') return Promise.resolve({ path: payload.path, entries: [] })
+      return original(command,payload)
+    })
+    render(App)
+    await findReadyWorkspaceComposer()
+    await fireEvent.click(within(await screen.findByRole('region', { name: 'Start with' })).getByRole('button', { name: 'Set up an agent' }))
+    expect(await screen.findByRole('heading', { level: 1, name: 'New agent' })).toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', { name: 'Workspace tools' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Files', exact: true }))
+    const tabs = await screen.findByRole('tablist', { name: 'Open workspace tabs' })
+    await waitFor(() => expect(within(tabs).getByRole('tab', { name: 'New agent' })).toHaveAttribute('title', '/home/sessions/New_thread-c3fa5c5a'))
+    expect(within(tabs).queryByRole('tab', { name: 'New thread' })).toBeNull()
+  })
+
   it('starts a new thread from its starter cards', async () => {
     const original=invoke.getMockImplementation()
     invoke.mockImplementation((command,payload)=>{
