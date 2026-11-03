@@ -179,3 +179,16 @@ it('reads an agent save body as unchanged only when every field a person sets ma
   expect(sameAgent(draftAgent(draftForm(draft), { saved, test: true }), saved)).toBe(false)
   expect(sameAgent(body(), null)).toBe(false)
 })
+
+it('keeps the earlier draft after a failed draft and sends the message again from Try again', async () => {
+  const { tauri } = runtime()
+  const onsend = vi.fn()
+  render(AgentDraftChat, { tauri, turns: [turn('Summarize my inbox')], error: 'The draft could not be made. Try again.', failed: 'Also read my calendar', onsend })
+  expect(screen.getByRole('alert')).toHaveTextContent('The draft could not be made. Try again.')
+  const drafts = screen.getAllByRole('article')
+  expect(drafts).toHaveLength(1)
+  expect(drafts[0]).toHaveAccessibleName('Draft: Inbox brief')
+  expect(within(drafts[0]).getByText(draft.instructions)).toBeInTheDocument()
+  await fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+  expect(onsend).toHaveBeenCalledWith('Also read my calendar')
+})

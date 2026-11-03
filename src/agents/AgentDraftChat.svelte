@@ -18,9 +18,10 @@
 
   // `turns` are the creation record's `{ message, at, reply }`. `pending` is
   // the message a draft is answering. `agentId` is the agent a Save made.
-  // `model` names the model the agent runs.
+  // `model` names the model the agent runs. `failed` is the message whose
+  // draft failed, which Try again sends once more.
   let {
-    tauri, runtime = LOCAL_RUNTIME_ID, turns = [], pending = '', error = '', agentId = null, projectId = null, model = '', runs = [],
+    tauri, runtime = LOCAL_RUNTIME_ID, turns = [], pending = '', error = '', failed = '', agentId = null, projectId = null, model = '', runs = [],
     onsend = () => {}, onsaved = () => {}, onopenchat = () => {},
   } = $props()
 
@@ -128,7 +129,12 @@
     <div class="user-turn"><div class="user-message"><p>{pending}</p></div></div>
     <p class="state" role="status">Drafting the agent…</p>
   {/if}
-  {#if error}<p class="error" role="alert">{error}</p>{/if}
+  {#if error}
+    <div class="state">
+      <p class="error" role="alert">{error}</p>
+      {#if failed && !pending}<Button variant="outline" onclick={() => onsend(failed)}>Try again</Button>{/if}
+    </div>
+  {/if}
 </div>
 
 <style>

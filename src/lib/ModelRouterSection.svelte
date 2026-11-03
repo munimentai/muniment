@@ -4,7 +4,7 @@
   import Toggle from './Toggle.svelte'
   import Group from './ui/Group.svelte'
   import Row from './ui/Row.svelte'
-  import { pickerGroups, routerHidden } from './provider-catalog.js'
+  import { routerHidden } from './provider-catalog.js'
   import { modelLabel } from './model-label.js'
   import { serverDecisionModels } from './classifier-connections.js'
   let { tauri, settings, onsettings, inventory, oninventory, onconnect } = $props()
@@ -27,7 +27,6 @@
     if (!saved) throw new Error('The decision model connected, and Muniment could not find it to select.')
     return saved.id
   }
-  const models = $derived(pickerGroups(inventory).flatMap(group => group.models).filter(model => model.id !== 'auto'))
   // Assistance picks MCP servers and skills with its own decision model, or
   // with the model routing one when it names none.
   const assist = $derived(settings.assist ?? { enabled: false, connection: '' })
@@ -85,9 +84,9 @@
         if (!settings.enabled) onsettings?.(await tauri.invoke('model_router_set_enabled', { enabled: true }))
         await tauri.invoke('local_mode_set_default_model', { provider: 'muniment-router', model: 'auto' })
       } else {
-        const model = models[0]
-        if (!model) throw new Error('Connect an answer model before turning routing off.')
-        await tauri.invoke('local_mode_set_default_model', { provider: model.provider, model: model.choice })
+        // Core drops the routing decision model and makes the model the
+        // router answers with the default, never the first listed model.
+        onsettings?.(await tauri.invoke('model_router_select_classifier', { id: '' }))
       }
       oninventory?.(await tauri.invoke('local_mode_provider_inventory'))
     } catch (e) { error = String(e?.message ?? e) }

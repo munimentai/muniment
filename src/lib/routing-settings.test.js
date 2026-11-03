@@ -77,6 +77,32 @@ describe('Routing settings', () => {
     expect(tauri.invoke).toHaveBeenCalledWith('local_mode_set_default_model', { provider: 'muniment-router', model: 'auto' })
   })
 
+  it('turns routing off through core and never picks the first listed model', async () => {
+    const settings = routing()
+    settings.options = [{ key: 'openai/gpt-6-astra', family: 'openai', model: 'gpt-6-astra' }]
+    settings.classifier_connections = [{ id: 'jev', name: 'Jev via TypeSafe', active: true }]
+    const providers = [
+      { id: 'custom-do-test', name: 'custom-do-test', source: 'custom', models: [{ id: 'qwen2.5-1.5b' }] },
+      { id: 'muniment-router', name: 'Router', source: 'router', models: [{ id: 'auto' }, { id: 'openai/gpt-6-astra' }] },
+    ]
+    let fresh = { ...inventory, providers, default_provider: 'muniment-router', default_model: 'auto', router_classifier: 'jev-latest' }
+    const tauri = { invoke: vi.fn(async (command, payload) => {
+      if (command === 'local_mode_provider_inventory') return fresh
+      if (command === 'model_router_select_classifier' && payload.id === '') {
+        settings.classifier_connections[0].active = false
+        fresh = { ...fresh, default_model: 'openai/gpt-6-astra', router_classifier: null }
+      }
+      return { ...settings }
+    }) }
+    render(Settings, { tauri, inventory: fresh, section: 'routing', onclose: vi.fn() })
+    const toggle = await screen.findByRole('switch', { name: 'Use routing' })
+    expect(toggle).toHaveAttribute('aria-checked', 'true')
+    await fireEvent.click(toggle)
+    await waitFor(() => expect(tauri.invoke).toHaveBeenCalledWith('model_router_select_classifier', { id: '' }))
+    expect(tauri.invoke).not.toHaveBeenCalledWith('local_mode_set_default_model', expect.anything())
+    await waitFor(() => expect(screen.queryByRole('button', { name: /^Decision model:/ })).toBeNull())
+  })
+
 })
 
 it('does not present connected subscriptions or zero-weight keys as ready', () => {

@@ -4350,7 +4350,7 @@
         <div class="thread" role="region" aria-label={`Transcript: ${currentThreadTitle}`} bind:this={thread} onscroll={transcriptScrolled}>
           {#if historyError}<p class="history-error" role="alert">{historyError} {#if historyErrorAction}<button onclick={historyErrorAction.run}>{historyErrorAction.label}</button>{/if}</p>{/if}
           {#if agentChat}
-            <AgentDraftChat {tauri} turns={agentChat.record?.turns ?? []} pending={agentChatPending?.threadId === agentChat.threadId ? agentChatPending.message : ''} error={agentChatError} agentId={agentChat.record?.resultId ?? null}
+            <AgentDraftChat {tauri} turns={agentChat.record?.turns ?? []} pending={agentChatPending?.threadId === agentChat.threadId ? agentChatPending.message : ''} error={agentChatError} failed={agentChatFailure?.threadId === agentChat.threadId ? agentChatFailure.message : ''} agentId={agentChat.record?.resultId ?? null}
               projectId={projectCatalog.projects[projectCatalog.threads[agentChat.threadId]] ? projectCatalog.threads[agentChat.threadId] : null} model={agentChatModel} runs={activityRuns}
               onsend={(text) => sendAgentChat(text)} onsaved={(agent) => agentChatSaved(agent, agentChat.threadId)}
               onopenchat={(agent, run) => (run ? openRunThread(run) : openBuiltAgent(agent)).catch(error => { submitError = String(error) })} />
