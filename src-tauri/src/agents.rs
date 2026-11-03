@@ -318,6 +318,10 @@ pub async fn agent_memory(
             ModelAction::MemoryFactRestore,
             json!({"agent": id, "id": fact_id.ok_or("Choose a memory.")?}),
         ),
+        "memory_fact_purge" => (
+            ModelAction::MemoryFactPurge,
+            json!({"agent": id, "id": fact_id.ok_or("Choose a memory.")?}),
+        ),
         "memory_pending" => (ModelAction::MemoryPending, json!({"agent": id})),
         "memory_pending_apply" => (
             ModelAction::MemoryPendingApply,

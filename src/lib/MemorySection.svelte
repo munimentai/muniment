@@ -84,6 +84,7 @@
   let filter = $state('')
   let showDeleted = $state(false)
   let deletedFacts = $state([])
+  let purging = $state('')
   let draft = $state({ id: '', title: '', content: '', source: '' })
   let status = $state('')
   let busy = $state(true)
@@ -284,6 +285,17 @@
     } catch (e) { status = String(e) }
     finally { busy = false }
   }
+  // A deleted memory removed for good has no copy left to restore.
+  async function purgeFact(id) {
+    busy = true
+    try {
+      await memory.invoke('memory_fact_purge', { id })
+      deletedFacts = deletedFacts.filter(f => f.id !== id)
+      purging = ''
+      status = 'Memory deleted for good.'
+    } catch (e) { status = String(e) }
+    finally { busy = false }
+  }
   async function removeFact(id) {
     busy = true
     try { await memory.invoke('memory_fact_delete', { id }); facts = facts.filter(f => f.id !== id); deleting = ''; status = 'Memory deleted. You can restore it from Deleted memories.'; if (showDeleted) await refreshDeleted() }
@@ -360,7 +372,7 @@
       {@render factList(shown, 'saved', limit, () => { limit += PAGE }, filter ? 'No matching memories.' : trustFilter === 'external' ? 'No unconfirmed memories.' : 'No saved memories yet.')}
     </Group>
     {#if showDeleted}
-      <Group heading="Deleted memories" info="Deleted memories stay out of recall. Restore one if it was removed by mistake." plain>
+      <Group heading="Deleted memories" info="Deleted memories stay out of recall until you restore them or delete them now. Delete now removes a memory for good." plain>
         {@render factList(deletedFacts, 'deleted', deletedLimit, () => { deletedLimit += PAGE }, 'No deleted memories.')}
       </Group>
     {/if}
@@ -418,7 +430,12 @@
             {#if TRUST[fact.trust]}<dt>Trust</dt><dd>{TRUST[fact.trust]}</dd>{/if}
           </dl>
           <div class="fact-actions">
-            {#if list === 'deleted'}<Button disabled={busy} aria-label={`Restore ${fact.title}`} onclick={() => restoreFact(fact.id)}>Restore</Button>
+            {#if list === 'deleted' && purging === fact.id}
+              <Button variant="danger" disabled={busy} onclick={() => purgeFact(fact.id)}>Confirm delete now</Button>
+              <Button onclick={() => { purging = '' }}>Cancel</Button>
+            {:else if list === 'deleted'}
+              <Button disabled={busy} aria-label={`Restore ${fact.title}`} onclick={() => restoreFact(fact.id)}>Restore</Button>
+              <Button disabled={busy} aria-label={`Delete ${fact.title} now`} onclick={() => { purging = fact.id }}>Delete now</Button>
             {:else if deleting === fact.id}
               <Button variant="danger" disabled={busy} onclick={() => removeFact(fact.id)}>Confirm delete</Button>
               <Button onclick={() => { deleting = '' }}>Cancel</Button>

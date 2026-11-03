@@ -318,6 +318,7 @@ pub fn run() {
             personal_memory::memory_fact_delete,
             personal_memory::memory_deleted_facts,
             personal_memory::memory_fact_restore,
+            personal_memory::memory_fact_purge,
             personal_memory::memory_pending,
             personal_memory::memory_pending_apply,
             personal_memory::memory_pending_dismiss,

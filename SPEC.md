@@ -80,7 +80,7 @@ Durable facts live in `memory/facts/<id>.md` with their source and origin. Users
 The memory-save tool and the after-run pass record the originating thread and run, and the agent when the run or thread belongs to one. The memory-save tool rejects credentials.
 Each memory names its origin: "Added in Settings", "Added in a chat", "Added by you" for a memory the user added in an agent's profile, or "Added by <name> agent" for a memory an agent created. A deleted agent reads "Added by an agent". Older memories get their origin from their source text.
 Memory's Recall lives in the private `memory-recall.json`, and each new chat reads it. Save facts from chats and Use memories in replies default on. Ask before saving defaults off and shows each proposed fact for approval. With saving on and asking off, chat maintains facts automatically, including corrections and deletion of verified obsolete facts. Each run's after-run pass uses the cheapest connected routing account, then the user's Pi sign-in. With saving on and neither connected, the switch says no model can save facts. The profile reaches every reply whatever Recall says.
-Deleted facts leave recall and stay in private recovery storage. Settings can restore them.
+Deleted facts leave recall and stay in private recovery storage, with no time limit. Settings can restore each one, or Delete now removes it for good after a confirm.
 Memory search rebuilds its index from files. Profile imports require Save before taking effect.
 Memory and runtime state keep their own locations. A missing project folder stops the run.
 
