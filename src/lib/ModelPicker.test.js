@@ -154,6 +154,21 @@ it('gives each custom endpoint in the rail its own monogram mark', () => {
   expect(within(rail).getByRole('button', { name: 'OpenAI' }).querySelector('.logo svg')).not.toBeNull()
 })
 
+it('marks an endpoint that did not answer the last refresh and still offers its saved models', async () => {
+  const inventory = { providers: [
+    { id: 'custom-dead', name: 'Dead box', source: 'custom', unreachable: true, models: [{ id: 'kept' }] },
+    { id: 'custom-live', name: 'Live box', source: 'custom', models: [{ id: 'served' }] },
+  ], hidden: [], shown: [] }
+  render(ModelPicker, props(inventory))
+  const dead = screen.getByRole('region', { name: 'Dead box' })
+  expect(within(dead).getByText('Not answering. Its saved models stay.')).toBeInTheDocument()
+  expect(within(dead).getByRole('button', { name: 'kept' })).toBeEnabled()
+  await fireEvent.click(within(screen.getByRole('navigation', { name: 'Providers' })).getByRole('button', { name: 'Live box' }))
+  expect(within(screen.getByRole('region', { name: 'Live box' })).queryByText('Not answering. Its saved models stay.')).toBeNull()
+  await fireEvent.input(screen.getByRole('searchbox'), { target: { value: 'e' } })
+  expect(within(screen.getByRole('region', { name: 'Dead box' })).getByText('Not answering. Its saved models stay.')).toBeInTheDocument()
+})
+
 it('lists only the picked provider\'s models without a search', async () => {
   const inventory = { providers: [
     { id: 'custom-omlx', name: 'oMLX', source: 'custom', models: [{ id: 'Qwen3.8-27B-4bit' }] },

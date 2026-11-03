@@ -223,6 +223,23 @@ it('says on the endpoint card that the key stays in memory when the keychain ref
   expect(within(screen.getByRole('region', { name: 'Other' })).queryByText(notice)).not.toBeInTheDocument()
 })
 
+it('says on the endpoint card that its server did not answer and that its saved models stay', () => {
+  const down = { providers: [
+    { id: 'custom-dead', name: 'Dead box', source: 'custom', base_url: 'http://192.0.2.1:8000/v1', unreachable: true, models: [{ id: 'kept' }] },
+    { id: 'custom-other', name: 'Other', source: 'custom', base_url: 'https://other.example/v1', models: [{ id: 'm' }] }
+  ], hidden: [], shown: [], default_provider: null, default_model: null }
+  const tauri = { invoke: vi.fn(async (command) => {
+    if (command === 'local_mode_provider_inventory') return down
+    if (command === 'model_router_settings') return { families: [], subscriptions: [], accounts: [] }
+    return null
+  }) }
+  render(ModelsSection, { props: { tauri, listen: async () => () => {}, inventory: down } })
+  const card = screen.getByRole('region', { name: 'Dead box' })
+  expect(within(card).getByText('Not answering at 192.0.2.1:8000. Its saved models stay.')).toBeInTheDocument()
+  expect(within(card).getByText('1 model')).toBeInTheDocument()
+  expect(within(screen.getByRole('region', { name: 'Other' })).queryByTestId('endpoint-not-answering')).toBeNull()
+})
+
 it('asks for the key again in the edit form when the saved key is stale', async () => {
   const keyed = { providers: [
     { id: 'custom-live30', name: 'Live30', source: 'custom', base_url: 'https://live30.example/v1', models: [{ id: 'm' }], key_notice: 'The keychain holds an older key for this endpoint. Enter the key again.', key_state: 'stale' },

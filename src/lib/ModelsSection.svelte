@@ -279,6 +279,10 @@
   // A URL pasted with its API route, such as .../v1/chat/completions, saves
   // as the server's base URL, and the field shows the URL that saves.
   const API_ROUTES = ['/chat/completions', '/completions', '/models', '/responses']
+  // An endpoint's server as its card names it, without the scheme or the /v1 path.
+  function endpointHost(entry) {
+    return (entry.base_url ?? '').replace(/^https?:\/\//, '').replace(/\/v1\/?$/, '')
+  }
   function endpointBase(url) {
     const trimmed = url.trim().replace(/\/+$/, '')
     const route = API_ROUTES.find((candidate) => trimmed.toLowerCase().endsWith(candidate))
@@ -513,7 +517,7 @@
               {@const busy = disconnecting.includes(entry.id)}
               <div class="line-card" data-testid="provider-connection" aria-busy={busy}>
                 <LucideIcon name={endpoint ? 'server' : entry.source === 'account' ? 'credit-card' : entry.source === 'claude-code' ? 'square-terminal' : 'key-round'} size={16} />
-                <span class="line-label" class:mono={endpoint}>{endpoint ? (entry.base_url ?? '').replace(/^https?:\/\//, '').replace(/\/v1\/?$/, '') : entry.source === 'account' ? 'Subscription' : entry.source === 'claude-code' ? 'Claude Code' : 'API key'}</span>
+                <span class="line-label" class:mono={endpoint}>{endpoint ? endpointHost(entry) : entry.source === 'account' ? 'Subscription' : entry.source === 'claude-code' ? 'Claude Code' : 'API key'}</span>
                 <span class="tag model-count" data-tone={entry.count ? undefined : 'caution'}>{modelCountLabel(entry.count)}</span>
                 {#if entry.source === 'account' && piHold(fleet, entry.id)}<HoldSignIn {tauri} {runtime} account={piHold(fleet, entry.id)} onmoved={onHeld} />
                 {:else if entry.source === 'account' && fleet?.length}<span class="tag here">Signed in here</span>{/if}
@@ -527,6 +531,8 @@
                 <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${entry.name}`} disabled={busy} onclick={(event) => askDisconnect(entry.name, 'Muniment removes this connection. Connect it again to use it.', () => disconnect(entry), event.currentTarget)}><LucideIcon name="unplug" size={16} variant="action" /></button>
               </div>
               <!-- The runtime holds this endpoint's key in memory alone, because the keychain refused it. -->
+              <!-- The last refresh found this endpoint's server not answering, so it lists its saved models. -->
+              {#if endpoint && entry.unreachable}<p class="support" role="status" data-testid="endpoint-not-answering">Not answering at {endpointHost(entry)}. Its saved models stay.</p>{/if}
               {#if endpoint && entry.key_notice}<p class="support" role="status" data-testid="endpoint-key-notice">{entry.key_notice}</p>{/if}
             {/if}
             {#if entry.family && router && firstOfFamily}<ModelAccounts {tauri} {listen} {runtime} settings={router} family={entry.family} onsettings={onRouterSettings} {fleet} onheld={onHeld} />{/if}

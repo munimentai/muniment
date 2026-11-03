@@ -131,6 +131,8 @@ export function pickerGroups(inventory, query = '', { all = false } = {}) {
       name: provider.name,
       source: provider.source,
       classifier: '',
+      // An endpoint whose server did not answer the last refresh lists its saved models.
+      ...(provider.unreachable ? { unreachable: true } : {}),
       // An Ollama decision model answers only the router's choice, so it lists with the classifiers.
       models: [...new Map((provider.models ?? []).map((model) => [model.id, model])).values()]
         .filter((model) => !isDecisionModel(provider, model.id))

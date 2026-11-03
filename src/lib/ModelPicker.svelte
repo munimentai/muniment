@@ -147,6 +147,7 @@
         {#each groups as group (group.id)}
           <section class="picker-group" aria-label={group.label}>
             <h4>{@render mark(group)}{group.label}</h4>
+            {@render notAnswering(group)}
             <ul>{#each [...group.shown, ...group.legacy] as model (model.id)}{@render row(group, model)}{/each}</ul>
           </section>
         {/each}
@@ -156,6 +157,7 @@
         <section class="picker-group" aria-label={group.label} data-group={group.id}>
           {#if group.manage}<button type="button" class="quiet group-manage" aria-label="Manage model routing" onclick={onrouting}>Manage</button>{/if}
           <h4>{@render mark(group)}{group.label}</h4>
+          {@render notAnswering(group)}
           <ul>{#each group.shown as model (model.id)}{@render row(group, model)}{/each}</ul>
           <!-- With no ready decision model the router has no row of its own: its pooled models list under their providers. -->
           {#if group.classifier && !group.models.length}<p class="support">{group.decisionModel ? 'Routing is off. Turn on Route each message in Settings › Models › Roles.' : 'Connect a decision model to route each message.'}</p>{/if}
@@ -179,6 +181,9 @@
   {/if}
   <button type="button" class="quiet picker-manage" onclick={onmanage}><LucideIcon name="settings" variant="action" size={14} />Manage models</button>
 </div>
+
+<!-- An endpoint that did not answer the last refresh still lists its saved models. -->
+{#snippet notAnswering(group)}{#if group.unreachable}<p class="support" data-testid="endpoint-not-answering">Not answering. Its saved models stay.</p>{/if}{/snippet}
 
 {#snippet mark(group)}{#if group.classifier}<LucideIcon name="route" variant="action" size={14} />{:else}<ProviderLogo color provider={group.providerId} name={group.label} size={14} />{/if}{/snippet}
 
