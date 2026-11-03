@@ -62,8 +62,9 @@ pub struct RuntimeAttachState {
 }
 
 /// The pass over Home at start: it removes the folders deleted agents and
-/// deleted threads left that hold only Muniment's own files and the memory
-/// indexes deleted agents left, forgets name records whose folder is gone,
+/// deleted threads left that hold only Muniment's own files, the day-old
+/// empty folders unsent chats left, and the memory indexes deleted agents
+/// left, forgets name records whose folder is gone,
 /// and names legacy session folders.
 fn tidy_home(profile: &Path) -> Result<(), String> {
     match muniment_core::agents::remove_deleted_folders(profile) {
@@ -94,6 +95,16 @@ fn tidy_home(profile: &Path) -> Result<(), String> {
         Ok(_) => {}
         Err(error) => muniment_core::runtime_eprintln!(
             "muniment-runtime: thread_folders outcome=failed error={error}"
+        ),
+    }
+    match muniment_core::projects::remove_unsent_thread_folders(profile) {
+        Ok(removed) if !removed.is_empty() => muniment_core::runtime_eprintln!(
+            "muniment-runtime: unsent_thread_folders removed={}",
+            removed.len()
+        ),
+        Ok(_) => {}
+        Err(error) => muniment_core::runtime_eprintln!(
+            "muniment-runtime: unsent_thread_folders outcome=failed error={error}"
         ),
     }
     match muniment_core::projects::forget_deleted_threads(profile) {

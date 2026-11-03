@@ -796,3 +796,86 @@ fn a_journal_opens_when_a_runless_threads_delete_names_no_attach_profile() {
     assert!(RunJournal::open(&path).is_err());
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn the_start_pass_removes_day_old_folders_unsent_chats_left_and_keeps_the_users_files() {
+    let root = muniment_core::state_root::test_root()
+        .join(format!("muniment-unsent-folders-{}", Uuid::new_v4()));
+    let profile = root.join("profile");
+    std::fs::create_dir_all(&profile).unwrap();
+    let home = root.join("muniment");
+    muniment_core::home::confirm_home(&profile, &home).unwrap();
+    let sessions = home.join("sessions");
+    let mut journal = RunJournal::open(profile.join("runs.sqlite3")).unwrap();
+    let folder = |thread: &str, title: &str| {
+        muniment_core::workspace_names::resolve(&profile, &sessions, thread, Some(title), None)
+            .unwrap()
+    };
+    let leaf = |path: &std::path::Path| path.file_name().unwrap().to_string_lossy().into_owned();
+    // An unsent thread and an unsent agent chat opened Files and left
+    // empty folders, one with Finder's file.
+    let unsent_thread = folder(&Uuid::new_v4().to_string(), "New thread");
+    std::fs::write(unsent_thread.join(".DS_Store"), "").unwrap();
+    let unsent_agent = folder(&Uuid::new_v4().to_string(), "New agent");
+    // An unsent chat's folder that holds the user's file stays.
+    let mine = folder(&Uuid::new_v4().to_string(), "New thread");
+    std::fs::write(mine.join("notes.md"), "mine").unwrap();
+    // A thread that ran keeps its empty folder.
+    let ran = journal
+        .append_new_run("workspace-a", &run_started(Some("owner")))
+        .unwrap();
+    let ran_folder = folder(&ran, "New thread");
+    // A draft that holds turns keeps its folder.
+    let drafted = Uuid::new_v4().to_string();
+    muniment_core::creations::save(
+        &profile,
+        muniment_core::creations::Creation {
+            thread_id: drafted.clone(),
+            kind: "agent".into(),
+            goal: "Find sources".into(),
+            output: "A saved agent".into(),
+            result_id: None,
+            turns: vec![muniment_core::creations::DraftTurn {
+                message: "Find sources".into(),
+                at: RECORDED_AT.into(),
+                ..Default::default()
+            }],
+            title: None,
+        },
+    )
+    .unwrap();
+    let drafted_folder = folder(&drafted, "New agent");
+    // A titled thread's folder and an unrecorded empty folder.
+    let titled = folder(&Uuid::new_v4().to_string(), "Sky color");
+    let orphan = sessions.join("New_agent-0b3e9d21");
+    std::fs::create_dir_all(&orphan).unwrap();
+    drop(journal);
+
+    // A folder younger than a day stays, since its chat may still be open.
+    let past = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    assert!(
+        muniment_core::projects::remove_unsent_thread_folders_before(&profile, past)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(unsent_thread.is_dir() && unsent_agent.is_dir() && orphan.is_dir());
+
+    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+    let mut removed =
+        muniment_core::projects::remove_unsent_thread_folders_before(&profile, later).unwrap();
+    removed.sort();
+    let mut expected = vec![leaf(&unsent_thread), leaf(&unsent_agent), leaf(&orphan)];
+    expected.sort();
+    assert_eq!(removed, expected);
+    assert!(!unsent_thread.exists() && !unsent_agent.exists() && !orphan.exists());
+    assert_eq!(
+        std::fs::read_to_string(mine.join("notes.md")).unwrap(),
+        "mine"
+    );
+    assert!(ran_folder.is_dir() && drafted_folder.is_dir() && titled.is_dir());
+    // The removed folders' name records go with them.
+    let names = muniment_core::workspace_names::recorded_names(&profile, &sessions).unwrap();
+    assert!(!names.contains(&leaf(&unsent_thread)) && !names.contains(&leaf(&unsent_agent)));
+    assert!(names.contains(&leaf(&mine)));
+    std::fs::remove_dir_all(root).unwrap();
+}

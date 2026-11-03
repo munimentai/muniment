@@ -581,6 +581,98 @@ pub fn remove_deleted_thread_folders(profile: &Path) -> Result<Vec<String>, Stri
     Ok(removed)
 }
 
+/// How long an unsent chat's folder waits before the start pass removes it.
+const UNSENT_FOLDER_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+/// The pass at start over the folders that unsent chats left: it removes
+/// each `New_thread-*`, `New_agent-*` or `Untitled-*` session folder older
+/// than a day that holds only Muniment's own files and whose thread or draft
+/// is gone or holds no run. It never removes a folder that holds the user's
+/// files. Answers the names of the removed folders.
+pub fn remove_unsent_thread_folders(profile: &Path) -> Result<Vec<String>, String> {
+    let cutoff = std::time::SystemTime::now()
+        .checked_sub(UNSENT_FOLDER_AGE)
+        .unwrap_or(std::time::UNIX_EPOCH);
+    remove_unsent_thread_folders_before(profile, cutoff)
+}
+
+/// The start pass over unsent chats' folders, for folders changed before
+/// `cutoff`.
+pub fn remove_unsent_thread_folders_before(
+    profile: &Path,
+    cutoff: std::time::SystemTime,
+) -> Result<Vec<String>, String> {
+    let Some(root) = sessions_root(profile)? else {
+        return Ok(Vec::new());
+    };
+    let owners = crate::workspace_names::recorded_ids(profile, &root)?
+        .into_iter()
+        .filter_map(|id| {
+            crate::workspace_names::recorded(profile, &root, &id)
+                .ok()
+                .flatten()
+                .map(|leaf| (leaf.to_lowercase(), id))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut journal = if profile.join("runs.sqlite3").exists() {
+        Some(
+            crate::journal::RunJournal::open(profile.join("runs.sqlite3"))
+                .map_err(|e| e.to_string())?,
+        )
+    } else {
+        None
+    };
+    let mut removed = Vec::new();
+    for entry in fs::read_dir(&root).map_err(|e| e.to_string())? {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let leaf = entry.file_name().to_string_lossy().into_owned();
+        let path = entry.path();
+        let unsent_name = ["New_thread-", "New_agent-", "Untitled-"]
+            .iter()
+            .any(|prefix| leaf.starts_with(prefix));
+        let old = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .is_ok_and(|modified| modified < cutoff);
+        if !unsent_name || !old || !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let gone = match owners.get(&leaf.to_lowercase()) {
+            Some(id) => {
+                let gone = thread_holds_no_run(journal.as_mut(), id)?
+                    && !crate::creations::read(profile, id)
+                        .ok()
+                        .flatten()
+                        .is_some_and(|item| item.result_id.is_some() || !item.turns.is_empty());
+                gone && remove_thread_folder(profile, id)?.is_none() && !path.exists()
+            }
+            None => crate::agents::remove_folder(&path).is_none() && !path.exists(),
+        };
+        if gone {
+            removed.push(leaf);
+        }
+    }
+    Ok(removed)
+}
+
+/// Whether the journal holds no run of the thread: the thread is gone, was
+/// deleted, or never ran. A journal read that fails counts as a run.
+fn thread_holds_no_run(
+    journal: Option<&mut crate::journal::RunJournal>,
+    thread: &str,
+) -> Result<bool, String> {
+    let Some(journal) = journal else {
+        return Ok(true);
+    };
+    Ok(match journal.thread_run_ids(thread, 1, None) {
+        Ok(page) => page.run_ids.is_empty(),
+        Err(crate::journal::ThreadRunPageError::NotFoundOrInaccessible) => true,
+        Err(_) => false,
+    })
+}
+
 /// Converts legacy session directories using the journal's visible thread titles.
 pub fn migrate_session_names(profile: &Path) -> Result<(), String> {
     let Some(home) = crate::home::configured_home(profile).map_err(|e| e.to_string())? else {
