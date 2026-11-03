@@ -21,7 +21,8 @@ function selectFailureText(error) {
 // with this reason before it records anything (attach_boundaries.rs).
 const replyInProgress = 'A reply is already in progress.'
 const replyInProgressRetryMs = 2_000
-const runElsewhere = 'Another reply is still running. Send again when it ends.'
+// Every busy-send notice reads this one sentence.
+const runElsewhere = 'Another reply is still running. Send it again when that reply ends.'
 // The runtime refuses a run in a thread another fleet member runs with this
 // reason before it records anything (attach_boundaries.rs).
 const threadElsewhere = 'Another machine runs this thread. Send the message to that machine.'

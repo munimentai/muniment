@@ -3561,7 +3561,7 @@ describe('background runs', () => {
 
     await context.controller.send()
     expect(context.invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
-    expect(context.errors).toEqual(['Another reply is still running. Send again when it ends.'])
+    expect(context.errors).toEqual(['Another reply is still running. Send it again when that reply ends.'])
 
     context.invoke.mockImplementation((command) => Promise.resolve(command === 'chat_submit' ? { runId: 'run-box' } : undefined))
     context.setRuntime('box')
@@ -3830,7 +3830,7 @@ describe('background runs', () => {
       expect(context.messages()).toEqual(earlier)
       expect(context.active()).toBeNull()
       expect(context.draft()).toBe('Second question')
-      expect(context.errors).toEqual(['Another reply is still running. Send again when it ends.'])
+      expect(context.errors).toEqual(['Another reply is still running. Send it again when that reply ends.'])
     } finally {
       vi.useRealTimers()
     }
