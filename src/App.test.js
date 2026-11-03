@@ -5275,6 +5275,40 @@ describe('sidebar collapse', () => {
     expect(invoke.mock.calls.filter(([command]) => command === 'chat_new_thread')).toHaveLength(1)
   })
 
+  it('opens Agents on the first press while an agent delete still opens the next thread', async () => {
+    const original = invoke.getMockImplementation()
+    let deleted = false
+    let release
+    const held = new Promise((resolve) => { release = resolve })
+    const scout = { id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null }
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args) ? agentListAnswer(deleted ? [] : [scout], deleted ? {} : { 'agent-1': 'agent-thread' })
+      : command === 'agent_request' && args?.operation === 'agent.delete' ? (deleted = true, {})
+      : command === 'chat_thread_open' && args?.threadId === 'plain-thread' ? held.then(() => [])
+      : command === 'chat_thread_open' ? []
+      : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
+    threadSummaryResult = [
+      { threadId: 'agent-thread', title: 'Carry out your saved agent instructions', updatedAt: '2026-01-02T00:00:00Z' },
+      { threadId: 'plain-thread', title: 'Lease renewal', updatedAt: '2026-01-01T00:00:00Z' },
+    ]
+    render(App)
+    await openSidebarPage('Agents')
+    await fireEvent.click(within(await within(await screen.findByRole('region', { name: 'Agents', exact: true })).findByRole('article', { name: 'Scout' })).getByRole('button', { name: 'Open chat' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'agent-thread', limit: 100 }))
+    const profile = await screen.findByRole('complementary', { name: 'Agent profile' })
+    await fireEvent.click(within(profile).getByRole('button', { name: 'Delete agent' }))
+    await fireEvent.click(within(await screen.findByRole('group', { name: 'Delete agent' })).getByRole('button', { name: 'Confirm delete' }))
+    // The delete's confirmation is gone and the next thread still opens.
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'plain-thread', limit: 100 }))
+    const agents = within(document.getElementById('sidebar')).getByRole('button', { name: 'Agents', exact: true })
+    expect(agents).toBeEnabled()
+    await fireEvent.click(agents)
+    expect(await screen.findByRole('region', { name: 'Agents', exact: true })).toBeInTheDocument()
+    release()
+    await waitFor(() => expect(localStorage.getItem('muniment.open-thread')).toBe('plain-thread'))
+    await tick()
+    expect(screen.getByRole('region', { name: 'Agents', exact: true })).toBeInTheDocument()
+  })
+
   it('opens the next remaining thread when the newest one fails to open after an agent delete', async () => {
     const original = invoke.getMockImplementation()
     let deleted = false

@@ -4141,9 +4141,10 @@
 </script>
 
 <!-- Agents and Artifacts sit over Projects as quiet rows. Each opens its dashboard, Artifacts with its ⌘J shortcut,
-     and while its page shows, the row is the open row: the selection fill and the accent edge. -->
+     and while its page shows, the row is the open row: the selection fill and the accent edge. Agents opens
+     while a thread opens, as after a delete, since its page leaves the thread as it is. -->
 {#snippet libraryRow()}
-  <button type="button" class="side-action library-entry" aria-label="Agents" aria-expanded={agentsOpen} aria-current={agentsOpen ? 'true' : undefined} data-accent-edge={agentsOpen ? '' : undefined} disabled={switchLocked} onclick={() => { if (agentsOpen) agentsOpen = false; else void showAgents() }}><LucideIcon name="bot" /><span>Agents</span></button>
+  <button type="button" class="side-action library-entry" aria-label="Agents" aria-expanded={agentsOpen} aria-current={agentsOpen ? 'true' : undefined} data-accent-edge={agentsOpen ? '' : undefined} disabled={runLocked} onclick={() => { if (agentsOpen) agentsOpen = false; else void showAgents() }}><LucideIcon name="bot" /><span>Agents</span></button>
   <button type="button" class="side-action library-entry" aria-label="Artifacts" aria-expanded={artifactsOpen} aria-current={artifactsOpen ? 'true' : undefined} data-accent-edge={artifactsOpen ? '' : undefined} aria-keyshortcuts={artifactShortcut} disabled={switchLocked} onclick={toggleArtifactRail}><LucideIcon name="file-code" /><span>Artifacts</span><kbd>{shortcutDisplayLabel(artifactShortcut)}</kbd></button>
 {/snippet}
 
