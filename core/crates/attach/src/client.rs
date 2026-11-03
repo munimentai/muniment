@@ -718,6 +718,7 @@ mod linux {
         pending_artifact_events: BTreeMap<String, VecDeque<ArtifactTransferEvent>>,
         authorized_client_credential: String,
         credential_ephemeral: bool,
+        last_request_error: Option<crate::ProtocolError>,
     }
 
     impl std::fmt::Debug for AuthorizedClient {
@@ -727,6 +728,12 @@ mod linux {
     }
 
     impl AuthorizedClient {
+        /// The refusal the runtime sent for the last request, with its code,
+        /// its retry flag and the reason it named.
+        pub fn last_request_error(&self) -> Option<&crate::ProtocolError> {
+            self.last_request_error.as_ref()
+        }
+
         pub fn profile_id(&self) -> &str {
             &self.profile_id
         }
@@ -845,6 +852,7 @@ mod linux {
             request: Request,
             request_id: &Id,
         ) -> Result<Response, ClientError> {
+            self.last_request_error = None;
             let deadline = deadline(self.io_timeout);
             let bytes = encode_frame(&request).map_err(map_frame_error)?;
             write_all_before(&mut self.stream, &bytes, deadline)?;
@@ -853,7 +861,9 @@ mod linux {
             {
                 Envelope::Response(response) if &response.request_id == request_id => Ok(response),
                 Envelope::Error(error) if error.request_id.as_ref() == Some(request_id) => {
-                    Err(map_protocol_error(error.error.code()))
+                    let outcome = map_protocol_error(error.error.code());
+                    self.last_request_error = Some(error.error);
+                    Err(outcome)
                 }
                 Envelope::Event(event) if validate_capability_revocation(&event)?.is_some() => {
                     Err(ClientError::CapabilityRevoked)
@@ -2837,6 +2847,7 @@ mod linux {
             pending_artifact_events: BTreeMap::new(),
             authorized_client_credential: authorized.authorized_client_credential,
             credential_ephemeral: authorized.credential_ephemeral,
+            last_request_error: None,
         })
     }
 
@@ -3010,6 +3021,11 @@ pub struct AuthorizedClient;
 
 #[cfg(not(unix))]
 impl AuthorizedClient {
+    // A companion off unix sends no request, so it holds no refusal.
+    pub fn last_request_error(&self) -> Option<&crate::ProtocolError> {
+        None
+    }
+
     // A companion off unix holds no credential to persist; the record is reached over unix sockets alone.
     pub fn authorized_client_credential(&self) -> &str {
         ""

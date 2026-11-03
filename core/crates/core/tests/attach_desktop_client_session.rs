@@ -1005,6 +1005,7 @@ fn desktop_client_reads_proposes_and_commits_on_the_record() {
         serde_json::json!({"sql": "select 1", "other": true}),
         serde_json::json!({"sql": "select 1", "company_id": ""}),
     ] {
+        let empty_company = body.get("company_id").is_some();
         let Envelope::Error(error) = exchange(
             &mut client,
             request(
@@ -1017,6 +1018,14 @@ fn desktop_client_reads_proposes_and_commits_on_the_record() {
             panic!("the record.sql body was not validated");
         };
         assert_eq!(error.error.code(), ErrorCode::InvalidRequest);
+        assert!(!error.error.retryable());
+        if empty_company {
+            assert!(
+                error.error.to_string().contains("company_id is empty"),
+                "{}",
+                error.error
+            );
+        }
     }
 
     let Envelope::Response(response) = exchange(

@@ -1656,15 +1656,33 @@ pub(super) fn dispatch_request<S: ThreadListService>(
             #[serde(default)]
             search: Option<String>,
         }
-        let body: Body = serde_json::from_value(request.body.clone())
-            .map_err(|_| ProtocolError::invalid_request())?;
+        let body: Body = serde_json::from_value(request.body.clone()).map_err(|_| {
+            ProtocolError::invalid_request_with_reason(
+                "The record request has a field this tool does not take.",
+            )
+        })?;
         let bounded = |value: &Option<String>, limit: usize| {
             value
                 .as_deref()
                 .is_none_or(|text| !text.is_empty() && text.len() <= limit)
         };
-        if !bounded(&body.company_id, 36) || !bounded(&body.client, 128) {
-            return Err(ProtocolError::invalid_request().into());
+        for (field, value, limit, empty) in [
+            (
+                "company_id",
+                &body.company_id,
+                36,
+                "company_id is empty. Omit it for the current company.",
+            ),
+            ("client", &body.client, 128, "client is empty."),
+        ] {
+            if !bounded(value, limit) {
+                let reason = if value.as_deref() == Some("") {
+                    empty.to_owned()
+                } else {
+                    format!("{field} is longer than {limit} characters.")
+                };
+                return Err(ProtocolError::invalid_request_with_reason(reason).into());
+            }
         }
         let valid = match request.operation {
             Operation::RecordSql => {
