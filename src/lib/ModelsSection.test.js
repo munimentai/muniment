@@ -181,6 +181,31 @@ it('says where an endpoint key stays when the keychain keeps it after a disconne
   expect(await screen.findByText(`Live27 is disconnected. ${kept}`)).toBeInTheDocument()
 })
 
+it('marks an endpoint row Disconnecting… until the runtime answers, then drops it before it says so', async () => {
+  const keyed = { providers: [{ id: 'custom-live29', name: 'Live29', source: 'custom', base_url: 'https://live29.example/v1', models: [{ id: 'm' }] }], hidden: [], shown: [], default_provider: null, default_model: null }
+  let answer
+  let gone = false
+  const tauri = { invoke: vi.fn(async (command) => {
+    // The reread after the disconnect never answers, so the row leaves on the runtime's answer alone.
+    if (command === 'local_mode_provider_inventory') return gone ? new Promise(() => {}) : keyed
+    if (command === 'model_router_settings') return { families: [], subscriptions: [], accounts: [] }
+    if (command === 'local_mode_disconnect_provider') return new Promise((resolve) => { answer = resolve })
+    return null
+  }) }
+  render(ModelsSection, { props: { tauri, listen: async () => () => {}, inventory: keyed } })
+  await fireEvent.click(await screen.findByRole('button', { name: 'Disconnect Live29' }))
+  await fireEvent.click(within(await screen.findByRole('dialog', { name: 'Disconnect Live29?' })).getByRole('button', { name: 'Disconnect' }))
+  const row = screen.getByRole('region', { name: 'Live29' })
+  expect(await within(row).findByText('Disconnecting…')).toBeInTheDocument()
+  expect(within(row).getByRole('button', { name: 'Disconnect Live29' })).toBeDisabled()
+  expect(within(row).getByRole('button', { name: 'Edit Live29' })).toBeDisabled()
+  expect(screen.queryByText('Live29 is disconnected.')).toBeNull()
+  gone = true
+  answer(null)
+  expect(await screen.findByText('Live29 is disconnected.')).toBeInTheDocument()
+  expect(screen.queryByRole('region', { name: 'Live29' })).toBeNull()
+})
+
 it('says on the endpoint card that the key stays in memory when the keychain refused it', async () => {
   const notice = 'The key is kept until Muniment quits; the keychain refused it.'
   const keyed = { providers: [

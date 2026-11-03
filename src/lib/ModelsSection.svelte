@@ -101,7 +101,7 @@
     if (!inventory) return []
     const needle = query.trim().toLowerCase()
     return inventory.providers
-      .filter((entry) => entry.source !== 'router')
+      .filter((entry) => entry.source !== 'router' && !disconnected.includes(entry.id))
       .map((entry) => ({
         ...entry,
         family: providerFamily(entry.id),
@@ -185,13 +185,23 @@
     } catch (error) { status = String(error?.message ?? error) }
   }
 
+  // A row reads Disconnecting… until the runtime answers. The row then leaves
+  // the list at once, before the status names the disconnect, and the list
+  // rereads behind it.
+  let disconnecting = $state([])
+  let disconnected = $state([])
   async function disconnect(entry) {
+    disconnecting = [...disconnecting, entry.id]
     try {
       const keyKept = await tauri.invoke('local_mode_disconnect_provider', { provider: entry.id })
+      disconnected = [...disconnected, entry.id]
       status = entry.source === 'claude-code' ? 'The Claude Code connection is disconnected.' : `${entry.name} is disconnected.${keyKept ? ` ${keyKept}` : ''}`
       await load()
+      disconnected = disconnected.filter((id) => id !== entry.id)
     } catch (error) {
       status = String(error?.message ?? error)
+    } finally {
+      disconnecting = disconnecting.filter((id) => id !== entry.id)
     }
   }
 
@@ -500,19 +510,21 @@
               {#snippet icon()}<ProviderLogo color provider={entry.id} size={16} />{/snippet}
             </Row>
             {#if !pooled}
-              <div class="line-card" data-testid="provider-connection">
+              {@const busy = disconnecting.includes(entry.id)}
+              <div class="line-card" data-testid="provider-connection" aria-busy={busy}>
                 <LucideIcon name={endpoint ? 'server' : entry.source === 'account' ? 'credit-card' : entry.source === 'claude-code' ? 'square-terminal' : 'key-round'} size={16} />
                 <span class="line-label" class:mono={endpoint}>{endpoint ? (entry.base_url ?? '').replace(/^https?:\/\//, '').replace(/\/v1\/?$/, '') : entry.source === 'account' ? 'Subscription' : entry.source === 'claude-code' ? 'Claude Code' : 'API key'}</span>
                 <span class="tag model-count" data-tone={entry.count ? undefined : 'caution'}>{modelCountLabel(entry.count)}</span>
                 {#if entry.source === 'account' && piHold(fleet, entry.id)}<HoldSignIn {tauri} {runtime} account={piHold(fleet, entry.id)} onmoved={onHeld} />
                 {:else if entry.source === 'account' && fleet?.length}<span class="tag here">Signed in here</span>{/if}
+                {#if busy}<span class="tag" role="status">Disconnecting…</span>{/if}
                 {#if entry.source === 'claude-code'}
                   <!-- A Claude Code connection from before signs in again as an account, whose row replaces it. -->
-                  <button type="button" class="quiet sign-in-again" onclick={signInAgain}>Sign in again</button>
+                  <button type="button" class="quiet sign-in-again" disabled={busy} onclick={signInAgain}>Sign in again</button>
                 {:else if endpoint || catalogProvider(catalogId(entry.id))}
-                  <button type="button" class="quiet icon-action" aria-label={`Edit ${entry.name}`} onclick={() => endpoint ? editProvider(entry) : chooseProvider(catalogId(entry.id))}><LucideIcon name="square-pen" size={16} variant="action" /></button>
+                  <button type="button" class="quiet icon-action" aria-label={`Edit ${entry.name}`} disabled={busy} onclick={() => endpoint ? editProvider(entry) : chooseProvider(catalogId(entry.id))}><LucideIcon name="square-pen" size={16} variant="action" /></button>
                 {/if}
-                <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${entry.name}`} onclick={(event) => askDisconnect(entry.name, 'Muniment removes this connection. Connect it again to use it.', () => disconnect(entry), event.currentTarget)}><LucideIcon name="unplug" size={16} variant="action" /></button>
+                <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${entry.name}`} disabled={busy} onclick={(event) => askDisconnect(entry.name, 'Muniment removes this connection. Connect it again to use it.', () => disconnect(entry), event.currentTarget)}><LucideIcon name="unplug" size={16} variant="action" /></button>
               </div>
               <!-- The runtime holds this endpoint's key in memory alone, because the keychain refused it. -->
               {#if endpoint && entry.key_notice}<p class="support" role="status" data-testid="endpoint-key-notice">{entry.key_notice}</p>{/if}
