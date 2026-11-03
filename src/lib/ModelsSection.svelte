@@ -485,7 +485,7 @@
       <p class="support" role="alert">{routerError}</p>
       <button type="button" onclick={loadRouter}>Retry routing settings</button>
     {:else if router}
-      <ModelRouterSection onconnect={openConnector} {tauri} settings={router} {inventory} onsettings={next => router = next} oninventory={(next) => { inventory = next; oninventory?.(next) }} />
+      <ModelRouterSection onconnect={openConnector} {tauri} settings={router} {inventory} onsettings={next => accounts.set(next)} oninventory={(next) => { inventory = next; oninventory?.(next) }} />
     {:else}<p class="support" role="status">Reading routing settings…</p>{/if}
 
     <section class="accounts-section" aria-label="Connections" bind:this={connectionsPart}>

@@ -9,8 +9,16 @@
   import { serverDecisionModels } from './classifier-connections.js'
   let { tauri, settings, onsettings, inventory, oninventory, onconnect } = $props()
   let pending = $state(false)
+  let pendingText = $state('')
   let error = $state('')
-  const automatic = $derived(inventory?.default_provider === 'muniment-router' && inventory?.default_model === 'auto')
+  // The switch follows the answer of its own core call and keeps it until
+  // the inventory agrees. The stored inventory core answers at once carries
+  // the saved default, and the full read, which can wait on discovery and
+  // Pi, follows behind it.
+  let shown = $state(null)
+  const routed = $derived(inventory?.default_provider === 'muniment-router' && inventory?.default_model === 'auto')
+  const automatic = $derived(shown ?? routed)
+  $effect(() => { if (shown !== null && routed === shown) shown = null })
   const connections = $derived(settings.classifier_connections ?? [])
   const active = $derived(connections.find(entry => entry.active)?.id ?? '')
   // The connected Ollama server's decision models join the list unconnected.
@@ -60,7 +68,7 @@
   // A statement tells the decision model when a model should answer, so the
   // statements show once a decision model is connected, one per model the
   // router can pick.
-  const statements = $derived(inventory?.router_classifier ? (settings.options ?? []).filter(option => option.model && !routerHidden(inventory).includes(`${option.family}/${option.model}`)) : [])
+  const statements = $derived(automatic && inventory?.router_classifier ? (settings.options ?? []).filter(option => option.model && !routerHidden(inventory).includes(`${option.family}/${option.model}`)) : [])
   let editing = $state('')
   let statement = $state('')
   let saving = $state(false)
@@ -77,6 +85,7 @@
   }
   async function toggle(enabled) {
     pending = true; error = ''
+    pendingText = enabled ? 'Testing the decision model…' : 'Turning routing off…'
     try {
       if (enabled) {
         if (!active && connections[0]) onsettings?.(await tauri.invoke('model_router_select_classifier', { id: connections[0].id }))
@@ -88,14 +97,20 @@
         // router answers with the default, never the first listed model.
         onsettings?.(await tauri.invoke('model_router_select_classifier', { id: '' }))
       }
-      oninventory?.(await tauri.invoke('local_mode_provider_inventory'))
-    } catch (e) { error = String(e?.message ?? e) }
-    finally { pending = false }
+      shown = enabled
+    } catch (e) { error = String(e?.message ?? e); return }
+    finally { pending = false; pendingText = '' }
+    for (const args of [{ cached: true }, undefined]) {
+      try {
+        const next = await (args ? tauri.invoke('local_mode_provider_inventory', args) : tauri.invoke('local_mode_provider_inventory'))
+        if (Array.isArray(next?.providers)) oninventory?.(next)
+      } catch (_) { /* The next read of the inventory catches up. */ }
+    }
   }
 </script>
 <section aria-label="Roles" class="decisions">
   <Group heading="Roles" info="The decision models that route each message and assist chats. The composer picks the model of one chat.">
-    <Row title="Route each message" info="A decision model chooses the model for each message.">
+    <Row title="Route each message" description={pendingText} info="A decision model chooses the model for each message.">
       <Toggle checked={automatic} label="Use routing" disabled={pending || (!automatic && (!choices.length || !settings.options?.length))} onchange={toggle} />
     </Row>
     {#if automatic}
@@ -133,7 +148,7 @@
       {/each}
     </Group>
   {/if}
-  {#if pending}<p role="status">Testing the decision model…</p>{/if}
+  {#if pending && !pendingText}<p role="status">Testing the decision model…</p>{/if}
   {#if error}<p role="alert">{error}</p>{/if}
 </section>
 <style>

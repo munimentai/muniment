@@ -103,6 +103,73 @@ describe('Routing settings', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: /^Decision model:/ })).toBeNull())
   })
 
+  it('shows routing off from its own answer while the full inventory still reads, and a reopened Settings keeps it off', async () => {
+    const settings = routing()
+    const option = { key: 'muniment-router/openai/gpt-6-astra', family: 'openai', model: 'gpt-6-astra', description: 'Short answers' }
+    settings.options = [option]
+    settings.classifier = { kind: 'endpoint', configured: true, model: 'jev-latest' }
+    settings.classifier_connections = [{ id: 'jev', name: 'Jev via TypeSafe', active: true }]
+    const providers = [{ id: 'muniment-router', name: 'Router', source: 'router', models: [{ id: 'auto' }, { id: 'openai/gpt-6-astra' }] }]
+    const routed = { ...inventory, providers, default_provider: 'muniment-router', default_model: 'auto', router_classifier: 'jev-latest' }
+    let stored = routed
+    let full = Promise.resolve(routed)
+    const tauri = { invoke: vi.fn(async (command, payload) => {
+      if (command === 'local_mode_provider_inventory') return payload?.cached ? stored : full
+      if (command === 'model_router_select_classifier' && payload.id === '') {
+        settings.classifier_connections[0].active = false
+        settings.classifier = { kind: 'none', configured: false, model: '' }
+        stored = { ...routed, default_model: 'openai/gpt-6-astra', router_classifier: null }
+        // The full read waits on discovery and Pi.
+        full = new Promise(() => {})
+      }
+      return structuredClone(settings)
+    }) }
+    let shell = routed
+    const oninventory = (next) => { shell = next }
+    render(Settings, { tauri, inventory: shell, oninventory, section: 'routing', onclose: vi.fn() })
+    const toggle = await screen.findByRole('switch', { name: 'Use routing' })
+    expect(toggle).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByRole('heading', { name: 'Routing statements' })).toBeInTheDocument()
+    await fireEvent.click(toggle)
+    await waitFor(() => expect(toggle).toBeEnabled())
+    expect(toggle).toHaveAttribute('aria-checked', 'false')
+    expect(screen.queryByRole('button', { name: /^Decision model:/ })).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Routing statements' })).toBeNull()
+    expect(toggle).toBeEnabled()
+    expect(shell.default_model).toBe('openai/gpt-6-astra')
+    cleanup()
+    render(Settings, { tauri, inventory: shell, oninventory, section: 'routing', onclose: vi.fn() })
+    expect(await screen.findByRole('switch', { name: 'Use routing' })).toHaveAttribute('aria-checked', 'false')
+  })
+
+  it('names the busy reason beside the switch and shows routing on once core answers, before the full inventory', async () => {
+    const settings = routing()
+    settings.enabled = false
+    settings.options = [{ key: 'openai/example', family: 'openai', model: 'example' }]
+    settings.classifier_connections = [{ id: 'jev', name: 'Jev via TypeSafe', active: false }]
+    const plain = { ...inventory, default_provider: 'openai', default_model: 'example' }
+    let stored = plain
+    let tested
+    const tauri = { invoke: vi.fn(async (command, payload) => {
+      if (command === 'local_mode_provider_inventory') return payload?.cached ? stored : new Promise(() => {})
+      if (command === 'model_router_select_classifier') { await new Promise(resolve => { tested = resolve }); settings.classifier_connections[0].active = true }
+      if (command === 'model_router_set_enabled') settings.enabled = payload.enabled
+      if (command === 'local_mode_set_default_model') stored = { ...plain, default_provider: payload.provider, default_model: payload.model }
+      return structuredClone(settings)
+    }) }
+    render(Settings, { tauri, inventory: plain, section: 'routing', onclose: vi.fn() })
+    const toggle = await screen.findByRole('switch', { name: 'Use routing' })
+    await fireEvent.click(toggle)
+    expect(await screen.findByText('Testing the decision model…')).toBeInTheDocument()
+    await waitFor(() => expect(tested).toBeTypeOf('function'))
+    expect(toggle).toBeDisabled()
+    tested()
+    await waitFor(() => expect(toggle).toBeEnabled())
+    expect(toggle).toHaveAttribute('aria-checked', 'true')
+    expect(screen.queryByText('Testing the decision model…')).toBeNull()
+    expect(await screen.findByRole('button', { name: /^Decision model:/ })).toBeInTheDocument()
+  })
+
 })
 
 it('does not present connected subscriptions or zero-weight keys as ready', () => {
