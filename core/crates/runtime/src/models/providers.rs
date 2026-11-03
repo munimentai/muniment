@@ -625,13 +625,15 @@ fn refresh_provider_models(
     })
 }
 
-/// The models Pi listed on the last full inventory read, which a cached read
-/// reuses so it never starts Pi.
+/// The models Pi listed on the last full inventory read and the endpoints
+/// that read found not answering, which a cached read reuses so it never
+/// starts Pi.
 #[derive(Default)]
 pub(super) struct ListedModels(std::sync::Mutex<Option<Listed>>);
 
-/// Pi's model rows and their thinking levels.
-type Listed = (Vec<PiModelRow>, Vec<PiModelThinking>);
+/// Pi's model rows, their thinking levels and the provider ids of the
+/// endpoints whose server never answered.
+type Listed = (Vec<PiModelRow>, Vec<PiModelThinking>, Vec<String>);
 
 impl ListedModels {
     fn held(&self) -> std::sync::MutexGuard<'_, Option<Listed>> {
@@ -648,15 +650,17 @@ pub(super) fn cached_inventory(
     agent: &Path,
     listed: &ListedModels,
 ) -> Result<ProviderInventory, String> {
-    let (models, thinking) = listed.held().clone().unwrap_or_default();
-    provider_inventory_with(agent, &models, &thinking, read_json_unlocked)
+    let (models, thinking, unreachable) = listed.held().clone().unwrap_or_default();
+    let mut inventory = provider_inventory_with(agent, &models, &thinking, read_json_unlocked)?;
+    mark_unreachable(&mut inventory, &unreachable);
+    Ok(inventory)
 }
 
 /// Everything the picker and Settings read about providers: the endpoint
 /// discovery and Pi's model list run side by side, so the page waits for the
 /// slower one, not both. A changed endpoint list relists once, so the
 /// inventory reads what the server serves now. `listed` keeps Pi's answer
-/// for the next cached read.
+/// and the endpoints that did not answer for the next cached read.
 pub(super) fn inventory(
     agent: &Path,
     engine: &PiRpcEngine,
@@ -689,7 +693,7 @@ pub(super) fn inventory(
     let thinking = thinking.join().unwrap_or_default();
     let mut inventory = provider_inventory(agent, &models, &thinking)?;
     mark_unreachable(&mut inventory, &unreachable);
-    *listed.held() = Some((models, thinking));
+    *listed.held() = Some((models, thinking, unreachable));
     adopt_shown_default(agent, &mut inventory);
     Ok(inventory)
 }
@@ -1659,7 +1663,11 @@ llama     qwen3              32K      16.4K    yes       no\n";
 
         // A full read keeps what Pi listed, and a cached read reuses it even
         // while a slow step holds the store locks.
-        *listed.held() = Some((vec![row("openai", "gpt-test", "128K")], Vec::new()));
+        *listed.held() = Some((
+            vec![row("openai", "gpt-test", "128K")],
+            Vec::new(),
+            vec!["ollama".to_owned()],
+        ));
         let _models = pi_models::lock(&pi_models_file(&agent)).unwrap();
         let _auth = lock_pi_auth_file(&pi_auth_file(&agent)).unwrap();
         let started = std::time::Instant::now();
@@ -1667,6 +1675,10 @@ llama     qwen3              32K      16.4K    yes       no\n";
         assert!(started.elapsed() < Duration::from_secs(1));
         assert_eq!(cached.providers[0].models[0].id, "gpt-test");
         assert_eq!(cached.providers[1].models[0].id, "local-model");
+        // It carries the endpoints the last full read found not answering.
+        assert!(cached.providers[1].unreachable);
+        assert!(!cached.providers[0].unreachable);
+        assert!(!first.providers[1].unreachable);
         // It never adopts a default from rows a full read has not confirmed.
         assert_eq!(cached.default_provider, None);
         drop((_models, _auth));
