@@ -248,7 +248,9 @@ pub fn read_model_answer(
 /// deterministic proposals; so does an empty answer when they found some.
 /// When the deterministic reader found schedules, a model routine at a time
 /// or on a weekday that none of them names is dropped, because the reader
-/// takes the time and the weekday from the instructions' own words.
+/// takes the time and the weekday from the instructions' own words. A model
+/// routine at the time of a routine the instructions label, such as
+/// "Weekly report: every Monday at 9:00", takes that label as its name.
 pub fn propose_with_model(
     instructions: &str,
     tz: &str,
@@ -273,8 +275,14 @@ pub fn propose_with_model(
                     let found = fallback
                         .iter()
                         .find(|found| same_named_time(&found.trigger, &proposal.trigger))?;
+                    let labelled = found.prompt.starts_with(&format!("{}: ", found.name));
                     Some(Routine {
                         default_time: found.default_time,
+                        name: if labelled {
+                            found.name.clone()
+                        } else {
+                            proposal.name.clone()
+                        },
                         ..proposal
                     })
                 })
@@ -412,9 +420,9 @@ fn capitalized(text: &str) -> String {
     text
 }
 
-/// A routine's display name: the text's first sentence with a capital first
-/// letter and no trailing punctuation, cut at a word boundary with an
-/// ellipsis when it runs past the name limit. A short label before a colon,
+/// A routine's name: the text's first sentence with a capital first letter
+/// and no trailing punctuation, cut at a word boundary when it runs past the
+/// name limit. The name holds no ellipsis: a view that cuts it adds one. A short label before a colon,
 /// such as "Live46 Monday: append a line", is the name. Text with no name
 /// left after the trim keeps its words. The prompt keeps the full text.
 pub fn routine_name(text: &str) -> String {
@@ -430,8 +438,8 @@ pub fn routine_name(text: &str) -> String {
         head.rsplit_once(char::is_whitespace)
             .map_or(head.as_str(), |(words, _)| words)
     };
-    let cut = cut.trim_end_matches(|c: char| c.is_whitespace() || ",;:-–—".contains(c));
-    format!("{cut}…")
+    cut.trim_end_matches(|c: char| c.is_whitespace() || ",;:-–—".contains(c))
+        .to_owned()
 }
 
 /// The words a name takes from `text`: up to the first sentence end, the
@@ -470,10 +478,18 @@ fn name_text(text: &str) -> String {
 /// Mends a routine whose name and prompt an older extraction cut at the
 /// name limit, often inside a word. A sentence of the agent's instructions
 /// that starts with the cut text gives the full prompt back. Otherwise the
-/// name ends with an ellipsis on the last whole word, the routine keeps
+/// name ends on the last whole word, the routine keeps
 /// running the cut prompt, and `cut_short` asks the user to restore it. A
 /// prompt that goes on past the name with more than a period was never cut.
+/// A name an older extraction ended with an ellipsis loses it, because a
+/// view that cuts a name adds its own.
 pub fn mend_cut_routine(routine: &mut Routine, instructions: &str) {
+    if routine.created_from == CreatedFrom::Instructions && routine.name.ends_with('…') {
+        let name = routine.name.trim_end_matches('…').trim_end();
+        if !name.is_empty() {
+            routine.name = name.to_owned();
+        }
+    }
     let name = routine.name.clone();
     let cut = routine.created_from == CreatedFrom::Instructions
         && name.chars().count() == MAX_NAME_CHARACTERS
@@ -500,7 +516,7 @@ pub fn mend_cut_routine(routine: &mut Routine, instructions: &str) {
     if words.len() > 1 {
         words.pop();
     }
-    routine.name = format!("{}…", words.join(" "));
+    routine.name = words.join(" ");
     routine.cut_short = true;
 }
 
@@ -1319,15 +1335,15 @@ mod tests {
             routine.prompt,
             "Search for recent Tauri news and deliver a three-bullet-point briefing with links."
         );
-        assert_eq!(routine.name, "Search for recent Tauri news and deliver a…");
+        assert_eq!(routine.name, "Search for recent Tauri news and deliver a");
         assert!(routine.name.chars().count() <= MAX_NAME_CHARACTERS);
         // A name at a word end keeps that word.
         assert_eq!(
             routine_name(&format!("{} more words", "a".repeat(59))),
-            format!("{}…", "A".to_owned() + &"a".repeat(58))
+            "A".to_owned() + &"a".repeat(58)
         );
         let at_end = format!("{} {}", "b".repeat(58), "tail of the sentence");
-        assert_eq!(routine_name(&at_end), format!("B{}…", "b".repeat(57)));
+        assert_eq!(routine_name(&at_end), format!("B{}", "b".repeat(57)));
         assert_eq!(routine_name("short name"), "Short name");
     }
 
@@ -1381,7 +1397,7 @@ mod tests {
     }
 
     #[test]
-    fn a_model_name_past_the_limit_ends_with_an_ellipsis() {
+    fn a_model_name_past_the_limit_ends_on_a_whole_word_without_an_ellipsis() {
         let name = "Search the web for news about Tauri and give me three bullet points";
         let answer = format!(
             r#"{{"routines":[{{"name":"{name}","cron":"0 9 * * 1-5","prompt":"Search the web for news about Tauri and give me three bullet points.","mcp":null}}]}}"#
@@ -1389,9 +1405,45 @@ mod tests {
         let proposals = read_model_answer(&answer, TZ, &[]).unwrap();
         assert_eq!(
             proposals[0].name,
-            "Search the web for news about Tauri and give me three…"
+            "Search the web for news about Tauri and give me three"
         );
         assert!(proposals[0].prompt.ends_with("three bullet points."));
+        assert!(!proposals[0].name.contains('…'));
+        // A name an older extraction stored with an ellipsis loses it.
+        let mut stored = cut_routine(
+            "Append one line containing the current date and time to…",
+            "Append one line containing the current date and time to live47-log.md.",
+        );
+        mend_cut_routine(&mut stored, "");
+        assert_eq!(
+            stored.name,
+            "Append one line containing the current date and time to"
+        );
+        assert!(!stored.cut_short);
+    }
+
+    #[test]
+    fn a_model_routine_keeps_the_label_the_instructions_give() {
+        use crate::memory_extract::{Answer, Model};
+        use std::sync::Arc;
+        let model: Model = Arc::new(|_: &str, _: &str| {
+            Ok(Answer {
+                text: r#"{"routines":[{"name":"Live47 Monday log","cron":"0 9 * * 1","prompt":"Append one short line to live47-log.md.","mcp":null},{"name":"Weekly recap","cron":"0 17 * * 5","prompt":"Post a recap.","mcp":null}]}"#.into(),
+                via: "router",
+            })
+        });
+        let labelled = "Live47 Monday: Every Monday at 9:00 a.m., append one short line to live47-log.md. Every Friday at 5 p.m., post a recap.";
+        let proposals = propose_with_model(labelled, TZ, &[], &model);
+        let names: Vec<&str> = proposals
+            .iter()
+            .map(|routine| routine.name.as_str())
+            .collect();
+        // The label stands; a routine without one takes the model's name.
+        assert_eq!(names, ["Live47 Monday", "Weekly recap"]);
+        assert_eq!(
+            proposals[0].prompt,
+            "Append one short line to live47-log.md."
+        );
     }
 
     fn cut_routine(name: &str, prompt: &str) -> Routine {
@@ -1415,7 +1467,7 @@ mod tests {
             routine.prompt,
             "Search for recent Tauri news and deliver a three-bullet-point briefing."
         );
-        assert_eq!(routine.name, "Search for recent Tauri news and deliver a…");
+        assert_eq!(routine.name, "Search for recent Tauri news and deliver a");
         // Mending twice changes nothing.
         let mended = routine.clone();
         mend_cut_routine(&mut routine, "");
@@ -1430,7 +1482,7 @@ mod tests {
             &mut routine,
             "Search the web for the latest news about Tauri.",
         );
-        assert_eq!(routine.name, "Search for recent Tauri news and deliver a…");
+        assert_eq!(routine.name, "Search for recent Tauri news and deliver a");
         // The routine still runs every word it has, and the user restores the rest.
         assert_eq!(routine.prompt, format!("{cut}."));
         assert!(routine.cut_short);
@@ -1445,7 +1497,7 @@ mod tests {
         mend_cut_routine(&mut routine, "");
         assert_eq!(
             routine.name,
-            "Search the web for news about Tauri and give me three…"
+            "Search the web for news about Tauri and give me three"
         );
         assert_eq!(routine.prompt, prompt);
         assert!(routine.cut_short);
