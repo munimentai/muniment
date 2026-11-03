@@ -122,6 +122,18 @@ describe('chat composer and projection', () => {
     expect(stageWord(run.stage)).toBe('Starting')
   })
 
+  it('names the server a retried model call waits on until the reply moves on', () => {
+    let run = { id: 'r', phase: 'thinking', text: '' }
+    run = applyChatEvent(run, { runId: 'r', phase: 'thinking', text: '', turnStarted: true, routingStage: 'retrying:2:2:DO Test', toolActivity: [] })
+    expect(stageWord(run.stage)).toBe('DO Test is not answering. Retrying (2 of 2)…')
+    expect(stageWord('retrying:3:4')).toBe('The model did not answer. Retrying (3 of 4)…')
+    run = applyChatEvent(run, { runId: 'r', phase: 'thinking', text: '', turnStarted: true, routingStage: 'thinking', toolActivity: [] })
+    expect(stageWord(run.stage)).toBe('Thinking')
+    run = applyChatEvent(run, { runId: 'r', phase: 'thinking', text: '', turnStarted: true, routingStage: 'retrying:2:4', toolActivity: [] })
+    run = applyChatEvent(run, { runId: 'r', phase: 'streaming', text: 'Hi', turnStarted: true, routingStage: null, toolActivity: [] })
+    expect(stageWord(run.stage)).toBe('Writing')
+  })
+
   it('names every tool by a plain verb and never by a vendor, a model or a harness', () => {
     for (const tool of ['read', 'grep', 'find', 'ls']) expect(toolVerb(tool)).toBe('Reading')
     for (const tool of ['write', 'edit']) expect(toolVerb(tool)).toBe('Editing')

@@ -193,6 +193,12 @@ export function stageWord(stage = 'routing') {
   }
   if (stage === 'folder-access') return 'macOS is asking for access to this folder. Choose Allow.'
   if (typeof stage === 'string' && stage.startsWith('folder-access:')) return `macOS is asking for access to ${stage.slice('folder-access:'.length)}. Choose Allow.`
+  // Pi tries a failed model call again: `retrying:<attempt>:<attempts>[:<server>]`.
+  if (typeof stage === 'string' && stage.startsWith('retrying:')) {
+    const [attempt, attempts, ...server] = stage.slice('retrying:'.length).split(':')
+    const name = server.join(':')
+    return `${name ? `${name} is not answering` : 'The model did not answer'}. Retrying (${attempt} of ${attempts})…`
+  }
   return stageWords[stage] ?? stageWords.routing
 }
 
@@ -204,12 +210,12 @@ export function runStage(previous, next) {
   if (running) return `tool:${running.displayName ?? ''}${running.presentation?.progress ? `\n${running.presentation.progress}` : ''}`
   if (next.routingStage && ['choosing-model', 'waiting-for-account', 'fallback', 'thinking'].includes(next.routingStage)) return next.routingStage
   // The run waits on a macOS consent prompt for its folder.
-  if (typeof next.routingStage === 'string' && (next.routingStage === 'folder-access' || next.routingStage.startsWith('folder-access:'))) return next.routingStage
+  if (typeof next.routingStage === 'string' && (next.routingStage === 'folder-access' || next.routingStage.startsWith('folder-access:') || next.routingStage.startsWith('retrying:'))) return next.routingStage
   // A restored run has no earlier projection: its phase names the word.
   if (!previous) return next.phase === 'streaming' ? 'writing' : next.turnStarted || next.text ? 'thinking' : 'routing'
   if ((next.text ?? '').length > (previous.text ?? '').length) return 'writing'
   if ((previous.toolActivity ?? []).some((tool) => tool.status === 'running')) return 'thinking'
-  if (previous.stage && !['routing', 'choosing-model', 'waiting-for-account', 'fallback'].includes(previous.stage) && !previous.stage.startsWith('folder-access')) return previous.stage
+  if (previous.stage && !['routing', 'choosing-model', 'waiting-for-account', 'fallback'].includes(previous.stage) && !previous.stage.startsWith('folder-access') && !previous.stage.startsWith('retrying:')) return previous.stage
   return next.turnStarted ? 'thinking' : 'routing'
 }
 
