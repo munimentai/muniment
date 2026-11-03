@@ -68,6 +68,11 @@ it('says Muniment picked a time the message did not name, and Save keeps the dra
   // The mark is core's, so a saved agent without it is the same agent.
   const saved = { ...draftAgent(draftForm(draft)), id: 'agent-7' }
   expect(sameAgent(draftAgent(draftForm({ ...draft, routines: [{ ...draft.routines[0], default_time: true }] }), { saved }), saved)).toBe(true)
+  // A picked time saves its routine on, as a named time does, and a test run keeps both off.
+  for (const test of [false, true]) {
+    const both = draftAgent(draftForm({ ...draft, routines: [draft.routines[0], picked.routines[0]] }), { test })
+    expect(both.routines.map((routine) => [routine.enabled, routine.proposed])).toEqual([[!test, false], [!test, false]])
+  }
 })
 
 // The routines core answers for instructions that say "Every Friday at 4 PM,

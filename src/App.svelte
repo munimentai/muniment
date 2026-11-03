@@ -296,6 +296,12 @@
     try { return JSON.parse(localStorage.getItem(CATALOG_ARCHIVE_KEY) || '{}') } catch (_) { return {} }
   }
   let catalogArchive = $state(readCatalogArchive())
+  // The routines an agent's archive turned off, by the agent's catalog key.
+  const CATALOG_PAUSED_KEY = 'muniment.catalog-archive-routines'
+  function readCatalogPaused() {
+    try { return JSON.parse(localStorage.getItem(CATALOG_PAUSED_KEY) || '{}') } catch (_) { return {} }
+  }
+  function writeCatalogPaused(paused) { localStorage.setItem(CATALOG_PAUSED_KEY, JSON.stringify(paused)) }
   function catalogKey(kind, item) { return `${kind === 'creation' ? item.kind : kind}:${item.id || item.threadId}` }
   function catalogArchived(kind, item) { return catalogArchive[catalogKey(kind,item)] === true }
   // An agent or artifact whose thread holds the running reply keeps its actions until that reply settles.
@@ -311,13 +317,28 @@
     if (threadSwitching || catalogHoldsRun(kind, item)) throw new Error('Finish the current reply before changing this item.')
     const plans = kind === 'agent' ? creations.filter(plan=>plan.resultId===item.id) : creations.filter(plan=>plan.threadId===item.threadId)
     if (action === 'archive' || action === 'restore') {
-      // An archived agent stops starting itself: its routines turn off.
+      // An archived agent stops starting itself: its routines turn off, and
+      // the archive keeps which ones were on. A restore turns those back on,
+      // so each routine comes back as it was.
+      const key = catalogKey(kind,item)
+      const paused = readCatalogPaused()
       if (kind === 'agent' && action === 'archive' && (item.routines ?? []).some(routine => routine.enabled)) {
         const { agent: latest } = await agentRequest(tauri, item.runtimeId, 'agent.read', { id: item.id })
+        const on = latest.routines.filter(routine => routine.enabled).map(routine => routine.id)
         await agentRequest(tauri, item.runtimeId, 'agent.save', { agent: { ...latest, schedule: null, routines: latest.routines.map(routine => ({ ...routine, enabled: false })) } })
+        writeCatalogPaused({ ...paused, [key]: [...new Set([...(paused[key] ?? []), ...on])] })
         await refreshAgents()
       }
-      const next = {...catalogArchive,[catalogKey(kind,item)]:action==='archive'}
+      if (kind === 'agent' && action === 'restore' && paused[key]?.length) {
+        const { agent: latest } = await agentRequest(tauri, item.runtimeId, 'agent.read', { id: item.id })
+        if (latest.routines.some(routine => paused[key].includes(routine.id) && !routine.enabled)) {
+          await agentRequest(tauri, item.runtimeId, 'agent.save', { agent: { ...latest, schedule: null, routines: latest.routines.map(routine => paused[key].includes(routine.id) ? { ...routine, enabled: true } : routine) } })
+        }
+        const { [key]: _restored, ...rest } = paused
+        writeCatalogPaused(rest)
+        await refreshAgents()
+      }
+      const next = {...catalogArchive,[key]:action==='archive'}
       localStorage.setItem(CATALOG_ARCHIVE_KEY,JSON.stringify(next))
       catalogArchive = next
       return
@@ -787,7 +808,8 @@
   // thread yet shows it beside its creation chat, else beside the page it
   // opened from, and never beside another thread. A card's Delete opens it
   // the same way, at the profile's delete confirmation. A card's Delete on
-  // the Agents page returns there once confirmed.
+  // the Agents page returns there once confirmed. Either one takes the rail
+  // from an open tool, as the user asked for the profile.
   let profileDelete = $state({ agentId: null, count: 0, fromAgents: false })
   const agentCreationChat = (agent) => (agent.runtimeId ?? LOCAL_RUNTIME_ID) === LOCAL_RUNTIME_ID && !agent.replica
     ? creations.find(item => item.kind === 'agent' && item.resultId === agent.id)?.threadId ?? null : null
@@ -807,7 +829,7 @@
     if (beside) { projectsOpen = false; agentsOpen = false; fullPage = null; artifactsOpen = false }
     else if (!agentsOpen && !projectsOpen) { artifactsOpen = false; fullPage = null; agentsOpen = true; agentsRequest += 1 }
     if (deleting) profileDelete = { agentId: agent.id, count: profileDelete.count + 1, fromAgents }
-    if (!browserPanel || deleting) revealAgentProfile()
+    revealAgentProfile()
   }
   // A deleted agent's threads leave the sidebar, and core removed its
   // creation chat, so an open creation chat gives way to a new thread.

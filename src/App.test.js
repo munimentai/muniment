@@ -4767,6 +4767,36 @@ describe('sidebar collapse', () => {
     expect(invoke.mock.calls.filter(([cmd]) => cmd === 'chat_new_thread')).toHaveLength(0)
   })
 
+  it('turns an archived agent\'s routines off and a restore turns back on only the ones that were on', async () => {
+    const original = invoke.getMockImplementation()
+    const cron = (expr) => ({ kind: 'cron', expr, tz: 'UTC' })
+    let scout = { id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null, routines: [
+      { id: 'on', name: 'Morning', enabled: true, trigger: cron('0 9 * * *'), prompt: 'Read.' },
+      { id: 'off', name: 'Evening', enabled: false, trigger: cron('0 18 * * *'), prompt: 'Sum up.' },
+      { id: 'proposal', name: 'Friday', enabled: false, proposed: true, trigger: cron('0 9 * * 5'), prompt: 'Back up.' },
+    ] }
+    const saves = []
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args) ? agentListAnswer([scout], { 'agent-1': 'agent-thread' })
+      : command === 'agent_request' && args?.operation === 'agent.read' ? { agent: scout }
+      : command === 'agent_request' && args?.operation === 'agent.save' ? (saves.push(args.body.agent), scout = args.body.agent, { agent: scout })
+      : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
+    const states = () => Object.fromEntries(scout.routines.map(routine => [routine.id, routine.enabled]))
+    render(App)
+    await openSidebarPage('Agents')
+    const agents = await screen.findByRole('region', { name: 'Agents', exact: true })
+    await fireEvent.click(within(await within(agents).findByRole('article', { name: 'Scout' })).getByRole('button', { name: 'Actions for Scout' }))
+    await fireEvent.click(within(screen.getByRole('menu', { name: 'Actions for Scout' })).getByRole('menuitem', { name: 'Archive' }))
+    await waitFor(() => expect(within(agents).queryByRole('article', { name: 'Scout' })).toBeNull())
+    expect(states()).toEqual({ on: false, off: false, proposal: false })
+    await fireEvent.click(within(agents).getByRole('button', { name: 'Show archived' }))
+    await fireEvent.click(within(await within(agents).findByRole('article', { name: 'Scout' })).getByRole('button', { name: 'Actions for Scout' }))
+    await fireEvent.click(within(screen.getByRole('menu', { name: 'Actions for Scout' })).getByRole('menuitem', { name: 'Restore' }))
+    await waitFor(() => expect(saves).toHaveLength(2))
+    expect(states()).toEqual({ on: true, off: false, proposal: false })
+    expect(scout.routines.find(routine => routine.id === 'proposal').proposed).toBe(true)
+    expect(localStorage.getItem('muniment.catalog-archive-routines')).toBe('{}')
+  })
+
   it('keeps the agent profile open while a connection approval shows and after it is answered', async () => {
     const original = invoke.getMockImplementation()
     invoke.mockImplementation(async (command, args) => isAgentList(command, args)
@@ -5014,7 +5044,7 @@ describe('sidebar collapse', () => {
     expect(invoke.mock.calls.filter(([cmd]) => cmd === 'chat_new_thread')).toHaveLength(0)
   })
 
-  it.each(['Open profile', 'Delete'])('gives the rail to the profile from a card\'s %s while Files is open, so the two never overlap', async (action) => {
+  it.each([['Open profile', 'before'], ['Delete', 'before'], ['Open profile', 'on'], ['Delete', 'on']])('gives the rail to the profile from a card\'s %s while Files, opened %s the Agents page, is open, so the two never overlap', async (action, opened) => {
     threadSummaryResult = [{ threadId: 'agent-thread', title: 'Scout chat', updatedAt: '2026-01-03T00:00:00Z' }, { threadId: 'other-thread', title: 'Other', updatedAt: '2026-01-02T00:00:00Z' }]
     const original = invoke.getMockImplementation()
     const scout = { id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null, routines: [] }
@@ -5028,11 +5058,16 @@ describe('sidebar collapse', () => {
       : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
     render(App)
     await findReadyWorkspaceComposer()
-    await fireEvent.click(screen.getByRole('button', { name: 'Workspace tools' }))
-    await fireEvent.click(screen.getByRole('menuitem', { name: 'Files', exact: true }))
-    await waitFor(() => expect(document.querySelector('.workspace')).toHaveClass('tools-open'))
+    const openFiles = async () => {
+      await fireEvent.click(screen.getByRole('button', { name: 'Workspace tools' }))
+      await fireEvent.click(screen.getByRole('menuitem', { name: 'Files', exact: true }))
+      await waitFor(() => expect(document.querySelector('.workspace')).toHaveClass('tools-open'))
+    }
+    if (opened === 'before') await openFiles()
     await openSidebarPage('Agents')
-    await fireEvent.click(await within(await screen.findByRole('region', { name: 'Agents', exact: true })).findByRole('button', { name: 'Actions for Scout' }))
+    const agents = await screen.findByRole('region', { name: 'Agents', exact: true })
+    if (opened === 'on') await openFiles()
+    await fireEvent.click(await within(agents).findByRole('button', { name: 'Actions for Scout' }))
     await fireEvent.click(screen.getByRole('menuitem', { name: action }))
     const profile = await screen.findByRole('complementary', { name: 'Agent profile' })
     await waitFor(() => expect(document.querySelector('.thread-row.active-thread')).toHaveAttribute('data-thread-id', 'agent-thread'))
