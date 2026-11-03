@@ -1239,10 +1239,27 @@ pub struct Deleted {
 }
 /// The folder Muniment keeps its own files in, inside an agent's folder.
 const INTERNAL_FOLDER: &str = ".muniment";
+/// The folder at an agent's top that the workspace onboarding writes its
+/// memory scaffold in.
+const SCAFFOLD_FOLDER: &str = "memory";
 /// Whether `folder` holds only what Muniment and the system write there: the
-/// `.muniment` folder at its top, Finder's `.DS_Store` and empty folders. A
-/// link or any other file is the user's.
+/// `.muniment` folder at its top, the onboarding's memory scaffold files with
+/// the bytes it wrote, Finder's `.DS_Store` and empty folders. A link, a
+/// scaffold file the user changed or any other file is the user's.
 fn holds_only_internals(folder: &Path, top: bool) -> bool {
+    holds_only(folder, top, false)
+}
+fn is_unchanged_scaffold_file(path: &Path, name: &std::ffi::OsStr) -> bool {
+    muniment_attach::WORKSPACE_MEMORY_SCAFFOLD
+        .iter()
+        .any(|(scaffold, contents)| {
+            name == *scaffold
+                && fs::symlink_metadata(path)
+                    .is_ok_and(|metadata| metadata.len() == contents.len() as u64)
+                && fs::read(path).is_ok_and(|bytes| bytes == *contents)
+        })
+}
+fn holds_only(folder: &Path, top: bool, scaffold: bool) -> bool {
     let Ok(entries) = fs::read_dir(folder) else {
         return false;
     };
@@ -1257,9 +1274,12 @@ fn holds_only_internals(folder: &Path, top: bool) -> bool {
         if kind.is_symlink() {
             false
         } else if kind.is_dir() {
-            (top && name == INTERNAL_FOLDER) || holds_only_internals(&entry.path(), false)
+            (top && name == INTERNAL_FOLDER)
+                || holds_only(&entry.path(), false, top && name == SCAFFOLD_FOLDER)
         } else {
-            kind.is_file() && name == ".DS_Store"
+            kind.is_file()
+                && (name == ".DS_Store"
+                    || (scaffold && is_unchanged_scaffold_file(&entry.path(), &name)))
         }
     })
 }
@@ -2939,6 +2959,59 @@ mod tests {
                 .as_deref(),
             folder.file_name().and_then(|name| name.to_str())
         );
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    #[test]
+    fn deleting_an_agent_removes_its_folder_with_the_unchanged_memory_scaffold() {
+        let (root_dir, profile) = profile();
+        let (agent, folder) = saved(&profile, "Onboarded");
+        crate::onboard_companion_workspace(&folder, &folder).unwrap();
+        assert!(folder.join("memory/README.md").is_file());
+        assert!(folder.join("memory/ONBOARDING.md").is_file());
+        run_output(&folder);
+        for run in ["run-2", "run-3", "run-4"] {
+            fs::create_dir_all(folder.join(".muniment/tasks").join(run)).unwrap();
+        }
+        let deleted = delete_agent(&profile, &agent.id, true).unwrap();
+        assert_eq!(deleted, Deleted::default());
+        assert!(!folder.exists());
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    #[test]
+    fn deleting_an_agent_keeps_a_changed_or_added_memory_file() {
+        for (name, contents) in [
+            ("README.md", "# Memory\n\nMy own notes.\n"),
+            ("ONBOARDING.md", ""),
+            ("facts.md", "mine"),
+        ] {
+            let (root_dir, profile) = profile();
+            let (agent, folder) = saved(&profile, "Onboarded");
+            crate::onboard_companion_workspace(&folder, &folder).unwrap();
+            fs::write(folder.join("memory").join(name), contents).unwrap();
+            let deleted = delete_agent(&profile, &agent.id, true).unwrap();
+            assert_eq!(deleted.folder_kept.as_deref(), Some(folder.as_path()));
+            assert_eq!(
+                fs::read_to_string(folder.join("memory").join(name)).unwrap(),
+                contents
+            );
+            fs::remove_dir_all(root_dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_scaffold_named_file_outside_the_memory_folder_is_the_users() {
+        let (root_dir, profile) = profile();
+        let (agent, folder) = saved(&profile, "Readme");
+        fs::write(
+            folder.join("README.md"),
+            muniment_attach::WORKSPACE_MEMORY_SCAFFOLD[0].1,
+        )
+        .unwrap();
+        let deleted = delete_agent(&profile, &agent.id, false).unwrap();
+        assert_eq!(deleted.folder_kept.as_deref(), Some(folder.as_path()));
+        assert!(folder.join("README.md").is_file());
         fs::remove_dir_all(root_dir).unwrap();
     }
 
