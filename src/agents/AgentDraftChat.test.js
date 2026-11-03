@@ -70,6 +70,40 @@ it('says Muniment picked a time the message did not name, and Save keeps the dra
   expect(sameAgent(draftAgent(draftForm({ ...draft, routines: [{ ...draft.routines[0], default_time: true }] }), { saved }), saved)).toBe(true)
 })
 
+// The routines core answers for instructions that say "Every Friday at 4 PM,
+// post the weekly greeting. On Fridays, back up the notes folder.": the draft
+// holds the model's schedule, and the saved agent adds the backup as a
+// proposal at a time Muniment picked.
+const tz = 'America/New_York'
+const greeting = { created_from: 'instructions', enabled: true, id: 'extract-a51b949e6527c243', last_fired_at: null, last_result: null, name: 'Post the weekly greeting', prompt: 'Post the weekly greeting.', trigger: { expr: '0 16 * * 5', kind: 'cron', tz } }
+const backup = { created_from: 'instructions', default_time: true, enabled: false, id: 'extract-02d2ee9277b37b2a', last_fired_at: null, last_result: null, name: 'Back up the notes folder', prompt: 'Back up the notes folder.', proposed: true, trigger: { expr: '0 9 * * 5', kind: 'cron', tz } }
+const weekly = { name: 'Weekly helper', label: 'Helper', instructions: 'Every Friday at 4 PM, post the weekly greeting. On Fridays, back up the notes folder.', skills: [], permission_mode: 'manual', routines: [greeting] }
+const savedWeekly = (draft, routines) => ({ name: draft.name, label: draft.label, instructions: draft.instructions, skills: draft.skills, id: 'agent-9', permissions: { mode: 'manual' }, schedule: null, avatar: { style: 'muniment', seed: 'seed' }, routines })
+
+it.each([
+  ['Fridays at 4 PM with a proposal core added', [turn('Post the greeting on Fridays at 4 PM', { draft: weekly, question: null, via: 'router' })], [{ ...greeting, next_fire_at: 1793988000 }, backup]],
+  ['Fridays at a picked time', [turn('On Fridays, back up the notes folder', { draft: { ...weekly, instructions: 'On Fridays, back up the notes folder.', routines: [{ ...backup, enabled: true, proposed: undefined }] }, question: null, via: 'router' })], [{ ...backup, enabled: true, proposed: undefined, default_time: undefined }]],
+  // The backup proposal was accepted, and an earlier draft ran the greeting at its time.
+  ['Fridays at 4 PM after an earlier draft at the accepted proposal\'s time', [turn('Post the greeting on Fridays', { draft: { ...weekly, routines: [{ ...greeting, id: 'extract-5e0c1d', trigger: { expr: '0 9 * * 5', kind: 'cron', tz }, default_time: true }] }, question: null, via: 'router' }), { ...turn('Make it 4 PM', { draft: weekly, question: null, via: 'router' }), at: '2026-10-19T10:05:00Z' }], [greeting, { ...backup, enabled: true, proposed: undefined, default_time: undefined }]],
+])('rests Save changes on a reopened chat for an agent with routines: %s', async (_name, turns, routines) => {
+  const stored = savedWeekly(turns.at(-1).reply.draft, routines)
+  const requests = []
+  const invoke = vi.fn(async (_command, { operation, body }) => {
+    requests.push({ operation, body })
+    if (operation === 'agent.tool_catalog') return catalog
+    if (operation === 'agent.read') return { agent: stored, primary_thread_id: null }
+    if (operation === 'agent.save') return { agent: { ...stored, ...body.agent } }
+    throw new Error(`unexpected ${operation}`)
+  })
+  render(AgentDraftChat, { tauri: { invoke }, agentId: 'agent-9', turns })
+  await waitFor(() => expect(requests.some((request) => request.operation === 'agent.read')).toBe(true))
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled())
+  // A Save would send the agent's routines as they are saved.
+  const earlier = turns.slice(0, -1).flatMap((entry) => entry.reply.draft.routines)
+  const body = draftAgent(draftForm(turns.at(-1).reply.draft), { saved: stored, earlier })
+  expect(body.routines.map((routine) => routine.id).sort()).toEqual(routines.map((routine) => routine.id).sort())
+})
+
 it('shows the message a draft is answering and blocks the actions until it lands', () => {
   const { tauri } = runtime()
   render(AgentDraftChat, { tauri, turns: [turn('Summarize my inbox')], pending: 'Make it 8am' })

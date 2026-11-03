@@ -61,12 +61,15 @@ export function formProblem(form) {
 // A new agent with `projectId` works in that project, so the project gains its triggers.
 // `earlier` holds the routines of the chat's earlier drafts. The saved
 // agent keeps each routine the draft does not name: the ones core proposed,
-// the ones the user or the agent added. A routine an earlier draft named
-// and the newest one drops is the chat's own change, and it goes.
+// the ones the user or the agent added. A routine an earlier draft drafted,
+// which keeps that draft's id once saved, and the newest one drops is the
+// chat's own change, and it goes. A routine core proposed or the user
+// accepted at an earlier draft's time has its own id, and it stays.
 export function draftAgent(form, { saved = null, test = false, projectId = null, earlier = [] } = {}) {
   const drafted = form.routines.map((routine) => ({ ...routine, enabled: test ? false : routine.enabled, proposed: false }))
   const named = (routine, list) => list.some((other) => (!!routine.id && other.id === routine.id) || sameTrigger(other.trigger, routine.trigger))
-  const kept = (saved?.routines ?? []).filter((routine) => !named(routine, drafted) && (routine.proposed || !named(routine, earlier)))
+  const drafts = (routine) => !!routine.id && earlier.some((other) => other.id === routine.id)
+  const kept = (saved?.routines ?? []).filter((routine) => !named(routine, drafted) && (routine.proposed || !drafts(routine)))
   const agent = {
     ...(saved ?? { id: '', projectId }),
     name: form.name.trim(),
@@ -81,12 +84,14 @@ export function draftAgent(form, { saved = null, test = false, projectId = null,
 }
 
 // Whether `next`, an `agent.save` body, saves `saved` unchanged: the same
-// name, label, instructions, skills, permission mode and routines, each
-// routine with its name, prompt, trigger and on or off. What core adds on a
-// save is no change a person made: the routines it proposes from the
-// instructions, a webhook's id, secret and default sender, and an MCP
-// trigger's empty arguments.
-const routineShape = (routine) => [routine.name ?? '', routine.prompt ?? '', canonical(triggerShape(routine.trigger ?? null)), routine.enabled !== false]
+// name, label, instructions, skills, permission mode and routines. `next`
+// holds every routine a Save sends: the draft's and the saved ones it keeps.
+// Each routine compares by its name, prompt, trigger, on or off and whether
+// it is a proposal, in any order. What core adds or keeps on a save is no
+// change a person made: routine ids, the picked-time mark, fire times and
+// results, a webhook's id, secret and default sender, and an MCP trigger's
+// empty arguments.
+const routineShape = (routine) => JSON.stringify([routine.name ?? '', routine.prompt ?? '', canonical(triggerShape(routine.trigger ?? null)), routine.enabled !== false, !!routine.proposed && routine.enabled === false])
 const sameTrigger = (left, right) => !!left && !!right && JSON.stringify(canonical(triggerShape(left))) === JSON.stringify(canonical(triggerShape(right)))
 function triggerShape(trigger) {
   if (trigger?.kind === 'webhook') {
@@ -103,7 +108,7 @@ function canonical(value) {
 }
 const agentShape = (agent) => JSON.stringify([
   (agent?.name ?? '').trim(), (agent?.label ?? '').trim(), (agent?.instructions ?? '').trim(),
-  [...(agent?.skills ?? [])].sort(), agent?.permissions?.mode ?? '', (agent?.routines ?? []).filter((routine) => !routine.proposed).map(routineShape),
+  [...(agent?.skills ?? [])].sort(), agent?.permissions?.mode ?? '', (agent?.routines ?? []).map(routineShape).sort(),
 ])
 export function sameAgent(next, saved) {
   return !!next && !!saved && agentShape(next) === agentShape(saved)
