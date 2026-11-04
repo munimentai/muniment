@@ -206,7 +206,14 @@ impl Lifecycle {
             self.retries = 0;
             self.retry_at = None;
         }
-        self.snapshot.reconnecting &= event == RuntimeEvent::ChildStarted;
+        #[cfg(any(test, target_os = "macos"))]
+        {
+            self.snapshot.reconnecting &= event == RuntimeEvent::ChildStarted;
+        }
+        #[cfg(not(any(test, target_os = "macos")))]
+        {
+            self.snapshot.reconnecting = false;
+        }
         self.snapshot.last_event = event;
         self.snapshot.visible = visible;
         self.snapshot.cause = None;

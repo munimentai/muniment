@@ -1173,6 +1173,14 @@ mod tests {
         assert!(resolve_revision(&root, descriptor).is_ok());
         assert!(resolve_revision(&root, descriptor).is_ok());
         fs::write(root.join(descriptor.archive), b"b").unwrap();
+        // A file system with a coarse clock can give two quick writes one
+        // modification time, so the changed archive gets a time of its own.
+        fs::File::options()
+            .write(true)
+            .open(root.join(descriptor.archive))
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1))
+            .unwrap();
         assert_eq!(
             resolve_revision(&root, descriptor),
             Err(PiInstallError::DigestMismatch)

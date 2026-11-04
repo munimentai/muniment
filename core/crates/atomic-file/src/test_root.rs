@@ -5,6 +5,7 @@
 //! must stay short is the one exception.
 
 use std::fs;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -109,7 +110,7 @@ fn remove_stale_test_roots(temporary: &Path) {
 /// a hash of the host name and, on Linux, the process id namespace. Two
 /// containers that share a temporary directory get different marks.
 fn host_mark() -> u32 {
-    let mut identity = Vec::new();
+    let mut identity: Vec<u8> = Vec::new();
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
         extern "C" {
@@ -123,6 +124,10 @@ fn host_mark() -> u32 {
                 .unwrap_or(name.len());
             identity.extend_from_slice(&name[..end]);
         }
+    }
+    #[cfg(windows)]
+    if let Some(name) = std::env::var_os("COMPUTERNAME") {
+        identity.extend_from_slice(name.as_encoded_bytes());
     }
     #[cfg(target_os = "linux")]
     if let Ok(namespace) = fs::read_link("/proc/self/ns/pid") {
@@ -160,6 +165,7 @@ fn process_runs(pid: u32) -> bool {
 
 /// The root the exit handler removes, with the id of the process that owns
 /// it. A forked child that exits keeps its parent's root.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 static TEST_ROOT_AT_EXIT: std::sync::OnceLock<(u32, PathBuf)> = std::sync::OnceLock::new();
 
 fn remove_test_root_at_exit(root: &Path) {
