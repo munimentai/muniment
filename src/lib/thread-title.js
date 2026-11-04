@@ -18,11 +18,12 @@ const SCAFFOLD = /^I want to create an? (agent|artifact) in this dedicated chat\
 
 // The thread list's name for a creation chat, the shared thread namer's name
 // or the user's own first words, when it can name the chat. Goals are
-// instructions, not names, and an older chat's scaffold never shows.
+// instructions, not names, and an older chat's scaffold and an unnamed
+// thread's placeholder never show.
 export function creationThreadTitle(creation, summaries = []) {
   const goal = normal(creation?.goal)
   const title = normal(summaries.find(item => item.threadId === creation?.threadId)?.title)
-  return title && title !== goal && !SCAFFOLD.test(title) && Array.from(title).length <= 80 ? title : ''
+  return title && title !== goal && title !== EMPTY_THREAD_TITLE && !SCAFFOLD.test(title) && Array.from(title).length <= 80 ? title : ''
 }
 
 function normal(text) {

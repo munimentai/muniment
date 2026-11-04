@@ -5436,6 +5436,8 @@
   .composer-meta { flex: 1 1 auto; display: flex; align-items: center; gap: 8px; min-width: 0; }
   .composer-meta > span { flex-basis: max-content; }
   .composer-meta > #composer-hint { min-width: 0; }
+  /* A hint too long for the band takes the row, and the actions go below it. */
+  .composer-row:has(#composer-hint) { flex-wrap: wrap; }
   .composer-actions { flex: none; display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; max-width: 100%; margin-left: auto; }
   .composer-actions button { flex-shrink: 0; white-space: nowrap; }
   .composer-icon { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; min-height: 24px; padding: 4px; line-height: 0; color: var(--muted); }

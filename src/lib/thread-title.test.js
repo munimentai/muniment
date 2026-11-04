@@ -45,6 +45,7 @@ describe('creation titles', () => {
     const creation = {kind:'agent', threadId:'draft', goal:'Report the Muniment project status every morning to the owner'}
     expect(creationThreadTitle(creation, [{threadId:'draft', title:'Muniment Project Status'}])).toBe('Muniment Project Status')
     expect(creationThreadTitle(creation, [{threadId:'other', title:'Other'}])).toBe('')
+    expect(creationThreadTitle(creation, [{threadId:'draft', title:'New thread'}])).toBe('')
     expect(creationTitle({...creation, title:'Muniment Project Status'}, [{threadId:'other', title:'Other'}])).toBe('Muniment Project Status')
     expect(creationTitle({...creation, title:'Muniment Project Status'}, [])).toBe('Muniment Project Status')
     // The thread list's newer name still wins while it holds the chat.

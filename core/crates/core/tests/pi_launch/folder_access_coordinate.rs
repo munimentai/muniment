@@ -102,7 +102,6 @@ impl PiLaunchBoundaries for Boundary {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn a_held_working_folder_names_the_consent_prompt_instead_of_timing_out() {
     let _environment = super::ENVIRONMENT.lock().unwrap();

@@ -12,6 +12,7 @@ mod acquisition_coordinate;
 mod compaction_coordinate;
 #[path = "pi_launch/endpoint_wait_coordinate.rs"]
 mod endpoint_wait_coordinate;
+#[cfg(unix)]
 #[path = "pi_launch/folder_access_coordinate.rs"]
 mod folder_access_coordinate;
 #[path = "pi_launch/gateway_coordinate.rs"]

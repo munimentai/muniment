@@ -465,7 +465,6 @@ mod command_thread_tests {
         "attach_pairing_decide",
         "attach_revoke_companion",
         "browser_language",
-        "creation_delete",
         "creation_list",
         "creation_save",
         "dictation_start",

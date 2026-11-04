@@ -547,8 +547,9 @@ mod keyring_store_tests {
             .is_err());
         assert!(!wrote.get());
         assert_eq!(store.refusals().len(), 1);
-        // The decline holds back the service's other entries, and no other
-        // service.
+        // A macOS decline holds back the service's other entries, and no
+        // other service. Elsewhere a refusal holds back its own entry.
+        #[cfg(target_os = "macos")]
         assert!(store
             .ask("ai.muniment.hooks", "hook-2", || panic!("held back"))
             .is_err());

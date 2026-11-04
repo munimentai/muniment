@@ -488,7 +488,10 @@ async function checkCreationBudget(browser, baseUrl) {
     assert.equal(plain.filter(({ command }) => command === 'chat_submit').length, 1)
     assert.equal(submits.length, 1)
     assert.equal(submits[0].prompt, words)
-    assert.equal(fromStarter.filter(({ command }) => command === 'creation_save').length, 1)
+    // The starter saves its creation once. A later save only keeps the thread list's name in the record.
+    const creationSaves = await page.evaluate(() => window.__PROBE__.invokedCommands.filter(({ command }) => command === 'creation_save').map(({ payload }) => payload.creation))
+    assert.equal(creationSaves.filter((creation) => !creation.title).length, 1, JSON.stringify(creationSaves))
+    assert.ok(creationSaves.filter((creation) => creation.title).every((creation) => creation.title === words), JSON.stringify(creationSaves))
     assert.equal(fromStarter.filter(({ operation }) => operation === 'agent.draft').length, 0)
     // The thread's title is the user's words, never a scaffold.
     await page.waitForFunction((words) => [...document.querySelectorAll('#sidebar .thread-row-title')].some((row) => row.textContent.trim() === words), words)
