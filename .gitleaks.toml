@@ -33,6 +33,16 @@ id = "generic-api-key"
     '''^core/protocol-fixtures/muniment\.attach/1/''',
     '''^core/crates/attach/src/fixtures\.rs$''',
   ]
+  # The agent instruction test uses the synthetic key of the assistant text
+  # secret tests. The usage report test compares a model key, not a secret.
+  [[rules.allowlists]]
+  regexes = ['''^Zx8qL2mN4vB7cR1tY6wP\.?$''', '''^anthropic/claude$''']
+
+[[rules]]
+id = "stripe-access-token"
+  # The assistant text secret tests carry a synthetic Stripe test key.
+  [[rules.allowlists]]
+  paths = ['''^core/crates/core/tests/assistant_text_secrets\.rs$''']
 
 [[rules]]
 id = "jwt"
