@@ -567,6 +567,13 @@ pub fn remove_orphan_creation_threads(
             .map(|page| page.run_ids.is_empty())
             .map_err(|failure| error(&failure))
     };
+    // Agents live in Home, so without one no creation can be named orphaned.
+    if crate::home::configured_home(profile)
+        .map_err(|e| e.to_string())?
+        .is_none()
+    {
+        return Ok(Vec::new());
+    }
     let creations = crate::creations::list(profile)?;
     let mut orphans = Vec::new();
     for creation in &creations {

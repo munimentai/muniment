@@ -652,6 +652,30 @@ fn thread_deleted(journal: &mut RunJournal, thread_id: &str) -> bool {
 }
 
 #[test]
+fn the_start_sweep_keeps_every_creation_chat_while_no_home_is_chosen() {
+    let root = muniment_core::state_root::test_root()
+        .join(format!("muniment-creation-sweep-{}", Uuid::new_v4()));
+    let profile = root.join("profile");
+    std::fs::create_dir_all(&profile).unwrap();
+    let mut journal = RunJournal::open(profile.join("runs.sqlite3")).unwrap();
+    let chat = journal
+        .create_thread("workspace-a", RECORDED_AT, attach_provenance())
+        .unwrap();
+    save_creation(&profile, &chat, &Uuid::new_v4().to_string());
+
+    assert_eq!(
+        remove_orphan_creation_threads(&mut journal, &profile, &provenance(None)),
+        Ok(Vec::new())
+    );
+    assert!(!thread_deleted(&mut journal, &chat));
+    assert!(muniment_core::creations::read(&profile, &chat)
+        .unwrap()
+        .is_some());
+    drop(journal);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn a_deleted_agents_creation_chats_go_and_the_start_sweep_removes_the_ones_left() {
     let root = muniment_core::state_root::test_root()
         .join(format!("muniment-creation-sweep-{}", Uuid::new_v4()));

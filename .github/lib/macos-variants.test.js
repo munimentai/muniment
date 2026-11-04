@@ -16,6 +16,23 @@ it('gives each architecture its own downloads and keeps the app bundle name', ()
   expect(variants.every(v => v.app.endsWith('/muniment.app'))).toBe(true);
 });
 
+it('tries hdiutil create three times before the dmg fails', () => {
+  const root = temporary();
+  const [universal] = macosVariants(root);
+  const creates = (failures) => {
+    let count = 0;
+    packageMacosDmg(universal.app, universal.dmg, (command, args) => {
+      if (command !== 'hdiutil' || args[0] !== 'create') return '';
+      count += 1;
+      if (count <= failures) throw new Error('hdiutil failed: create failed - Resource busy');
+      return '';
+    });
+    return count;
+  };
+  expect(creates(2)).toBe(3);
+  expect(() => creates(3)).toThrow('Resource busy');
+}, 60_000);
+
 it('uses the supplied runner for every variant command', () => {
   const root = temporary();
   const [universal] = macosVariants(root);

@@ -66,7 +66,16 @@ export function packageMacosDmg(app, output, run = execute) {
     run('ditto', [app, join(contents, 'muniment.app')]);
     symlinkSync('/Applications', join(contents, 'Applications'));
     mkdirSync(dirname(output), { recursive: true });
-    run('hdiutil', ['create', '-volname', 'Muniment', '-srcfolder', contents, '-format', 'ULMO', '-fs', 'HFS+', '-ov', output]);
+    // hdiutil create can answer "Resource busy" while the system still holds the last image, so it gets three tries.
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        run('hdiutil', ['create', '-volname', 'Muniment', '-srcfolder', contents, '-format', 'ULMO', '-fs', 'HFS+', '-ov', output]);
+        break;
+      } catch (error) {
+        if (attempt === 3) throw error;
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5000);
+      }
+    }
     run('hdiutil', ['verify', output]);
   } finally { rmSync(temporary, { recursive: true, force: true }); }
 }
