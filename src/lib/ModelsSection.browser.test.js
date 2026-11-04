@@ -42,7 +42,8 @@ async function models({ frame = false } = {}) {
     target.append(sidebar)
   }
   component = mount(Settings, { target, props: { tauri, listen: async () => () => {}, inventory, section: 'models', onclose: () => { closed += 1 } } })
-  const end = performance.now() + 4000
+  // The first render in a cold webkit worker compiles Settings, which takes seconds on CI.
+  const end = performance.now() + 15000
   while (!document.querySelector('[aria-label="Disconnect Jev"]') || !document.querySelector('[aria-label="Disconnect Jev · TypeSafe API"]')) {
     if (performance.now() > end) throw new Error('Settings › Models did not render both Disconnect buttons')
     await wait(30)
