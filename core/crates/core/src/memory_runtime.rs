@@ -1104,7 +1104,7 @@ mod tests {
             sweep_extensions(&root.join("missing"), "", std::time::SystemTime::now()),
             0
         );
-        fs::remove_dir_all(root).unwrap();
+        remove_root(root);
     }
 
     #[cfg(unix)]
@@ -1130,7 +1130,7 @@ mod tests {
         assert_eq!(removed, 1);
         assert!(live.exists());
         assert!(!ended.exists());
-        fs::remove_dir_all(root).unwrap();
+        remove_root(root);
     }
 
     #[test]
@@ -1202,7 +1202,7 @@ mod tests {
         );
         crate::memory_files::fact_restore_in(&private, &home, &fact.id).unwrap();
         assert_eq!(crate::memory_files::facts_in(&home).unwrap().len(), 1);
-        fs::remove_dir_all(root).unwrap();
+        remove_root(root);
     }
 
     #[test]
@@ -1513,7 +1513,7 @@ mod tests {
         let run = tool("agent-run", serde_json::json!({"id": id})).unwrap();
         assert_eq!(run["run"]["trigger"]["kind"], "manual");
         assert_eq!(run["run"]["trigger"]["source"], "agent");
-        fs::remove_dir_all(root).unwrap();
+        remove_root(root);
     }
 
     #[test]
@@ -1597,7 +1597,7 @@ mod tests {
                 r#"{"name":"No","instructions":"Closed"}"#
             )
             .is_err());
-        fs::remove_dir_all(root).unwrap();
+        remove_root(root);
     }
 
     #[test]
@@ -1646,7 +1646,7 @@ mod tests {
             "The memory search extension must parse as an ES module: {}",
             String::from_utf8_lossy(&output.stderr)
         );
-        fs::remove_dir_all(root).unwrap();
+        remove_root(root);
     }
 
     #[test]
@@ -1669,7 +1669,7 @@ mod tests {
         assert!(path.is_file());
         drop(hold);
         assert!(!path.exists());
-        fs::remove_dir_all(root).unwrap();
+        remove_root(root);
     }
 
     #[test]
@@ -1701,7 +1701,7 @@ mod tests {
         assert!(path.is_file(), "the open run still needs it");
         runtime.close_session("run");
         assert!(!path.exists());
-        fs::remove_dir_all(root).unwrap();
+        remove_root(root);
     }
 
     #[test]
@@ -1730,7 +1730,7 @@ mod tests {
         );
         runs.close_session("run-two");
         assert!(!path.exists());
-        fs::remove_dir_all(root).unwrap();
+        remove_root(root);
     }
 
     fn recall_runtime(settings: Option<RecallSettings>) -> (PathBuf, ApplicationMemoryRuntime) {
@@ -1744,6 +1744,15 @@ mod tests {
         }
         let runtime = ApplicationMemoryRuntime::new(config.clone(), config.join("memory"));
         (root, runtime)
+    }
+
+    // A session's index build thread can still write under the root.
+    fn remove_root(root: PathBuf) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while fs::remove_dir_all(&root).is_err() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(!root.exists());
     }
 
     fn capability() -> ModelMemoryCapability {
@@ -1769,7 +1778,7 @@ mod tests {
         runtime.close_session("two");
         assert!(!path.exists());
         assert!(!older.exists());
-        fs::remove_dir_all(root).unwrap();
+        remove_root(root);
     }
 
     fn node_check(path: &Path) {
@@ -1835,7 +1844,7 @@ mod tests {
                     }
                     node_check(&path);
                     runtime.close_session("session");
-                    fs::remove_dir_all(root).unwrap();
+                    remove_root(root);
                 }
             }
         }
@@ -1903,7 +1912,7 @@ console.log(JSON.stringify({
             .unwrap()
             .contains("Example: {\"questions\""));
         runtime.close_session("session");
-        fs::remove_dir_all(root).unwrap();
+        remove_root(root);
     }
 
     #[test]
@@ -1966,7 +1975,7 @@ console.log(JSON.stringify([await run(['Save']), await run(["Don't save"]), awai
                 serde_json::json!({"saved": false, "declined": true})
             );
         }
-        fs::remove_dir_all(root).unwrap();
+        remove_root(root);
     }
 
     #[test]
@@ -2019,7 +2028,7 @@ console.log(JSON.stringify([await run(['Save']), await run(["Don't save"]), awai
             Err(MemoryIndexError::InvalidToolArguments)
         ));
         runtime.close_session("session");
-        fs::remove_dir_all(root).unwrap();
+        remove_root(root);
     }
 
     #[test]
@@ -2072,7 +2081,7 @@ console.log(JSON.stringify([await run(['Save']), await run(["Don't save"]), awai
         assert_eq!(result.recall.files.len(), 2);
         assert!(result.recall.files.contains(&"memory/notes.md".to_owned()));
         runtime.close_session("session");
-        fs::remove_dir_all(root).unwrap();
+        remove_root(root);
     }
 
     #[test]
@@ -2112,12 +2121,7 @@ console.log(JSON.stringify([await run(['Save']), await run(["Don't save"]), awai
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
             assert_eq!(calls.load(Ordering::SeqCst), expected, "{learn} {message}");
-            // The session's index build thread can still write under the root.
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-            while fs::remove_dir_all(&root).is_err() && std::time::Instant::now() < deadline {
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-            assert!(!root.exists());
+            remove_root(root);
         }
     }
 
@@ -2133,7 +2137,7 @@ console.log(JSON.stringify([await run(['Save']), await run(["Don't save"]), awai
             )
             .is_err());
         assert!(runtime.session("session").is_none());
-        fs::remove_dir_all(root).unwrap();
+        remove_root(root);
     }
 
     #[test]
@@ -2158,7 +2162,7 @@ console.log(JSON.stringify([await run(['Save']), await run(["Don't save"]), awai
         runtime.write_agent_extension("session-1").unwrap();
 
         assert!(runtime.agent_extension_path("thread-1").exists());
-        fs::remove_dir_all(root).unwrap();
+        remove_root(root);
     }
 
     #[test]
@@ -2184,7 +2188,7 @@ console.log(JSON.stringify([await run(['Save']), await run(["Don't save"]), awai
             .unwrap();
 
         assert_eq!(result.items.len(), 1);
-        fs::remove_dir_all(root).unwrap();
+        remove_root(root);
     }
 
     #[test]
@@ -2244,7 +2248,7 @@ console.log(JSON.stringify([await run(['Save']), await run(["Don't save"]), awai
         search.join().unwrap();
 
         assert_eq!(result.unwrap().unwrap().items.len(), 1);
-        fs::remove_dir_all(root).unwrap();
+        remove_root(root);
     }
 
     #[test]
@@ -2269,7 +2273,7 @@ console.log(JSON.stringify([await run(['Save']), await run(["Don't save"]), awai
             .unwrap_err();
 
         assert!(matches!(error, MemoryIndexError::InvalidToolArguments));
-        fs::remove_dir_all(root).unwrap();
+        remove_root(root);
     }
 
     #[test]
@@ -2322,6 +2326,6 @@ console.log(JSON.stringify([await run(['Save']), await run(["Don't save"]), awai
             fs::read(runtime.agent_extension_path("thread-1")).unwrap(),
             expected
         );
-        fs::remove_dir_all(root).unwrap();
+        remove_root(root);
     }
 }

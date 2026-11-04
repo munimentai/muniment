@@ -1128,6 +1128,14 @@ mod tests {
             b"b",
         )
         .unwrap();
+        // A coarse clock can keep the modification time, so the changed
+        // archive gets a time of its own.
+        fs::File::options()
+            .write(true)
+            .open(root.join("revisions").join(old.version).join(old.archive))
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1))
+            .unwrap();
         assert_eq!(
             activate_or_rollback_for(&root, &FsPiLifecycleBoundary, new, Some(old), |_| false),
             Err(PiInstallError::DigestMismatch)
