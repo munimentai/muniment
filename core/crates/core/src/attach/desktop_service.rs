@@ -2486,7 +2486,6 @@ mod tests {
                 "2026-01-01T00:00:01Z",
                 &provenance,
             )
-            .map(|()| None)
             .map_err(|_| ProtocolError::persistence_failed())
         }
 
@@ -2507,6 +2506,7 @@ mod tests {
                 "2026-01-01T00:00:01Z",
                 &provenance,
             )
+            .map(|()| None)
             .map_err(|_| ProtocolError::persistence_failed())
         }
 

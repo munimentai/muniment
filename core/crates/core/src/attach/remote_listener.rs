@@ -1052,9 +1052,9 @@ mod tests {
     #[test]
     fn identical_handshake_failure_lines_are_held_back_and_counted() {
         let log = HandshakeLog::default();
-        let peer: IpAddr = "::ffff:10.1.2.10".parse().unwrap();
-        let same: IpAddr = "10.1.2.10".parse().unwrap();
-        let other: IpAddr = "10.1.2.11".parse().unwrap();
+        let peer: IpAddr = "::ffff:192.0.2.20".parse().unwrap();
+        let same: IpAddr = "192.0.2.20".parse().unwrap();
+        let other: IpAddr = "192.0.2.21".parse().unwrap();
         let start = Instant::now();
         let cause = "reason=InvalidData sent=plain_http";
         assert_eq!(log.admit(peer, cause, start), Some(0));

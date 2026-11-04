@@ -2443,7 +2443,7 @@ impl ThreadListService for ThreadMutationService {
         request_id: &Id,
         idempotency_key: &Id,
         provenance: CompanionProvenance,
-    ) -> Result<(), ProtocolError> {
+    ) -> Result<serde_json::Value, ProtocolError> {
         self.deletes.push((
             workspace.into(),
             thread_id.clone(),
@@ -2451,7 +2451,7 @@ impl ThreadListService for ThreadMutationService {
             idempotency_key.clone(),
             provenance,
         ));
-        Ok(())
+        Ok(serde_json::json!({}))
     }
 }
 

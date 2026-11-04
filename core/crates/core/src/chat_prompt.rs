@@ -355,6 +355,7 @@ fn use_refusing_keyring(
         code: i32,
         message: &'static str,
         refuse_entry: bool,
+        #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
         native: bool,
         writes: Arc<AtomicUsize>,
     }

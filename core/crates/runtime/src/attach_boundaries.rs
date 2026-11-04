@@ -1785,6 +1785,7 @@ impl RunAttachBoundaries for RuntimeAttachBoundaries {
             muniment_core::run_events::ChatEvent {
                 run_id: run_id.to_owned(),
                 thread_id: Some(thread_id),
+                started_at: None,
                 phase: "delivery-failed".into(),
                 text: String::new(),
                 prompt_accepted: false,
