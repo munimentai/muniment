@@ -28,6 +28,15 @@ pub fn shared(profile: &Path) -> Option<Arc<CheckpointStore>> {
     Some(store)
 }
 
+/// The profile's store when the profile has one. Opens none, so a profile
+/// with no checkpoints gains no folder.
+pub fn existing(profile: &Path) -> Option<Arc<CheckpointStore>> {
+    if !profile.join(CHECKPOINT_FOLDER).join("records").is_dir() {
+        return None;
+    }
+    shared(profile)
+}
+
 /// The runtime's own folders, which no record holds: its profile and its
 /// state.
 pub fn protected_folders(profile: Option<&Path>) -> Vec<PathBuf> {
@@ -49,6 +58,18 @@ pub fn excluded_folders(app: &impl PiLaunchBoundaries, folder: &Path) -> Vec<Pat
         .into_iter()
         .filter(|path| path.starts_with(folder) && path != folder)
         .collect()
+}
+
+/// Points the thread's records at its folder's new path after the host
+/// renamed the folder from `from`, the folder's canonical path before the
+/// rename.
+pub fn follow_folder(app: &impl PiLaunchBoundaries, from: &Path, to: &Path) {
+    let (Some(store), Some(thread_id)) = (app.checkpoint_store(), app.extension_thread_id()) else {
+        return;
+    };
+    if let Err(error) = store.move_thread_folder(&thread_id, from, to) {
+        eprintln!("muniment-runtime: checkpoint_folder move_failed error={error}");
+    }
 }
 
 /// Records a run's folder as the run ends, once the run recorded it as it

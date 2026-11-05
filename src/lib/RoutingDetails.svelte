@@ -21,9 +21,16 @@
     document.body.appendChild(node)
     return { destroy() { node.remove() } }
   }
+  // The window hears Escape first, in its capture phase, and stops it there,
+  // so the shell's document keys never close the page or the side panel
+  // under the dialog. A click inside the dialog can leave focus on the page
+  // body, so a listener on the panel alone misses it.
+  function keydown(event) {
+    if (shown && event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close() }
+  }
 </script>
 
-<svelte:window onkeydown={(event) => { if (shown && event.key === 'Escape') { event.preventDefault(); close() } }} />
+<svelte:window onkeydowncapture={keydown} />
 <button type="button" class="routing-trigger" aria-haspopup="dialog" bind:this={trigger} onclick={open}>{label}</button>
 {#if shown}
   <div class="routing-scrim" use:portal use:dialogDismiss={{ onclose: close }}>

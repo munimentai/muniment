@@ -3,14 +3,19 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/sve
 import '@testing-library/jest-dom/vitest'
 import NotificationsPage from './NotificationsPage.svelte'
 import SidebarActions from '../lib/SidebarActions.svelte'
-import { DEFAULT_NOTIFY, isNotificationsShortcut, notifyAllowed, notifyPreferences, resultLine, triggerIcon, triggerLabel } from './notifications.js'
+import { DEFAULT_NOTIFY, isNotificationsShortcut, notifyAllowed, notifyPreferences, pointsToModels, resultLine, triggerIcon, triggerLabel } from './notifications.js'
 import { machineLight } from '../lib/status-tone.js'
+import { forgetDeletedThreads, markThreadDeleted, rememberDeletedThreads } from '../lib/deleted-threads.svelte.js'
 
 afterEach(cleanup)
+afterEach(forgetDeletedThreads)
 
 const at = (minutes) => new Date(Date.now() - minutes * 60_000).toISOString()
 const run = (id, status, extra = {}) => ({ id, agent_id: 'scout', thread_id: `thread-${id}`, trigger: { kind: 'cron' }, status, created_at: at(5), updated_at: at(4), result_summary: null, silent: false, error: null, ...extra })
 const local = { id: 'local', name: 'This computer' }
+// Failure texts an older runtime stored for an agent run whose OpenAI token expired.
+const STORED_EXPIRED = '{ "error": { "message": "Your authentication token has expir…'
+const STORED_EXPIRED_FULL = 'The model could not complete this reply. No eligible model served this turn. { "error": { "message": "Your authentication token has expired.", "code": "token_expired" }, "status": 401 } openai/gpt-6-astra answered 401.'
 const page = (extra = {}) => ({
   needs_you: [
     { kind: 'input', id: 'r1', machine: local, agent_id: 'scout', agent_name: 'Lead scout', run: run('r1', 'waiting_input'), detail: 'Which total?', at: at(3) },
@@ -105,6 +110,9 @@ describe('Notifications page', () => {
     render(NotificationsPage, { tauri: { invoke: vi.fn(async () => quiet) }, runtimeList: null })
     expect(await screen.findByText('Nothing needs you')).toBeInTheDocument()
     expect(screen.getByRole('list', { name: 'Next scheduled runs' })).toHaveTextContent('Weekday briefing')
+    // A name too long for the row ends in an ellipsis, and its tooltip holds all of it.
+    expect(screen.getByText('Weekday briefing')).toHaveAttribute('data-tooltip', 'Weekday briefing')
+    expect(screen.getByText('Weekday briefing')).toHaveClass('name')
   })
 
   it('names each run\'s trigger with its icon and its machine with its stoplight', async () => {
@@ -128,6 +136,90 @@ describe('Notifications page', () => {
     const upcoming = screen.getByRole('list', { name: 'Next scheduled runs' })
     expect(upcoming.querySelector('.machine-chip')).toHaveAttribute('data-light', 'red')
     expect(upcoming).toHaveTextContent('Build box, Offline')
+  })
+
+  it('keeps a failed run in Needs you with Open Models and sends the threads this device read', async () => {
+    const failed = { kind: 'failed', id: 'r6', machine: local, agent_id: 'scout', agent_name: 'Tauri Morning', run: run('r6', 'failed'), detail: 'The OpenAI sign-in expired. Sign in again in Models.', at: at(2) }
+    const invoke = vi.fn(async (command) => command === 'notifications_list' ? page({ needs_you: [failed] }) : {})
+    const onmodels = vi.fn()
+    const onopen = vi.fn()
+    render(NotificationsPage, { tauri: { invoke }, runtimeList: null, read: { 'thread-r1': at(1) }, onmodels, onopen })
+    const item = await screen.findByRole('article', { name: 'Run failed: Tauri Morning' })
+    expect(screen.queryByText('Nothing needs you')).toBeNull()
+    expect(item).toHaveTextContent('The OpenAI sign-in expired. Sign in again in Models.')
+    expect(invoke).toHaveBeenCalledWith('notifications_list', expect.objectContaining({ filter: expect.objectContaining({ read: { 'thread-r1': expect.any(String) } }) }))
+    await fireEvent.click(within(item).getByRole('button', { name: 'Open Models' }))
+    expect(onmodels).toHaveBeenCalledOnce()
+    await fireEvent.click(within(item).getByRole('button', { name: 'Open thread' }))
+    expect(onopen).toHaveBeenCalledWith(expect.objectContaining({ id: 'r6', thread_id: 'thread-r6' }))
+    expect(pointsToModels('The model could not complete this reply.')).toBe(false)
+  })
+
+  it('reads an old stored failure as the thread reply does, in its row and in Needs you', async () => {
+    expect(resultLine({ status: 'failed', run: { error: STORED_EXPIRED } })).toBe('The sign-in expired. Sign in again in Models.')
+    const failed = { kind: 'failed', id: 'r6', machine: local, agent_id: 'scout', agent_name: 'Tauri Morning', run: run('r6', 'failed', { error: STORED_EXPIRED_FULL }), detail: STORED_EXPIRED_FULL, at: at(2) }
+    const days = [{ day: 'today', entries: [{ status: 'failed', machine: local, agent_name: 'Tauri Morning', run: run('r7', 'failed', { error: STORED_EXPIRED }), unread: false }] }]
+    const invoke = vi.fn(async (command) => command === 'notifications_list' ? page({ needs_you: [failed], days }) : {})
+    const onmodels = vi.fn()
+    render(NotificationsPage, { tauri: { invoke }, runtimeList: null, onmodels })
+    const item = await screen.findByRole('article', { name: 'Run failed: Tauri Morning' })
+    expect(item.querySelector('.detail')).toHaveTextContent(/^The OpenAI sign-in expired\. Sign in again in Models\.$/)
+    const log = within(item).getByText('Show log').closest('details')
+    expect(log).not.toHaveAttribute('open')
+    expect(log.querySelector('pre')).toHaveTextContent('"code": "token_expired"')
+    await fireEvent.click(within(item).getByRole('button', { name: 'Open Models' }))
+    expect(onmodels).toHaveBeenCalledOnce()
+    const row = screen.getByRole('button', { name: 'Tauri Morning, Failed: The sign-in expired. Sign in again in Models.' })
+    expect(row.querySelector('.result')).toHaveTextContent(/^The sign-in expired\. Sign in again in Models\.$/)
+    expect(row).not.toHaveTextContent('{')
+  })
+
+  it('draws each row the same under All and Failed, machine chip included, while a paired machine is offline', async () => {
+    const runtimeList = { runtimes: [{ id: 'local', local: true, kind: 'local', formFactor: 'laptop', status: 'online' }, { id: 'box', kind: 'container', status: 'offline' }] }
+    const [done, failure] = page().days[0].entries
+    const invoke = vi.fn(async (_, { filter }) => page({ needs_you: [], running: [], days: [{ day: 'today', entries: filter.view === 'failed' ? [failure] : [done, failure] }] }))
+    render(NotificationsPage, { tauri: { invoke }, runtimeList })
+    const name = 'Lead scout, Failed, on This computer, Online: The log was missing.'
+    const all = await screen.findByRole('button', { name })
+    const markup = (row) => row.innerHTML.replace(/<!--.*?-->/g, '')
+    const drawn = markup(all)
+    expect(all.querySelector('.machine-chip')).toHaveTextContent('This computer')
+    await fireEvent.click(screen.getByRole('radio', { name: 'Failed' }))
+    await vi.waitFor(() => expect(screen.queryByRole('button', { name: /^Lead scout, Done/ })).toBeNull())
+    const failed = screen.getByRole('button', { name })
+    expect(failed.querySelector('.machine-chip')).toHaveTextContent('This computer')
+    expect(markup(failed)).toBe(drawn)
+  })
+
+  it('says a run\'s thread was deleted and offers no way to open it', async () => {
+    rememberDeletedThreads(['thread-r5', 'thread-r6'])
+    const failed = { kind: 'failed', id: 'r6', machine: local, agent_id: 'scout', agent_name: 'Tauri Morning', run: run('r6', 'failed'), detail: 'The log was missing.', at: at(2) }
+    render(NotificationsPage, { tauri: { invoke: vi.fn(async () => page({ needs_you: [failed] })) }, runtimeList: null })
+    const item = await screen.findByRole('article', { name: 'Run failed: Tauri Morning' })
+    expect(item).toHaveTextContent("This run's thread was deleted.")
+    expect(within(item).getByRole('button', { name: 'Open thread' })).toBeDisabled()
+    const row = screen.getByRole('button', { name: "Lead scout, Failed: The log was missing. This run's thread was deleted." })
+    expect(row).toBeDisabled()
+    expect(row.querySelector('.gone')).toHaveTextContent("This run's thread was deleted.")
+    // A run whose thread stays opens as before.
+    expect(screen.getByRole('button', { name: 'Lead scout, Done, unread: Found 4 leads.' })).not.toBeDisabled()
+  })
+
+  it('names the deleted threads to core, and asks again when another thread turns out deleted', async () => {
+    rememberDeletedThreads(['thread-r6', 'thread-r5'])
+    const invoke = vi.fn(async () => page())
+    render(NotificationsPage, { tauri: { invoke }, runtimeList: null })
+    await screen.findByRole('region', { name: /^Needs you/ })
+    expect(invoke).toHaveBeenLastCalledWith('notifications_list', expect.objectContaining({ filter: expect.objectContaining({ deleted: ['thread-r5', 'thread-r6'] }) }))
+    markThreadDeleted('thread-r4')
+    await vi.waitFor(() => expect(invoke).toHaveBeenLastCalledWith('notifications_list', expect.objectContaining({ filter: expect.objectContaining({ deleted: ['thread-r4', 'thread-r5', 'thread-r6'] }) })))
+  })
+
+  it('names no deleted threads while none are known', async () => {
+    const invoke = vi.fn(async () => page())
+    render(NotificationsPage, { tauri: { invoke }, runtimeList: null })
+    await screen.findByRole('region', { name: /^Needs you/ })
+    expect(invoke.mock.calls[0][1].filter).not.toHaveProperty('deleted')
   })
 
   it('asks again for the failed view', async () => {

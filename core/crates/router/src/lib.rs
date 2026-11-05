@@ -141,7 +141,11 @@ pub fn all_options(config: &RouterConfig) -> Vec<Route> {
             let key = format!("{}/{}", account.family, model);
             // A model this account's plan refused stays in the running only
             // through another account that has not refused it.
-            if config.refuses(&account.id, &model) || options.iter().any(|known| known.key == key) {
+            // A model that refuses the tools every turn sends is never in the running.
+            if config.refuses(&account.id, &model)
+                || options.iter().any(|known| known.key == key)
+                || !model_catalog::runs_with_tools(&account.family, &model)
+            {
                 continue;
             }
             // A model the catalog does not describe still runs. Its id is all
@@ -379,6 +383,30 @@ mod tests {
         assert!(!serde_json::to_string(&config)
             .unwrap()
             .contains("discovered_models"));
+    }
+
+    #[test]
+    fn a_multi_agent_model_never_enters_the_running() {
+        let mut config = pooled();
+        let mut xai = account("x1", "xai");
+        xai.models = vec!["grok-4.20-multi-agent-0309".into(), "grok-4.7".into()];
+        config.accounts.push(xai);
+        config.discovered_models.insert(
+            "x1".into(),
+            vec!["grok-4.20-multi-agent-0309".into(), "grok-4.3".into()],
+        );
+        let keys: Vec<_> = options(&config)
+            .into_iter()
+            .map(|route| route.key)
+            .collect();
+        assert!(keys.contains(&"xai/grok-4.7".to_owned()), "{keys:?}");
+        assert!(
+            !keys.iter().any(|key| key.contains("multi-agent")),
+            "{keys:?}"
+        );
+        assert!(!offered_models(&config)
+            .iter()
+            .any(|key| key.contains("multi-agent")));
     }
 
     /// Two OpenAI accounts and one Anthropic, with two options renamed by the

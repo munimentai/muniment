@@ -48,10 +48,11 @@
     return prepareSelected(prompt)
   }
   async function prepareSelected(prompt) {
-    await refresh()
     // The runtime sends the turn to its current thread, so the selection is
     // saved under that thread and not under the one the window last showed.
-    const id = await tauri.invoke('chat_current_thread') || await tauri.invoke('chat_new_thread')
+    // Both reads run at once, since a send waits on them.
+    const [, current] = await Promise.all([refresh(), tauri.invoke('chat_current_thread')])
+    const id = current || await tauri.invoke('chat_new_thread')
     await call('turn', { threadId: id, selected: [...selectedCommands(prompt, choices), ...selection.enabled], disabled: selection.blocked, automatic })
     if (automatic) {
       busy = true

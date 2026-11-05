@@ -70,6 +70,26 @@ pub struct Usage {
     pub windows: Vec<Window>,
 }
 
+impl Usage {
+    /// Whether two readings say the same about the account, whenever each
+    /// was taken. A reset a second or less apart is the same reset: Claude
+    /// Code reports it with jitter in the milliseconds.
+    pub fn same_reading(&self, other: &Usage) -> bool {
+        self.readable == other.readable
+            && self.windows.len() == other.windows.len()
+            && self.windows.iter().zip(&other.windows).all(|(a, b)| {
+                a.kind == b.kind
+                    && a.scope == b.scope
+                    && a.remaining_percent == b.remaining_percent
+                    && a.limit_reached == b.limit_reached
+                    && match (a.resets_at_ms, b.resets_at_ms) {
+                        (Some(a), Some(b)) => a.abs_diff(b) <= 1000,
+                        (a, b) => a == b,
+                    }
+            })
+    }
+}
+
 /// One plan window: `five_hour` or `weekly`, with the model it covers when
 /// it covers one.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -153,33 +173,84 @@ impl Store {
 /// Serializes the record's read-modify-write within one process.
 static WRITE: Mutex<()> = Mutex::new(());
 
+/// When this process last read each account's unchanged usage, by agent
+/// folder and account id. A reading that changes nothing but its time
+/// stays out of the file, and [`load`] still answers the newer time.
+static OBSERVED: Mutex<BTreeMap<(PathBuf, String), i64>> = Mutex::new(BTreeMap::new());
+
 pub fn load(agent: &Path) -> Store {
-    fs::read(agent.join(STORE_FILE))
+    let mut store: Store = fs::read(agent.join(STORE_FILE))
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let observed = OBSERVED.lock().unwrap_or_else(|error| error.into_inner());
+    for account in &mut store.accounts {
+        let key = (agent.to_path_buf(), account.id.clone());
+        if let (Some(usage), Some(at)) = (account.usage.as_mut(), observed.get(&key)) {
+            usage.observed_at_ms = usage.observed_at_ms.max(*at);
+        }
+    }
+    store
 }
 
 fn save(agent: &Path, store: &Store) -> io::Result<()> {
+    let path = agent.join(STORE_FILE);
+    let bytes = serde_json::to_vec_pretty(store)?;
+    if muniment_atomic_file::holds_private(&path, &bytes) {
+        return Ok(());
+    }
     fs::create_dir_all(agent)?;
     let temporary = agent.join(format!("claude-accounts-{}.tmp", uuid::Uuid::new_v4()));
-    fs::write(&temporary, serde_json::to_vec_pretty(store)?)?;
+    fs::write(&temporary, bytes)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))?;
     }
-    muniment_atomic_file::replace(&temporary, &agent.join(STORE_FILE))
+    muniment_atomic_file::replace(&temporary, &path)
 }
 
 /// Changes the record under the process lock and answers what `change`
-/// answered.
+/// answered. A change that leaves the record as it was writes nothing.
 pub fn update<T>(agent: &Path, change: impl FnOnce(&mut Store) -> T) -> io::Result<T> {
     let _held = WRITE.lock().unwrap_or_else(|error| error.into_inner());
     let mut store = load(agent);
+    let before = store.clone();
     let answer = change(&mut store);
-    save(agent, &store)?;
+    if store != before {
+        save(agent, &store)?;
+    }
     Ok(answer)
+}
+
+/// Keeps one account's usage reading and the plan Claude Code named with it.
+/// A reading that says what the held one says keeps the file as it is, and
+/// only this process learns its newer time.
+pub fn record_usage(
+    agent: &Path,
+    id: &str,
+    reading: Usage,
+    plan: Option<String>,
+) -> io::Result<()> {
+    update(agent, |store| {
+        let Some(account) = store.accounts.iter_mut().find(|account| account.id == id) else {
+            return;
+        };
+        if plan.is_some() {
+            account.plan = plan;
+        }
+        let key = (agent.to_path_buf(), id.to_owned());
+        let mut observed = OBSERVED.lock().unwrap_or_else(|error| error.into_inner());
+        match &account.usage {
+            Some(held) if held.same_reading(&reading) => {
+                observed.insert(key, reading.observed_at_ms);
+            }
+            _ => {
+                observed.remove(&key);
+                account.usage = Some(reading);
+            }
+        }
+    })
 }
 
 /// The Claude Code config folder of one account.
@@ -338,6 +409,78 @@ mod tests {
         let store = load(&agent);
         assert!(store.accounts.is_empty() && store.threads.is_empty());
         assert_eq!(folder_for_thread(&agent, Some("t1")), None);
+        let _ = fs::remove_dir_all(&agent);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_idle_usage_poll_writes_nothing() {
+        use std::os::unix::fs::MetadataExt;
+        let agent = std::env::temp_dir().join(format!("claude-idle-{}", uuid::Uuid::new_v4()));
+        update(&agent, |store| {
+            store.add(account("a", "a@example.test", 1));
+        })
+        .unwrap();
+        let reading = |observed_at_ms, resets_at_ms, remaining_percent| Usage {
+            observed_at_ms,
+            readable: true,
+            windows: vec![Window {
+                kind: "weekly".into(),
+                remaining_percent,
+                resets_at_ms: Some(resets_at_ms),
+                ..Window::default()
+            }],
+        };
+        record_usage(
+            &agent,
+            "a",
+            reading(1_000, 9_000_000, 87.0),
+            Some("max".into()),
+        )
+        .unwrap();
+        let path = agent.join(STORE_FILE);
+        let (inode, bytes) = (fs::metadata(&path).unwrap().ino(), fs::read(&path).unwrap());
+        // Two minutes on, Claude Code reports the same window, its reset a
+        // few milliseconds off, and the thread keeps its account.
+        record_usage(
+            &agent,
+            "a",
+            reading(121_000, 9_000_009, 87.0),
+            Some("max".into()),
+        )
+        .unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().ino(), inode);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert_eq!(
+            folder_for_thread(&agent, Some("t1")),
+            Some(folder(&agent, "a"))
+        );
+        let inode_after_pick = fs::metadata(&path).unwrap().ino();
+        assert_eq!(
+            folder_for_thread(&agent, Some("t1")),
+            Some(folder(&agent, "a"))
+        );
+        assert_eq!(fs::metadata(&path).unwrap().ino(), inode_after_pick);
+        let held = load(&agent);
+        assert_eq!(
+            held.accounts[0].usage.as_ref().unwrap().observed_at_ms,
+            121_000
+        );
+        assert_eq!(
+            held.accounts[0].usage.as_ref().unwrap().windows[0].resets_at_ms,
+            Some(9_000_000)
+        );
+        // The first pick records the thread, and the second changes nothing.
+        assert_ne!(inode_after_pick, inode);
+        // A window that moved is news, and the file takes it.
+        record_usage(&agent, "a", reading(241_000, 9_000_000, 80.0), None).unwrap();
+        assert_ne!(fs::metadata(&path).unwrap().ino(), inode_after_pick);
+        let on_disk: Store = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            on_disk.accounts[0].usage.as_ref().unwrap().observed_at_ms,
+            241_000
+        );
+        assert_eq!(on_disk.accounts[0].plan.as_deref(), Some("max"));
         let _ = fs::remove_dir_all(&agent);
     }
 

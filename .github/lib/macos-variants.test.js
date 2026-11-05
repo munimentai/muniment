@@ -7,7 +7,7 @@ import { macosVariants, nativeFiles, packageMacosDmg, prepareMacosVariants } fro
 const directories = [];
 afterEach(() => { for (const dir of directories.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 const temporary = () => { const dir = mkdtempSync(join(tmpdir(), 'muniment-variant-test-')); directories.push(dir); return dir; };
-const run = (cmd, args) => execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+const run = (cmd, args, env = process.env) => execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env }).trim();
 
 it('gives each architecture its own downloads and keeps the app bundle name', () => {
   const variants = macosVariants('/bundle');
@@ -15,6 +15,23 @@ it('gives each architecture its own downloads and keeps the app bundle name', ()
   expect(variants.map(v => v.arch)).toEqual([null, 'arm64', 'x86_64']);
   expect(variants.every(v => v.app.endsWith('/muniment.app'))).toBe(true);
 });
+
+it('tries hdiutil create three times before the dmg fails', () => {
+  const root = temporary();
+  const [universal] = macosVariants(root);
+  const creates = (failures) => {
+    let count = 0;
+    packageMacosDmg(universal.app, universal.dmg, (command, args) => {
+      if (command !== 'hdiutil' || args[0] !== 'create') return '';
+      count += 1;
+      if (count <= failures) throw new Error('hdiutil failed: create failed - Resource busy');
+      return '';
+    });
+    return count;
+  };
+  expect(creates(2)).toBe(3);
+  expect(() => creates(3)).toThrow('Resource busy');
+}, 60_000);
 
 it('uses the supplied runner for every variant command', () => {
   const root = temporary();
@@ -43,7 +60,8 @@ describe.skipIf(process.platform !== 'darwin')('native Mac packaging', () => {
     const root = temporary(); const [universal] = macosVariants(root);
     const source = join(root, 'fixture.c'); writeFileSync(source, 'int main(void) { return 0; }\n');
     const binary = join(universal.app, 'Contents/MacOS/fixture'); mkdirSync(dirname(binary), { recursive: true });
-    run('clang', ['-arch', 'arm64', '-arch', 'x86_64', source, '-o', binary]);
+    // A universal build leaves an empty `fixture-*` folder in TMPDIR, so it gets the test's own.
+    run('clang', ['-arch', 'arm64', '-arch', 'x86_64', source, '-o', binary], { ...process.env, TMPDIR: root });
     const nested = join(universal.app, 'Contents/Frameworks/helper'); mkdirSync(dirname(nested), { recursive: true }); copyFileSync(binary, nested);
     writeFileSync(join(universal.app, 'Contents/Info.plist'), '<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>fixture</string><key>CFBundleIdentifier</key><string>ai.muniment.packaging-test</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>');
     writeFileSync(join(universal.app, 'Contents/resource.txt'), 'preserved');

@@ -11,12 +11,17 @@ use uuid::Uuid;
 pub struct ApplicationMemoryRuntime {
     config: PathBuf,
     contexts: Mutex<BTreeMap<String, (String, PathBuf)>>,
+    /// Each open run session's use of its thread's tool extension.
+    extension_uses: Mutex<BTreeMap<String, ExtensionUse>>,
     memory_roots: Mutex<BTreeMap<String, (PathBuf, PathBuf)>>,
     recall: Mutex<BTreeMap<String, RecallSettings>>,
     database_root: PathBuf,
     sessions: Mutex<BTreeMap<String, Arc<Mutex<MemoryRuntimeSession>>>>,
     /// The sessions whose model saved a fact through memory-save.
     saved: Mutex<std::collections::BTreeSet<String>>,
+    /// The agent each open run session's model created through agent-save,
+    /// which the routine tools name when the call names no agent.
+    created_agents: Mutex<BTreeMap<String, String>>,
     extractor: Arc<crate::memory_extract::Extractor>,
     extraction_model: Option<crate::memory_extract::Model>,
 }
@@ -25,12 +30,14 @@ impl ApplicationMemoryRuntime {
     pub fn new(config: PathBuf, database_root: PathBuf) -> Self {
         Self {
             config,
-            contexts: Mutex::new(BTreeMap::new()),
+            contexts: Default::default(),
+            extension_uses: Default::default(),
             memory_roots: Mutex::new(BTreeMap::new()),
             recall: Mutex::new(BTreeMap::new()),
             database_root,
             sessions: Mutex::new(BTreeMap::new()),
             saved: Mutex::new(Default::default()),
+            created_agents: Default::default(),
             extractor: Default::default(),
             extraction_model: None,
         }
@@ -124,6 +131,40 @@ impl ApplicationMemoryRuntime {
         thread: &str,
         capability: ModelMemoryCapability,
     ) -> Result<(), MemoryIndexError> {
+        let extension = self.open_session_with(session, thread, capability, true)?;
+        self.extension_uses
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(session.to_owned(), extension);
+        Ok(())
+    }
+
+    /// Writes the tool extension the thread's next run loads, as that run
+    /// writes it, with no session kept and no index built. A process that
+    /// starts with it is the launch that run starts. The answer holds the
+    /// file for the process a read starts with it. The file goes once no
+    /// hold and no open run session of the thread uses it, whichever memory
+    /// runtime of this process took the use.
+    pub fn write_thread_extension(
+        &self,
+        thread: &str,
+        capability: ModelMemoryCapability,
+    ) -> Result<ThreadExtensionHold, MemoryIndexError> {
+        let session = format!("thread-extension-{}", Uuid::now_v7());
+        let written = self.open_session_with(&session, thread, capability, false);
+        self.forget_session(&session);
+        written.map(|extension| ThreadExtensionHold {
+            _extension: extension,
+        })
+    }
+
+    fn open_session_with(
+        &self,
+        session: &str,
+        thread: &str,
+        capability: ModelMemoryCapability,
+        build: bool,
+    ) -> Result<ExtensionUse, MemoryIndexError> {
         let home_error = |error: muniment_core::home::HomeError| {
             use std::error::Error;
             let message = match error.source() {
@@ -147,7 +188,10 @@ impl ApplicationMemoryRuntime {
         } else {
             private.join("memory-index.sqlite3")
         };
-        self.open_session_for_home(session, thread, capability, &recall_home, database);
+        self.insert_session(session, thread, capability, &recall_home, database);
+        if build {
+            self.build_session_in_background(session);
+        }
         self.contexts
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -156,11 +200,18 @@ impl ApplicationMemoryRuntime {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(session.into(), recall);
+        // The use counts before the file is written, so a use that ends
+        // meanwhile never removes the file this session starts Pi with.
+        let extension = ExtensionUse::take(self.agent_extension_path(thread));
         if let Err(error) = self.write_agent_extension(session) {
-            self.close_session(session);
+            if build {
+                self.close_session(session);
+            } else {
+                self.forget_session(session);
+            }
             return Err(error);
         }
-        Ok(())
+        Ok(extension)
     }
 
     fn build_session(&self, session: &str) {
@@ -420,10 +471,19 @@ impl ApplicationMemoryRuntime {
                 }
                 let plan: Plan =
                     serde_json::from_str(arguments).map_err(|_| "Invalid creation goal.")?;
-                let existing = crate::creations::read(&self.config, &thread)?;
-                let result_id = existing
-                    .filter(|p| p.kind == plan.kind)
-                    .and_then(|p| p.result_id);
+                let existing =
+                    crate::creations::read(&self.config, &thread)?.filter(|p| p.kind == plan.kind);
+                // An agent's creation chat holds its record before any reply
+                // runs, so a reply that finds none runs in an ordinary
+                // thread. That thread stays the user's and gets no record.
+                if plan.kind == "agent" && existing.is_none() {
+                    return Ok(serde_json::json!({
+                        "saved": false,
+                        "message": "This thread is not an agent's creation chat, so no goal is kept here. Use agent-save to create the agent.",
+                    }));
+                }
+                let result_id = existing.as_ref().and_then(|p| p.result_id.clone());
+                let title = existing.and_then(|p| p.title);
                 let plan = crate::creations::save(
                     &self.config,
                     crate::creations::Creation {
@@ -433,6 +493,8 @@ impl ApplicationMemoryRuntime {
                         output: plan.output,
                         result_id,
                         turns: Vec::new(),
+                        title,
+                        created_at: None,
                     },
                 )?;
                 Ok(serde_json::json!({"saved":true,"creation":plan}))
@@ -478,21 +540,14 @@ impl ApplicationMemoryRuntime {
                 let creating = agent.id.is_empty();
                 let agent = crate::agents::save(&self.config, agent)?;
                 if creating {
-                    crate::agents::assign(&self.config, &thread, &agent.id)?;
-                    let mut plan = crate::creations::read(&self.config, &thread)?.unwrap_or(
-                        crate::creations::Creation {
-                            thread_id: thread.clone(),
-                            kind: "agent".into(),
-                            goal: format!("Create {}", agent.name),
-                            output: format!("Saved agent: {}", agent.name),
-                            result_id: None,
-                            turns: Vec::new(),
-                        },
-                    );
-                    if plan.kind == "agent" {
-                        plan.result_id = Some(agent.id.clone());
-                        crate::creations::save(&self.config, plan)?;
-                    }
+                    // A reply runs in an ordinary thread: an agent's creation
+                    // chat drafts through `agent.draft` and runs no reply. The
+                    // thread stays the user's, with no creation record and no
+                    // place in the agent, so a delete of the agent leaves it.
+                    self.created_agents
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .insert(session.to_owned(), agent.id.clone());
                 }
                 let path = crate::agents::folder(&self.config, &agent.id)?.join("agent.md");
                 Ok(serde_json::json!({"saved": true, "agent": agent, "path": path}))
@@ -522,6 +577,13 @@ impl ApplicationMemoryRuntime {
                         .threads
                         .get(&thread)
                         .cloned()
+                        .or_else(|| {
+                            self.created_agents
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                .get(session)
+                                .cloned()
+                        })
                         .ok_or("Name the agent: this thread belongs to no agent.")?,
                 };
                 match tool {
@@ -685,7 +747,23 @@ impl ApplicationMemoryRuntime {
     }
 
     pub fn close_session(&self, session: &str) {
+        self.forget_session(session);
+        // Pi read the thread's extension when its run started, so the file
+        // goes once no other use of it remains.
+        let extension = self
+            .extension_uses
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(session);
+        drop(extension);
+    }
+
+    fn forget_session(&self, session: &str) {
         self.saved
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(session);
+        self.created_agents
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(session);
@@ -821,6 +899,121 @@ const MEMORY_SAVE_APPROVAL: &str = r#"      const clip = (text, limit) => { cons
       }
 "#;
 
+/// A read's hold on its thread's tool extension, kept while the process
+/// the read started runs.
+pub struct ThreadExtensionHold {
+    _extension: ExtensionUse,
+}
+
+/// How many uses each tool extension file has in this process: open run
+/// sessions and the processes reads started. A run and a read may each use
+/// their own memory runtime, so the count is one for the process.
+static EXTENSION_USES: Mutex<BTreeMap<PathBuf, usize>> = Mutex::new(BTreeMap::new());
+
+/// One use of a thread's tool extension. The file, and the `.js` twin older
+/// versions wrote, go when the last use ends. The count's lock stays held
+/// while the file goes, so a use taken then writes its file after the removal.
+pub(crate) struct ExtensionUse {
+    path: PathBuf,
+}
+
+impl ExtensionUse {
+    fn take(path: PathBuf) -> Self {
+        *EXTENSION_USES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry(path.clone())
+            .or_default() += 1;
+        Self { path }
+    }
+}
+
+impl Drop for ExtensionUse {
+    fn drop(&mut self) {
+        let mut uses = EXTENSION_USES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(count) = uses.get_mut(&self.path) else {
+            return;
+        };
+        *count = count.saturating_sub(1);
+        if *count > 0 {
+            return;
+        }
+        uses.remove(&self.path);
+        let _ = std::fs::remove_file(self.path.with_extension("js"));
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// How old a thread extension is before the startup sweep may remove it, so
+/// a run that wrote its file and is about to start Pi keeps it.
+const EXTENSION_SWEEP_MIN_AGE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
+/// Removes the thread extensions, and their temporary files, that sessions
+/// which ended before this runtime started left in `database_root`. A file
+/// a running process names in its arguments, as a live Pi names its
+/// `--extension`, stays, and so does a file written within the last hour.
+/// Without the process list nothing is removed. Answers the count removed.
+pub fn sweep_ended_extensions(database_root: &Path) -> usize {
+    match running_process_arguments() {
+        Some(arguments) => {
+            sweep_extensions(database_root, &arguments, std::time::SystemTime::now())
+        }
+        None => 0,
+    }
+}
+
+fn sweep_extensions(database_root: &Path, arguments: &str, now: std::time::SystemTime) -> usize {
+    let Ok(entries) = std::fs::read_dir(database_root) else {
+        return 0;
+    };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let extension = name.starts_with("memory-search-extension-")
+            && (name.ends_with(".mjs") || name.ends_with(".js"));
+        let temporary = name.starts_with(".memory-search-extension.") && name.ends_with(".tmp");
+        if !(extension || temporary) || arguments.contains(name.as_str()) {
+            continue;
+        }
+        // The entry's own metadata: a symbolic link is not followed or removed.
+        let old = entry.metadata().ok().is_some_and(|metadata| {
+            metadata.is_file()
+                && metadata
+                    .modified()
+                    .ok()
+                    .and_then(|modified| now.duration_since(modified).ok())
+                    .is_some_and(|age| age >= EXTENSION_SWEEP_MIN_AGE)
+        });
+        if old && std::fs::remove_file(entry.path()).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+/// The arguments of every running process, one per line.
+#[cfg(unix)]
+fn running_process_arguments() -> Option<String> {
+    let output = std::process::Command::new("/bin/ps")
+        .args(["axww", "-o", "args="])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Windows has no process list here, so the sweep keeps every file.
+#[cfg(not(unix))]
+fn running_process_arguments() -> Option<String> {
+    None
+}
+
 #[cfg(not(windows))]
 fn replace_extension(temporary: &Path, destination: &Path) -> std::io::Result<()> {
     std::fs::rename(temporary, destination)
@@ -862,9 +1055,87 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{mpsc, Arc, Barrier};
 
+    #[cfg(unix)]
+    fn aged(path: &Path, age: std::time::Duration) {
+        fs::write(path, "export default function () {}\n").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - age)
+            .unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_startup_sweep_removes_extensions_of_ended_sessions_only() {
+        let root = crate::state_root::test_root().join(Uuid::new_v4().to_string());
+        fs::create_dir_all(&root).unwrap();
+        let runtime = ApplicationMemoryRuntime::new(root.join("config"), root.clone());
+        let day = std::time::Duration::from_secs(24 * 60 * 60);
+        let ended_mjs = runtime.agent_extension_path("01a19206-af92-710f-8dee-dfab9ba6301a");
+        let ended_js = ended_mjs.with_extension("js");
+        let ended_tmp = root.join(".memory-search-extension.0190.tmp");
+        let running = runtime.agent_extension_path("thread-running");
+        let fresh = runtime.agent_extension_path("thread-fresh");
+        let index = root.join("memory-index.sqlite3");
+        for path in [&ended_mjs, &ended_js, &ended_tmp, &running, &index] {
+            aged(path, day);
+        }
+        aged(&fresh, std::time::Duration::from_secs(60));
+        let linked = root.join("memory-search-extension-linked.mjs");
+        std::os::unix::fs::symlink(&index, &linked).unwrap();
+        let arguments = format!(
+            "/usr/local/bin/bun pi --mode rpc --extension {}\n/sbin/launchd\n",
+            running.display()
+        );
+        assert_eq!(
+            sweep_extensions(&root, &arguments, std::time::SystemTime::now()),
+            3
+        );
+        for gone in [&ended_mjs, &ended_js, &ended_tmp] {
+            assert!(!gone.exists(), "{}", gone.display());
+        }
+        for kept in [&running, &fresh, &index, &linked] {
+            assert!(fs::symlink_metadata(kept).is_ok(), "{}", kept.display());
+        }
+        // A missing folder sweeps nothing.
+        assert_eq!(
+            sweep_extensions(&root.join("missing"), "", std::time::SystemTime::now()),
+            0
+        );
+        remove_root(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_startup_sweep_keeps_the_file_a_running_process_names() {
+        let root = crate::state_root::test_root().join(Uuid::new_v4().to_string());
+        fs::create_dir_all(&root).unwrap();
+        let runtime = ApplicationMemoryRuntime::new(root.join("config"), root.clone());
+        let live = runtime.agent_extension_path(&Uuid::new_v4().to_string());
+        let ended = runtime.agent_extension_path(&Uuid::new_v4().to_string());
+        let day = std::time::Duration::from_secs(24 * 60 * 60);
+        aged(&live, day);
+        aged(&ended, day);
+        // The child names the file in its arguments, as a live Pi does.
+        let mut child = std::process::Command::new("/bin/sh")
+            .args(["-c", "sleep 30; exit 0", "pi"])
+            .arg(&live)
+            .spawn()
+            .unwrap();
+        let removed = sweep_ended_extensions(&root);
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert_eq!(removed, 1);
+        assert!(live.exists());
+        assert!(!ended.exists());
+        remove_root(root);
+    }
+
     #[test]
     fn agent_facts_are_scoped_recoverable_and_recalled_after_reopen() {
-        let root = std::env::temp_dir().join(Uuid::new_v4().to_string());
+        let root = crate::state_root::test_root().join(Uuid::new_v4().to_string());
         fs::create_dir_all(&root).unwrap();
         let config = root.join("private");
         crate::home::confirm_home(&config, &root.join("muniment")).unwrap();
@@ -931,13 +1202,13 @@ mod tests {
         );
         crate::memory_files::fact_restore_in(&private, &home, &fact.id).unwrap();
         assert_eq!(crate::memory_files::facts_in(&home).unwrap().len(), 1);
-        fs::remove_dir_all(root).unwrap();
+        remove_root(root);
     }
 
     #[test]
     fn saved_and_extracted_facts_record_the_agent_or_chat_that_wrote_them() {
         use crate::memory_origin::{describe_facts, OriginKind};
-        let root = std::env::temp_dir().join(Uuid::new_v4().to_string());
+        let root = crate::state_root::test_root().join(Uuid::new_v4().to_string());
         fs::create_dir_all(&root).unwrap();
         let config = root.join("private");
         crate::home::confirm_home(&config, &root.join("muniment")).unwrap();
@@ -1037,7 +1308,8 @@ mod tests {
 
     #[test]
     fn the_message_tools_reach_an_agent_on_the_same_runtime() {
-        let root = std::env::temp_dir().join(format!("muniment-agent-message-{}", Uuid::new_v4()));
+        let root = crate::state_root::test_root()
+            .join(format!("muniment-agent-message-{}", Uuid::new_v4()));
         let config = root.join("config");
         fs::create_dir_all(&config).unwrap();
         crate::home::confirm_home(&config, &root.join("muniment")).unwrap();
@@ -1055,11 +1327,13 @@ mod tests {
         let tool = |name: &str, arguments: serde_json::Value| {
             runtime.agent_tool("run-two", name, &arguments.to_string())
         };
-        tool(
+        let planner = tool(
             "agent-save",
             serde_json::json!({"name": "Planner", "instructions": "Plan the work."}),
         )
         .unwrap();
+        // The thread is the planner's own, as its runs are.
+        crate::agents::assign(&config, thread, planner["agent"]["id"].as_str().unwrap()).unwrap();
         let analyst = crate::agents::save(
             &config,
             crate::agents::Agent {
@@ -1118,7 +1392,8 @@ mod tests {
 
     #[test]
     fn routine_tools_validate_and_store_every_trigger_kind() {
-        let root = std::env::temp_dir().join(format!("muniment-routines-{}", Uuid::new_v4()));
+        let root =
+            crate::state_root::test_root().join(format!("muniment-routines-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         let config = root.join("private");
         muniment_core::home::confirm_home(&config, &root.join("muniment")).unwrap();
@@ -1238,12 +1513,13 @@ mod tests {
         let run = tool("agent-run", serde_json::json!({"id": id})).unwrap();
         assert_eq!(run["run"]["trigger"]["kind"], "manual");
         assert_eq!(run["run"]["trigger"]["source"], "agent");
-        fs::remove_dir_all(root).unwrap();
+        remove_root(root);
     }
 
     #[test]
     fn chat_tools_and_manual_edits_share_agent_and_memory_files() {
-        let root = std::env::temp_dir().join(format!("muniment-harness-{}", Uuid::new_v4()));
+        let root =
+            crate::state_root::test_root().join(format!("muniment-harness-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         let config = root.join("private");
         let home = root.join("muniment");
@@ -1321,12 +1597,13 @@ mod tests {
                 r#"{"name":"No","instructions":"Closed"}"#
             )
             .is_err());
-        fs::remove_dir_all(root).unwrap();
+        remove_root(root);
     }
 
     #[test]
     fn agent_extension_parses_as_a_module_and_contains_the_session_scoped_declaration() {
-        let root = std::env::temp_dir().join(format!("muniment-app-memory-{}", Uuid::now_v7()));
+        let root =
+            crate::state_root::test_root().join(format!("muniment-app-memory-{}", Uuid::now_v7()));
         let home = root.join("home");
         fs::create_dir_all(home.join("memory")).unwrap();
         fs::write(home.join("memory/fact.md"), "saffron belongs in the pantry").unwrap();
@@ -1345,6 +1622,14 @@ mod tests {
         assert!(source.contains("pi.registerTool"));
         assert!(source.contains("memory-search"));
         assert!(source.contains("text: JSON.stringify(result)"));
+        // The declaration names the session's caps, so the model sees each maximum.
+        for maximum in [
+            r#"\"maximum\":5"#,
+            r#"\"maximum\":100"#,
+            r#"\"maximum\":250"#,
+        ] {
+            assert!(source.contains(maximum), "missing {maximum}");
+        }
         assert!(!source
             .split("name: 'memory-save'")
             .next()
@@ -1361,11 +1646,96 @@ mod tests {
             "The memory search extension must parse as an ES module: {}",
             String::from_utf8_lossy(&output.stderr)
         );
-        fs::remove_dir_all(root).unwrap();
+        remove_root(root);
+    }
+
+    #[test]
+    fn a_thread_extension_is_the_runs_and_keeps_no_session() {
+        let (root, runtime) = recall_runtime(None);
+        let hold = runtime
+            .write_thread_extension("thread-a", capability())
+            .unwrap();
+        let path = runtime.agent_extension_path("thread-a");
+        let written = fs::read(&path).unwrap();
+        assert!(runtime.sessions.lock().unwrap().is_empty());
+        assert!(runtime.contexts.lock().unwrap().is_empty());
+        // The run writes the same file. Its end keeps the file while the
+        // read's process holds it, and the hold's end removes it.
+        runtime
+            .open_session("run", "thread-a", capability())
+            .unwrap();
+        assert_eq!(fs::read(&path).unwrap(), written);
+        runtime.close_session("run");
+        assert!(path.is_file());
+        drop(hold);
+        assert!(!path.exists());
+        remove_root(root);
+    }
+
+    #[test]
+    fn a_read_only_threads_extension_goes_when_its_process_stops() {
+        let (root, runtime) = recall_runtime(None);
+        let path = runtime.agent_extension_path("thread-opened");
+        // Two reads of the thread: the file stays until both processes stop.
+        let first = runtime
+            .write_thread_extension("thread-opened", capability())
+            .unwrap();
+        let second = runtime
+            .write_thread_extension("thread-opened", capability())
+            .unwrap();
+        drop(first);
+        assert!(path.is_file(), "the second read's process still holds it");
+        drop(second);
+        assert!(!path.exists());
+        assert!(!EXTENSION_USES.lock().unwrap().contains_key(&path));
+
+        // A run of the thread keeps the file past the read's end, and the
+        // run's end removes it.
+        let read = runtime
+            .write_thread_extension("thread-opened", capability())
+            .unwrap();
+        runtime
+            .open_session("run", "thread-opened", capability())
+            .unwrap();
+        drop(read);
+        assert!(path.is_file(), "the open run still needs it");
+        runtime.close_session("run");
+        assert!(!path.exists());
+        remove_root(root);
+    }
+
+    #[test]
+    fn a_reads_process_that_stops_keeps_the_file_a_run_in_another_runtime_named() {
+        // The read and each run use their own memory runtime over one
+        // folder, as the runtime's context read and its runs do.
+        let (root, reads) = recall_runtime(None);
+        let runs = ApplicationMemoryRuntime::new(reads.config.clone(), reads.database_root.clone());
+        let thread = "thread-stopped";
+        let path = reads.agent_extension_path(thread);
+        let read = reads.write_thread_extension(thread, capability()).unwrap();
+
+        // The first run takes the read's process and the user stops it. Its
+        // end keeps the file the process still runs with.
+        runs.open_session("run-one", thread, capability()).unwrap();
+        runs.close_session("run-one");
+        assert!(path.is_file(), "the read's process still runs with it");
+
+        // The next run names the file, then stops the read's process, which
+        // it cannot take. The file stays for the process the run starts.
+        runs.open_session("run-two", thread, capability()).unwrap();
+        drop(read);
+        assert!(
+            path.is_file(),
+            "the run about to start Pi lost its extension"
+        );
+        runs.close_session("run-two");
+        assert!(!path.exists());
+        remove_root(root);
     }
 
     fn recall_runtime(settings: Option<RecallSettings>) -> (PathBuf, ApplicationMemoryRuntime) {
-        let root = std::env::temp_dir().join(format!("muniment-recall-{}", Uuid::now_v7()));
+        let root =
+            crate::state_root::test_root().join(format!("muniment-recall-{}", Uuid::now_v7()));
         fs::create_dir_all(&root).unwrap();
         let config = root.join("private");
         crate::home::confirm_home(&config, &root.join("muniment")).unwrap();
@@ -1376,10 +1746,39 @@ mod tests {
         (root, runtime)
     }
 
+    // A session's index build thread can still write under the root.
+    fn remove_root(root: PathBuf) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while fs::remove_dir_all(&root).is_err() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(!root.exists());
+    }
+
     fn capability() -> ModelMemoryCapability {
         ModelMemoryCapability {
             minimum_cacheable_prefix_characters: 8192,
         }
+    }
+
+    #[test]
+    fn a_thread_extension_goes_when_the_last_session_of_its_thread_ends() {
+        let (root, runtime) = recall_runtime(None);
+        let thread = "01900000-0000-7000-8000-000000000001";
+        runtime.open_session("one", thread, capability()).unwrap();
+        runtime.open_session("two", thread, capability()).unwrap();
+        let path = runtime.agent_extension_path(thread);
+        let older = path.with_extension("js");
+        fs::write(&older, "export default function () {}\n").unwrap();
+        runtime.close_session("one");
+        assert!(
+            path.is_file(),
+            "an open session of the thread still needs it"
+        );
+        runtime.close_session("two");
+        assert!(!path.exists());
+        assert!(!older.exists());
+        remove_root(root);
     }
 
     fn node_check(path: &Path) {
@@ -1445,7 +1844,7 @@ mod tests {
                     }
                     node_check(&path);
                     runtime.close_session("session");
-                    fs::remove_dir_all(root).unwrap();
+                    remove_root(root);
                 }
             }
         }
@@ -1513,7 +1912,7 @@ console.log(JSON.stringify({
             .unwrap()
             .contains("Example: {\"questions\""));
         runtime.close_session("session");
-        fs::remove_dir_all(root).unwrap();
+        remove_root(root);
     }
 
     #[test]
@@ -1576,7 +1975,7 @@ console.log(JSON.stringify([await run(['Save']), await run(["Don't save"]), awai
                 serde_json::json!({"saved": false, "declined": true})
             );
         }
-        fs::remove_dir_all(root).unwrap();
+        remove_root(root);
     }
 
     #[test]
@@ -1629,7 +2028,7 @@ console.log(JSON.stringify([await run(['Save']), await run(["Don't save"]), awai
             Err(MemoryIndexError::InvalidToolArguments)
         ));
         runtime.close_session("session");
-        fs::remove_dir_all(root).unwrap();
+        remove_root(root);
     }
 
     #[test]
@@ -1682,7 +2081,7 @@ console.log(JSON.stringify([await run(['Save']), await run(["Don't save"]), awai
         assert_eq!(result.recall.files.len(), 2);
         assert!(result.recall.files.contains(&"memory/notes.md".to_owned()));
         runtime.close_session("session");
-        fs::remove_dir_all(root).unwrap();
+        remove_root(root);
     }
 
     #[test]
@@ -1722,12 +2121,7 @@ console.log(JSON.stringify([await run(['Save']), await run(["Don't save"]), awai
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
             assert_eq!(calls.load(Ordering::SeqCst), expected, "{learn} {message}");
-            // The session's index build thread can still write under the root.
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-            while fs::remove_dir_all(&root).is_err() && std::time::Instant::now() < deadline {
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-            assert!(!root.exists());
+            remove_root(root);
         }
     }
 
@@ -1743,12 +2137,13 @@ console.log(JSON.stringify([await run(['Save']), await run(["Don't save"]), awai
             )
             .is_err());
         assert!(runtime.session("session").is_none());
-        fs::remove_dir_all(root).unwrap();
+        remove_root(root);
     }
 
     #[test]
     fn a_timed_out_session_build_does_not_block_the_extension() {
-        let root = std::env::temp_dir().join(format!("muniment-app-memory-{}", Uuid::now_v7()));
+        let root =
+            crate::state_root::test_root().join(format!("muniment-app-memory-{}", Uuid::now_v7()));
         let home = root.join("home");
         fs::create_dir_all(home.join("memory")).unwrap();
         fs::write(home.join("memory/fact.md"), "saffron belongs in the pantry").unwrap();
@@ -1767,12 +2162,13 @@ console.log(JSON.stringify([await run(['Save']), await run(["Don't save"]), awai
         runtime.write_agent_extension("session-1").unwrap();
 
         assert!(runtime.agent_extension_path("thread-1").exists());
-        fs::remove_dir_all(root).unwrap();
+        remove_root(root);
     }
 
     #[test]
     fn a_search_right_after_open_reads_the_built_index() {
-        let root = std::env::temp_dir().join(format!("muniment-app-memory-{}", Uuid::now_v7()));
+        let root =
+            crate::state_root::test_root().join(format!("muniment-app-memory-{}", Uuid::now_v7()));
         let home = root.join("home");
         fs::create_dir_all(home.join("memory")).unwrap();
         fs::write(home.join("memory/fact.md"), "saffron belongs in the pantry").unwrap();
@@ -1792,12 +2188,13 @@ console.log(JSON.stringify([await run(['Save']), await run(["Don't save"]), awai
             .unwrap();
 
         assert_eq!(result.items.len(), 1);
-        fs::remove_dir_all(root).unwrap();
+        remove_root(root);
     }
 
     #[test]
     fn a_slow_build_in_one_session_does_not_block_another_session_search() {
-        let root = std::env::temp_dir().join(format!("muniment-app-memory-{}", Uuid::now_v7()));
+        let root =
+            crate::state_root::test_root().join(format!("muniment-app-memory-{}", Uuid::now_v7()));
         let home = root.join("home");
         fs::create_dir_all(home.join("memory")).unwrap();
         fs::write(home.join("memory/fact.md"), "saffron belongs in the pantry").unwrap();
@@ -1851,12 +2248,13 @@ console.log(JSON.stringify([await run(['Save']), await run(["Don't save"]), awai
         search.join().unwrap();
 
         assert_eq!(result.unwrap().unwrap().items.len(), 1);
-        fs::remove_dir_all(root).unwrap();
+        remove_root(root);
     }
 
     #[test]
     fn dispatch_for_a_closed_session_returns_invalid_tool_arguments() {
-        let root = std::env::temp_dir().join(format!("muniment-app-memory-{}", Uuid::now_v7()));
+        let root =
+            crate::state_root::test_root().join(format!("muniment-app-memory-{}", Uuid::now_v7()));
         fs::create_dir_all(&root).unwrap();
         let runtime = ApplicationMemoryRuntime::new(root.join("config"), root.join("cache"));
         runtime.insert_session(
@@ -1875,12 +2273,13 @@ console.log(JSON.stringify([await run(['Save']), await run(["Don't save"]), awai
             .unwrap_err();
 
         assert!(matches!(error, MemoryIndexError::InvalidToolArguments));
-        fs::remove_dir_all(root).unwrap();
+        remove_root(root);
     }
 
     #[test]
     fn concurrent_agent_extension_writes_never_expose_partial_source() {
-        let root = std::env::temp_dir().join(format!("muniment-app-memory-{}", Uuid::now_v7()));
+        let root =
+            crate::state_root::test_root().join(format!("muniment-app-memory-{}", Uuid::now_v7()));
         let runtime = Arc::new(ApplicationMemoryRuntime::new(
             root.join("config"),
             root.join("cache"),
@@ -1927,6 +2326,6 @@ console.log(JSON.stringify([await run(['Save']), await run(["Don't save"]), awai
             fs::read(runtime.agent_extension_path("thread-1")).unwrap(),
             expected
         );
-        fs::remove_dir_all(root).unwrap();
+        remove_root(root);
     }
 }

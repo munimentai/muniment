@@ -49,7 +49,10 @@ focused local checks while you develop:
 
 Core tests that spawn stub processes run with `--test-threads=1`. Tests never
 write the owner's runtime logs: a test run logs under a temporary directory,
-and a test that starts a runtime binary sets `MUNIMENT_LOG_DIR` for it. Keep edition,
+and a test that starts a runtime binary sets `MUNIMENT_LOG_DIR` for it. Tests never
+write the owner's `~/.muniment` or `~/Documents/muniment`: a test run that names no
+`MUNIMENT_STATE_DIR` and keeps the owner's home gets temporary ones, and
+`state_root::guard_owner_data` panics on a write that escapes. Keep edition,
 dependency versions and `Cargo.lock` stable unless the change is a dependency
 update.
 

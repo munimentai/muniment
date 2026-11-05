@@ -10,7 +10,7 @@ use std::{
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 fn fixture_temp_dir() -> PathBuf {
-    let path = std::env::temp_dir().join(format!(
+    let path = muniment_atomic_file::test_root::test_root().join(format!(
         "muniment-attach-fixtures-{}-{}",
         std::process::id(),
         TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
@@ -745,6 +745,33 @@ fn authorized_round_trips_and_ignores_future_optional_fields() {
     assert_eq!(
         serde_json::from_value::<Authorized>(value).unwrap(),
         message
+    );
+}
+
+#[test]
+fn an_ephemeral_credential_is_marked_on_the_wire_and_a_stored_one_is_not() {
+    let message = authorized(
+        "profile-id",
+        "connection-capability",
+        3600,
+        900,
+        Default::default(),
+    );
+    let stored = serde_json::to_value(&message).unwrap();
+    assert!(stored.get("credential_ephemeral").is_none());
+    assert!(
+        !serde_json::from_value::<Authorized>(stored)
+            .unwrap()
+            .credential_ephemeral
+    );
+
+    let ephemeral = message.with_ephemeral_credential();
+    let value = serde_json::to_value(&ephemeral).unwrap();
+    assert_eq!(value["credential_ephemeral"], true);
+    let encoded = encode_frame(&ephemeral).unwrap();
+    assert_eq!(
+        decode_frame::<Authorized>(&encoded).unwrap().unwrap().0,
+        ephemeral
     );
 }
 

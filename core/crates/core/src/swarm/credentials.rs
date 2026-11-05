@@ -64,7 +64,7 @@ pub(super) struct PassClock {
     last: Option<Instant>,
     running: bool,
     dirty: bool,
-    interval: Option<Duration>,
+    held: bool,
 }
 
 fn agent_directory(inner: &Inner) -> std::path::PathBuf {
@@ -80,8 +80,8 @@ fn sharing(inner: &Inner) -> Result<bool, String> {
     Ok(inner.store.meta("fleet_share_models")?.as_deref() == Some("1"))
 }
 
-pub(super) fn set_interval(inner: &Inner, interval: Duration) {
-    lock(&inner.fleet.pass).interval = Some(interval);
+pub(super) fn hold(inner: &Inner) {
+    lock(&inner.fleet.pass).held = true;
 }
 
 /// Asks for a reseal pass soon.
@@ -95,9 +95,11 @@ fn mark_dirty(inner: &Inner) {
 pub(super) fn maybe_pass(inner: &Arc<Inner>) {
     {
         let mut clock = lock(&inner.fleet.pass);
-        let interval = clock.interval.unwrap_or(PASS_INTERVAL);
-        let due = clock.dirty || clock.last.is_none_or(|last| last.elapsed() >= interval);
-        if clock.running || !due {
+        let due = clock.dirty
+            || clock
+                .last
+                .is_none_or(|last| last.elapsed() >= PASS_INTERVAL);
+        if clock.running || clock.held || !due {
             return;
         }
         clock.running = true;

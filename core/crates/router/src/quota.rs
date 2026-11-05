@@ -126,6 +126,26 @@ pub struct Quota {
 }
 
 impl Quota {
+    /// Whether two probes say the same about the account, whenever each was
+    /// taken. A reset a second or less apart is the same reset: upstreams
+    /// report it with jitter in the milliseconds.
+    pub fn same_reading(&self, other: &Quota) -> bool {
+        self.plan == other.plan
+            && self.email == other.email
+            && self.banked_resets == other.banked_resets
+            && self.windows.len() == other.windows.len()
+            && self.windows.iter().zip(&other.windows).all(|(a, b)| {
+                a.kind == b.kind
+                    && a.scope == b.scope
+                    && a.used_percent == b.used_percent
+                    && a.limit_reached == b.limit_reached
+                    && match (a.resets_at_ms, b.resets_at_ms) {
+                        (Some(a), Some(b)) => a.abs_diff(b) <= 1000,
+                        (a, b) => a == b,
+                    }
+            })
+    }
+
     /// The account-wide window that limits most turns: weekly when there is
     /// one, else five-hour, else the first.
     pub fn headline(&self) -> Option<&Window> {
@@ -912,13 +932,47 @@ pub fn quota_path(agent: &Path) -> PathBuf {
     agent.join(QUOTA_FILE)
 }
 
+/// When this process last probed each account and learned nothing new, by
+/// agent folder and account id. Such a probe stays out of the file, and
+/// [`load`] still answers its time.
+static OBSERVED: std::sync::Mutex<BTreeMap<(PathBuf, String), i64>> =
+    std::sync::Mutex::new(BTreeMap::new());
+
 /// Reads the store, or an empty one. A damaged store reads as empty: a lost
 /// snapshot is refreshed by the next probe, and it must never stop a turn.
 pub fn load(agent: &Path) -> QuotaStore {
-    fs::read(quota_path(agent))
+    let mut store: QuotaStore = fs::read(quota_path(agent))
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let observed = OBSERVED.lock().unwrap_or_else(|error| error.into_inner());
+    for (id, quota) in &mut store.accounts {
+        if let Some(at) = observed.get(&(agent.to_path_buf(), id.clone())) {
+            quota.observed_at_ms = quota.observed_at_ms.max(*at);
+        }
+    }
+    store
+}
+
+/// Keeps one account's probe. A probe that says what the held one says
+/// leaves the file as it is, and only this process learns its newer time.
+/// The caller holds the store's write lock.
+pub fn record(agent: &Path, id: &str, quota: Quota) -> io::Result<()> {
+    let mut store = load(agent);
+    let key = (agent.to_path_buf(), id.to_owned());
+    let mut observed = OBSERVED.lock().unwrap_or_else(|error| error.into_inner());
+    if store
+        .accounts
+        .get(id)
+        .is_some_and(|held| held.same_reading(&quota))
+    {
+        observed.insert(key, quota.observed_at_ms);
+        return Ok(());
+    }
+    observed.remove(&key);
+    drop(observed);
+    store.accounts.insert(id.to_owned(), quota);
+    save(agent, &store)
 }
 
 pub fn save(agent: &Path, store: &QuotaStore) -> io::Result<()> {
@@ -1193,8 +1247,8 @@ mod tests {
 
     #[test]
     fn the_store_reads_back_and_a_damaged_one_reads_as_empty() {
-        let agent =
-            std::env::temp_dir().join(format!("muniment-router-quota-{}", uuid::Uuid::now_v7()));
+        let agent = muniment_atomic_file::test_root::test_root()
+            .join(format!("muniment-router-quota-{}", uuid::Uuid::now_v7()));
         fs::create_dir_all(&agent).unwrap();
         let mut store = QuotaStore::default();
         store
@@ -1204,6 +1258,39 @@ mod tests {
         assert_eq!(load(&agent), store);
         fs::write(quota_path(&agent), b"nope").unwrap();
         assert_eq!(load(&agent), QuotaStore::default());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_idle_probe_that_learns_nothing_new_writes_nothing() {
+        use std::os::unix::fs::MetadataExt;
+        let agent = muniment_atomic_file::test_root::test_root().join(format!(
+            "muniment-router-quota-idle-{}",
+            uuid::Uuid::now_v7()
+        ));
+        fs::create_dir_all(&agent).unwrap();
+        let first = parse_codex(&codex_pro(), 5).unwrap();
+        record(&agent, "a1", first.clone()).unwrap();
+        let path = quota_path(&agent);
+        let (inode, bytes) = (fs::metadata(&path).unwrap().ino(), fs::read(&path).unwrap());
+        // Two minutes on, the same windows with a reset a few milliseconds off.
+        let mut again = first.clone();
+        again.observed_at_ms = 120_005;
+        for window in &mut again.windows {
+            window.resets_at_ms = window.resets_at_ms.map(|at| at + 9);
+        }
+        record(&agent, "a1", again).unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().ino(), inode);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert_eq!(load(&agent).accounts["a1"].observed_at_ms, 120_005);
+        // A window that moved is news, and the file takes it.
+        let mut moved = first;
+        moved.observed_at_ms = 240_005;
+        moved.windows[0].used_percent += 1.0;
+        record(&agent, "a1", moved.clone()).unwrap();
+        assert_ne!(fs::metadata(&path).unwrap().ino(), inode);
+        assert_eq!(load(&agent).accounts["a1"], moved);
+        let _ = fs::remove_dir_all(agent);
     }
 
     #[test]

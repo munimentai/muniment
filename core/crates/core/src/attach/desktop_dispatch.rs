@@ -681,12 +681,16 @@ fn redacted_run_open_event(
 
 /// Sends a forwardable action on an item another swarm member owns to that
 /// member, and answers the forwarding answer. `None` runs the request here.
+/// A `thread.delete` always runs here too, and forwards itself as it runs.
 pub(super) fn route_to_owner<S: ThreadListService + ?Sized>(
     service: &mut S,
     request: &Request,
     actor: &crate::swarm::FleetActor,
 ) -> Result<Option<serde_json::Value>, ProtocolError> {
-    if !crate::swarm::is_forwardable(request.operation) || !request.body.is_object() {
+    if !crate::swarm::is_forwardable(request.operation)
+        || request.operation == Operation::ThreadDelete
+        || !request.body.is_object()
+    {
         return Ok(None);
     }
     request.validate_idempotency_key()?;
@@ -1652,15 +1656,33 @@ pub(super) fn dispatch_request<S: ThreadListService>(
             #[serde(default)]
             search: Option<String>,
         }
-        let body: Body = serde_json::from_value(request.body.clone())
-            .map_err(|_| ProtocolError::invalid_request())?;
+        let body: Body = serde_json::from_value(request.body.clone()).map_err(|_| {
+            ProtocolError::invalid_request_with_reason(
+                "The record request has a field this tool does not take.",
+            )
+        })?;
         let bounded = |value: &Option<String>, limit: usize| {
             value
                 .as_deref()
                 .is_none_or(|text| !text.is_empty() && text.len() <= limit)
         };
-        if !bounded(&body.company_id, 36) || !bounded(&body.client, 128) {
-            return Err(ProtocolError::invalid_request().into());
+        for (field, value, limit, empty) in [
+            (
+                "company_id",
+                &body.company_id,
+                36,
+                "company_id is empty. Omit it for the current company.",
+            ),
+            ("client", &body.client, 128, "client is empty."),
+        ] {
+            if !bounded(value, limit) {
+                let reason = if value.as_deref() == Some("") {
+                    empty.to_owned()
+                } else {
+                    format!("{field} is longer than {limit} characters.")
+                };
+                return Err(ProtocolError::invalid_request_with_reason(reason).into());
+            }
         }
         let valid = match request.operation {
             Operation::RecordSql => {
@@ -1864,14 +1886,28 @@ pub(super) fn dispatch_request<S: ThreadListService>(
             serde_json::from_value(request.body).map_err(|_| ProtocolError::invalid_request())?;
         let thread_id =
             super::Id::new(body.thread_id).map_err(|_| ProtocolError::invalid_request())?;
-        service.delete_thread(
+        // A synced copy of another member's thread asks that owner to delete
+        // the thread, queued while it is away, and its delete then reaches
+        // every member. An owner that cannot take it keeps its thread.
+        if let Err(error) = service.fleet_route(
+            Operation::ThreadDelete,
+            &serde_json::json!({"thread_id": thread_id.as_str()}),
+            &crate::swarm::FleetActor::owner(),
+            Some(idempotency_key.as_str()),
+        ) {
+            crate::runtime_eprintln!(
+                "muniment-runtime: thread delete not forwarded thread_id={} error={error:?}",
+                thread_id.as_str()
+            );
+        }
+        let answer = service.delete_thread(
             workspace,
             &thread_id,
             &request.request_id,
             idempotency_key,
             provenance,
         )?;
-        return Ok(response_only(serde_json::json!({})));
+        return Ok(response_only(answer));
     }
     if request.operation == Operation::RunCursorAck {
         #[derive(serde::Deserialize)]

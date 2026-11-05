@@ -3,6 +3,8 @@
 // `agent.list` and the swarm directory, and sends `agent.activity` when it
 // changes. These helpers only pick the newest report and name it.
 
+import { runFailureText } from '../lib/run-failure.js'
+
 const STATES = new Set(['idle', 'running', 'waiting', 'error'])
 
 export function activityState(activity) {
@@ -16,7 +18,10 @@ export function activityLabel(activity) {
   const action = String(activity?.action ?? '').replaceAll('`', '').trim()
   if (state === 'running') return action ? `Running: ${action}` : 'Running'
   if (state === 'waiting') return action ? `Waiting for you: ${action}` : 'Waiting for you'
-  if (state === 'error') return action ? `Last run failed: ${action}` : 'Last run failed'
+  if (state === 'error') {
+    const reason = runFailureText(action)
+    return reason ? `Last run failed: ${reason}` : 'Last run failed'
+  }
   return 'Idle'
 }
 

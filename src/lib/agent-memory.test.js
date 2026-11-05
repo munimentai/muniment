@@ -32,6 +32,23 @@ it('loads and replaces a profile, then saves and deletes a sourced fact', async 
   await waitFor(() => expect(invoke).toHaveBeenCalledWith('memory_fact_delete', { id: 'fact-1' }))
 })
 
+it('keeps Save profile off while the profile matches the saved one', async () => {
+  const invoke = vi.fn(async (cmd) => cmd === 'memory_profile_read' ? '# Profile\n\n## Name\n\nSam\n' : cmd === 'memory_facts' ? [] : null)
+  render(MemorySection, { tauri: { invoke }, part: 'profile' })
+  const name = screen.getByLabelText('Name')
+  await waitFor(() => expect(name).toHaveValue('Sam'))
+  const save = screen.getByRole('button', { name: 'Save profile' })
+  expect(save).toBeDisabled()
+  await fireEvent.input(name, { target: { value: 'Alex' } })
+  expect(save).toBeEnabled()
+  await fireEvent.input(name, { target: { value: 'Sam' } })
+  expect(save).toBeDisabled()
+  await fireEvent.input(name, { target: { value: 'Alex' } })
+  await fireEvent.click(save)
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('memory_profile_save', { content: expect.stringContaining('## Name\n\nAlex') }))
+  await waitFor(() => expect(save).toBeDisabled())
+})
+
 it('starts agent creation in chat without a manual form', async () => {
   const invoke=vi.fn(async()=>({agents:[],state:{runs:{},threads:{}}}))
   const oncreate=vi.fn()
@@ -41,10 +58,31 @@ it('starts agent creation in chat without a manual form', async () => {
   expect(screen.queryByLabelText('Name')).not.toBeInTheDocument()
   expect(invoke).not.toHaveBeenCalledWith('agent_save',expect.anything())
 })
+it('reads a draft card by its newest draft, else by the message, and says a delete removes the draft chat', async () => {
+  const invoke=vi.fn(async()=>({agents:[],state:{runs:{},threads:{}}}))
+  const turn=(message,instructions)=>({message,at:'2026-10-19T10:00:00Z',reply:instructions?{draft:{name:'Inbox brief',instructions},question:null,via:'router'}:null})
+  const drafted={threadId:'c1',kind:'agent',goal:'Inbox brief',output:'',resultId:null,turns:[turn('Brief my inbox','Summarize the inbox.'),turn('Add replies','Summarize the inbox and list replies.')]}
+  const asked={threadId:'c2',kind:'agent',goal:'Notes',output:'',resultId:null,turns:[turn('Tidy my notes folder')]}
+  render(AgentManager,{tauri:{invoke},pending:[drafted,asked],onopen:vi.fn(),oncreate:vi.fn(),onclose:vi.fn()})
+  expect(await screen.findByText('Summarize the inbox and list replies.')).toBeInTheDocument()
+  expect(screen.getByText('Tidy my notes folder')).toBeInTheDocument()
+  expect(screen.queryByText('Draft agent. Describe its task to shape it.')).toBeNull()
+  await fireEvent.click(screen.getByRole('button',{name:'Actions for Inbox brief'}))
+  await fireEvent.click(screen.getByRole('menuitem',{name:'Delete'}))
+  expect(screen.getByText('Its draft chat is deleted. Files you added stay.')).toBeInTheDocument()
+  expect(screen.queryByText('Saved files and chat history stay.')).toBeNull()
+})
 it('opens an existing agent dedicated chat', async () => {
   const invoke=vi.fn(async()=>({agents:[{id:'scout',name:'Scout',instructions:'Find sources.'}],state:{runs:{},threads:{}}}))
   const onselect=vi.fn()
   render(AgentManager,{tauri:{invoke},onselect,oncreate:vi.fn(),onclose:vi.fn()})
   await fireEvent.click(within(await screen.findByRole('article',{name:'Scout'})).getByRole('button',{name:'Open chat'}))
   expect(onselect).toHaveBeenCalledWith(expect.objectContaining({id:'scout'}))
+})
+it('reads an unsaved agent draft card as a draft, never as a saved agent', async () => {
+  const invoke=vi.fn(async()=>({agents:[],state:{runs:{},threads:{}}}))
+  const plan={threadId:'c1',kind:'agent',goal:'Create a reusable agent for my work',output:'A saved agent with a clear task, instructions, and expected output',resultId:null,turns:[]}
+  render(AgentManager,{tauri:{invoke},pending:[plan],onopen:vi.fn(),oncreate:vi.fn(),onclose:vi.fn()})
+  expect(await screen.findByText('Draft agent. Describe its task to shape it.')).toBeInTheDocument()
+  expect(screen.queryByText(/A saved agent/)).toBeNull()
 })

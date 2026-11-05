@@ -1,6 +1,7 @@
 use muniment_attach::{
-    handshake_as_with_credential, ClientError, Id, PendingPermission, PermissionDecision,
-    RedactedRunEvent, RunStreamMessage, ThreadListPage, ThreadOpenPage,
+    handshake_as_with_credential, ClientError, ErrorCode, ErrorDetails, Id, PendingPermission,
+    PermissionDecision, ProtocolError, RedactedRunEvent, RunStreamMessage, ThreadListPage,
+    ThreadOpenPage,
 };
 use std::ffi::OsString;
 use std::io::{self, BufRead, IsTerminal, Read, Write};
@@ -103,7 +104,7 @@ fn run_command(mut args: Vec<OsString>) -> Result<(), CliError> {
             || {},
         )
         .map_err(CliError::Client)?;
-        persist_authorized_client_credential(client.authorized_client_credential())?;
+        keep_authorized_client_credential(&client)?;
         client
             .onboard_workspace(&opened.to_string_lossy(), &workspace.to_string_lossy())
             .map_err(CliError::Client)?;
@@ -127,7 +128,7 @@ fn run_command(mut args: Vec<OsString>) -> Result<(), CliError> {
                 client_credential.as_deref(),
                 pairing_pending,
             )?;
-            persist_authorized_client_credential(client.authorized_client_credential())
+            keep_authorized_client_credential(&client)
                 .map_err(|_| ClientError::UnexpectedMessage)?;
             client.onboard_workspace(&opened.to_string_lossy(), &workspace.to_string_lossy())?;
             if args.first().is_some_and(|command| command == "threads") {
@@ -178,6 +179,7 @@ impl RuntimeRecordBackend {
         match call(client, body) {
             Ok(answer) => Ok(answer),
             Err(error) => {
+                let refusal = client.last_request_error().cloned();
                 if matches!(
                     error,
                     ClientError::ConnectionClosed
@@ -188,7 +190,7 @@ impl RuntimeRecordBackend {
                 ) {
                     self.client = None;
                 }
-                Err(format!("{error}. {}", record_guidance(&error)))
+                Err(record_failure(&error, refusal.as_ref()))
             }
         }
     }
@@ -205,6 +207,45 @@ impl mcp::RecordBackend for RuntimeRecordBackend {
 
     fn commit(&mut self, body: serde_json::Value) -> Result<serde_json::Value, String> {
         self.call(|client, body| client.record_commit(body), body)
+    }
+}
+
+/// The text the agent reads when a record call fails. A refusal the runtime
+/// sent reads as the reason it names, and only a retryable one asks for a
+/// retry.
+fn record_failure(error: &ClientError, refusal: Option<&ProtocolError>) -> String {
+    let Some(refusal) = refusal else {
+        return format!("{error}. {}", record_guidance(error));
+    };
+    let reason = match refusal.details() {
+        Some(ErrorDetails::RequestReason { reason }) => reason.trim_end_matches('.').to_owned(),
+        _ => serde_json::to_value(refusal.message())
+            .ok()
+            .and_then(|message| {
+                message
+                    .as_str()
+                    .map(|text| text.trim_end_matches('.').to_owned())
+            })
+            .unwrap_or_else(|| error.to_string()),
+    };
+    let guidance = if refusal.retryable() {
+        "Try the call again."
+    } else {
+        match refusal.code() {
+            ErrorCode::InvalidRequest | ErrorCode::MalformedFrame | ErrorCode::PayloadTooLarge => {
+                "Change the arguments, then call the tool again."
+            }
+            ErrorCode::ProtocolIncompatible | ErrorCode::UnsupportedOperation => {
+                "Update Muniment, then call the tool again."
+            }
+            ErrorCode::Unauthorized | ErrorCode::AuthorizationFailed => record_guidance(error),
+            _ => "",
+        }
+    };
+    if guidance.is_empty() {
+        format!("{reason}.")
+    } else {
+        format!("{reason}. {guidance}")
     }
 }
 
@@ -267,8 +308,7 @@ fn connect_record_client(
         || eprintln!("muniment: approve this harness in the Muniment desktop to reach the record."),
     )
     .map_err(|error| format!("{error}. {}", record_guidance(&error)))?;
-    persist_authorized_client_credential(client.authorized_client_credential())
-        .map_err(|error| guidance(&error).to_owned())?;
+    keep_authorized_client_credential(&client).map_err(|error| guidance(&error).to_owned())?;
     client
         .onboard_workspace(opened, workspace)
         .map_err(|error| format!("{error}. {}", record_guidance(&error)))?;
@@ -352,6 +392,31 @@ fn authorized_client_credential() -> Result<Option<String>, CliError> {
         Ok(_) => Err(CliError::Workspace),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(_) => Err(CliError::Workspace),
+    }
+}
+
+/// Stores the client's credential for the next run, unless the runtime made
+/// it ephemeral. An ephemeral credential stays in this process, so a later run
+/// from a terminal never finds it, and the credential the user approved stays.
+fn keep_authorized_client_credential(
+    client: &muniment_attach::AuthorizedClient,
+) -> Result<(), CliError> {
+    keep_credential(
+        client.credential_persists(),
+        client.authorized_client_credential(),
+        persist_authorized_client_credential,
+    )
+}
+
+fn keep_credential(
+    persists: bool,
+    credential: &str,
+    store: impl FnOnce(&str) -> Result<(), CliError>,
+) -> Result<(), CliError> {
+    if persists {
+        store(credential)
+    } else {
+        Ok(())
     }
 }
 
@@ -854,6 +919,23 @@ fn one_line(value: &str) -> String {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_ephemeral_credential_is_never_stored() {
+        let mut stored = Vec::new();
+        keep_credential(false, "ephemeral", |credential| {
+            stored.push(credential.to_owned());
+            Ok(())
+        })
+        .unwrap();
+        assert!(stored.is_empty());
+        keep_credential(true, "approved", |credential| {
+            stored.push(credential.to_owned());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(stored, ["approved"]);
+    }
     use muniment_attach::{
         authorized, encode_frame, handshake_stream, welcome, ErrorEnvelope, Event, EventName,
         Failure, Id, Protocol, ProtocolError, RedactedThreadSummary, Response, Success,
@@ -928,6 +1010,51 @@ mod tests {
         assert_eq!(metadata.uid(), unix_abi::effective_uid());
         assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn record_failure_reads_the_refusal_reason_and_asks_a_retry_only_when_retryable() {
+        let invalid = ProtocolError::invalid_request_with_reason("company_id is empty");
+        assert_eq!(
+            record_failure(&ClientError::RequestRejected, Some(&invalid)),
+            "company_id is empty. Change the arguments, then call the tool again."
+        );
+        let plain = record_failure(
+            &ClientError::RequestRejected,
+            Some(&ProtocolError::invalid_request()),
+        );
+        assert_eq!(
+            plain,
+            "The request is invalid. Change the arguments, then call the tool again."
+        );
+        let missing = record_failure(
+            &ClientError::RequestRejected,
+            Some(&ProtocolError::transfer_not_found()),
+        );
+        assert_eq!(missing, "The artifact transfer was not found.");
+        let busy = record_failure(
+            &ClientError::RequestRejected,
+            Some(&ProtocolError::desktop_busy()),
+        );
+        assert_eq!(
+            busy,
+            "The desktop is busy with another request. Try the call again."
+        );
+        for refusal in [
+            invalid,
+            ProtocolError::invalid_request(),
+            ProtocolError::transfer_not_found(),
+            ProtocolError::unsupported_operation(),
+        ] {
+            assert!(
+                !record_failure(&ClientError::RequestRejected, Some(&refusal))
+                    .contains("Try the call again")
+            );
+        }
+        assert_eq!(
+            record_failure(&ClientError::DesktopUnavailable, None),
+            "the Muniment desktop attach service is unavailable. Open the Muniment desktop, then try again."
+        );
     }
 
     #[test]

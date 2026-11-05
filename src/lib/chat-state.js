@@ -1,6 +1,8 @@
+import { markdownPlainText } from './assistant-markdown.js'
 import { modelLabel, modelReason, receiptNames } from './model-label.js'
 import { shortcutDisplayLabel } from './artifact-rail-state.js'
 import { receiptTime } from './execution-time.js'
+import { runFailureRaw, runFailureText } from './run-failure.js'
 import { formatClock } from './time-format.svelte.js'
 
 export function composerAction(event, text, active) {
@@ -183,7 +185,7 @@ export function toolVerb(name = '') {
   return 'Working'
 }
 
-const stageWords = { 'choosing-model': 'Choosing model', 'waiting-for-account': 'Waiting for account', fallback: 'Trying another route', routing: 'Routing', thinking: 'Thinking', writing: 'Writing' }
+const stageWords = { 'choosing-model': 'Choosing model', 'waiting-for-account': 'Waiting for account', fallback: 'Trying another route', routing: 'Starting', thinking: 'Thinking', writing: 'Writing' }
 
 export function stageWord(stage = 'routing') {
   if (typeof stage === 'string' && stage.startsWith('tool:')) {
@@ -192,23 +194,29 @@ export function stageWord(stage = 'routing') {
   }
   if (stage === 'folder-access') return 'macOS is asking for access to this folder. Choose Allow.'
   if (typeof stage === 'string' && stage.startsWith('folder-access:')) return `macOS is asking for access to ${stage.slice('folder-access:'.length)}. Choose Allow.`
+  // Pi tries a failed model call again: `retrying:<attempt>:<attempts>[:<server>]`.
+  if (typeof stage === 'string' && stage.startsWith('retrying:')) {
+    const [attempt, attempts, ...server] = stage.slice('retrying:'.length).split(':')
+    const name = server.join(':')
+    return `${name ? `${name} is not answering` : 'The model did not answer'}. Retrying (${attempt} of ${attempts})…`
+  }
   return stageWords[stage] ?? stageWords.routing
 }
 
 // A projection names what the run does now: the tool that runs, text that grew
-// since the last projection, or the thought between them. Routing holds until
+// since the last projection, or the thought between them. Starting holds until
 // the runtime reports the started turn.
 export function runStage(previous, next) {
   const running = [...(next.toolActivity ?? [])].reverse().find((tool) => tool.status === 'running')
   if (running) return `tool:${running.displayName ?? ''}${running.presentation?.progress ? `\n${running.presentation.progress}` : ''}`
   if (next.routingStage && ['choosing-model', 'waiting-for-account', 'fallback', 'thinking'].includes(next.routingStage)) return next.routingStage
   // The run waits on a macOS consent prompt for its folder.
-  if (typeof next.routingStage === 'string' && (next.routingStage === 'folder-access' || next.routingStage.startsWith('folder-access:'))) return next.routingStage
+  if (typeof next.routingStage === 'string' && (next.routingStage === 'folder-access' || next.routingStage.startsWith('folder-access:') || next.routingStage.startsWith('retrying:'))) return next.routingStage
   // A restored run has no earlier projection: its phase names the word.
   if (!previous) return next.phase === 'streaming' ? 'writing' : next.turnStarted || next.text ? 'thinking' : 'routing'
   if ((next.text ?? '').length > (previous.text ?? '').length) return 'writing'
   if ((previous.toolActivity ?? []).some((tool) => tool.status === 'running')) return 'thinking'
-  if (previous.stage && !['routing', 'choosing-model', 'waiting-for-account', 'fallback'].includes(previous.stage) && !previous.stage.startsWith('folder-access')) return previous.stage
+  if (previous.stage && !['routing', 'choosing-model', 'waiting-for-account', 'fallback'].includes(previous.stage) && !previous.stage.startsWith('folder-access') && !previous.stage.startsWith('retrying:')) return previous.stage
   return next.turnStarted ? 'thinking' : 'routing'
 }
 
@@ -225,51 +233,21 @@ const runPhaseAnnouncements = {
   interrupted: 'Reply interrupted.',
 }
 
-// Strip known retry guidance, not punctuation inside file names or recorded causes.
-const retryGuidance = new RegExp(`(?:^|(?<=[.!?])\\s)(?:${[
-  'Try again',
-  'Check the key and try again',
-  'Check the files and try again',
-  'Choose a smaller image before sending again',
-  'Remove an image before sending again',
-  'Remove images or choose smaller images before sending again',
-  'Choose a PNG, JPEG, GIF, or WebP image before sending again',
-].join('|')})\\.?$`, 'i')
-
-// A runtime rejection the transport passes through as a log record, such as
-// `code="invalid_request" reason="…"`. The UI shows a sentence for its code
-// and keeps the record under Details.
-const RAW_REJECTION = /\bcode="([a-z_]+)"/
-const REJECTIONS = {
-  invalid_request: 'The runtime rejected the request.',
-  unauthorized: 'The runtime refused the request. Sign in again.',
-  persistence_failed: 'The runtime could not save the request.',
-  runtime_draining: 'The runtime is restarting. Try again shortly.',
-}
-
-function failureText(run) {
-  return typeof run?.failureReason === 'string' ? run.failureReason.trim().replace(/\s+/g, ' ') : ''
-}
-
-// The retry button carries the next step, not the recorded cause.
+// A failed reply reads its recorded cause as every other surface reads a
+// run's failure, through `run-failure.js`.
 export function runFailureMessage(run) {
-  const recorded = failureText(run)
-  const raw = RAW_REJECTION.exec(recorded)
-  if (raw) return REJECTIONS[raw[1]] ?? 'The runtime rejected the request.'
-  const reason = recorded.replace(retryGuidance, '').trim()
+  const reason = runFailureText(run?.failureReason)
   if (run?.text?.trim() && (!reason || /reply (could not be started|did not start)/i.test(reason))) return 'The reply stopped before it finished.'
-  if (!reason) return 'Reply failed.'
-  return /[.!?]$/.test(reason) ? reason : `${reason}.`
+  return reason || 'Reply failed.'
 }
 
 // What a failed reply's Details disclosure holds: the provider's own reason
-// when core reports one, and a raw runtime record the message replaced.
+// when core reports one, and the recorded text the message replaced.
 export function runFailureDetails(run) {
   const details = []
   const detail = [run?.failureDetail, run?.failure_detail, run?.detail].find((value) => typeof value === 'string' && value.trim())
   if (detail) details.push(detail.trim())
-  const recorded = failureText(run)
-  if (RAW_REJECTION.test(recorded)) details.push(recorded)
+  for (const raw of runFailureRaw(run?.failureReason)) if (!details.includes(raw)) details.push(raw)
   return details
 }
 
@@ -279,11 +257,12 @@ function failureDetail(source) {
   return typeof value === 'string' && value.trim() ? value : null
 }
 
-// Streamed text never reaches the live region until the run settles.
+// Streamed text never reaches the live region until the run settles. The
+// reply reaches it as plain words, without its Markdown syntax.
 export function runAnnouncement(run) {
   if (!run) return ''
   if (run.phase === 'failed') return runFailureMessage(run)
-  if (run.phase === 'complete') return `Reply complete. ${run.text ?? ''}`.trim()
+  if (run.phase === 'complete') return `Reply complete. ${markdownPlainText(run.text)}`.trim()
   return runPhaseAnnouncements[run.phase] ?? ''
 }
 
@@ -302,7 +281,9 @@ export function formatByteSize(bytes) {
 
 export function applyChatEvent(run, event) {
   if (!run || event.runId !== run.id) return run
-  if (event.sentAt) run = { ...run, startedAt: event.sentAt }
+  // The runtime names when the run started, which its receipt times from too.
+  const startedAt = event.startedAt ?? event.sentAt
+  if (startedAt) run = { ...run, startedAt }
   const pendingPermission = event.pendingPermission ?? null
   if (event.phase) return { ...run, promptStorageNotice: event.promptStorageNotice ?? run.promptStorageNotice ?? null, resumeNotice: event.resumeNotice ?? run.resumeNotice ?? null, phase: event.phase, stage: runStage(run, event), turnStarted: event.turnStarted === true, failureReason: event.failureReason ?? null, failureDetail: failureDetail(event), text: event.text ?? '', receipt: event.receipt ?? null, recalls: event.recalls ?? [], toolActivity: event.toolActivity ?? [], attachments: event.attachments ?? run.attachments ?? [], appliedDiffs: event.appliedDiffs ?? [], pendingPermission }
   if (event.type === 'prompt-accepted') return { ...run, accepted: true, pendingPermission }
@@ -320,7 +301,7 @@ export function applyBufferedChatEvents(run, events) {
 export function historyMessages(history) {
   return history.flatMap((entry) => [
     ...(entry.prompt || entry.attachments?.length ? [{ role: 'user', id: entry.runId, sentAt: entry.sentAt ?? null, text: entry.prompt ?? '', attachments: entry.attachments ?? [] }] : []),
-    { role: 'assistant', run: { id: entry.runId, ...(entry.sentAt ? { startedAt: entry.sentAt } : {}), promptStorageNotice: entry.promptStorageNotice ?? null, resumeNotice: entry.resumeNotice ?? null, phase: entry.phase, stage: runStage(null, entry), turnStarted: entry.turnStarted === true, failureReason: entry.failureReason ?? null, failureDetail: failureDetail(entry), text: entry.text, receipt: entry.receipt ?? null, recalls: entry.recalls ?? [], prompt: entry.prompt ?? '', toolActivity: entry.toolActivity ?? [], appliedDiffs: entry.appliedDiffs ?? [], pendingPermission: entry.pendingPermission ?? null, resumable: entry.resumable === true } },
+    { role: 'assistant', run: { id: entry.runId, ...(entry.sentAt ? { startedAt: entry.sentAt } : {}), promptStorageNotice: entry.promptStorageNotice ?? null, resumeNotice: entry.resumeNotice ?? null, phase: entry.phase, stage: runStage(null, entry), turnStarted: entry.turnStarted === true, failureReason: entry.failureReason ?? null, failureDetail: failureDetail(entry), text: entry.text, receipt: entry.receipt ?? null, recalls: entry.recalls ?? [], prompt: entry.prompt ?? '', toolActivity: entry.toolActivity ?? [], appliedDiffs: entry.appliedDiffs ?? [], steers: entry.steers ?? [], pendingPermission: entry.pendingPermission ?? null, resumable: entry.resumable === true } },
   ])
 }
 

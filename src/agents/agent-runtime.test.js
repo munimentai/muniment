@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { agentMachine, agentRequest, agentRuntimes, agentThreads, applyRunUpdate, listAgents, listRuns } from './agent-runtime.js'
+import { agentMachine, agentRead, agentRequest, agentRuntimes, agentThreads, applyRunUpdate, keepNewerRuns, listAgents, listRuns } from './agent-runtime.js'
 
 const studio = { id: '018f0000-0000-7000-8000-000000000042', name: 'Studio', kind: 'desktop', status: 'online', local: false }
 const box = { id: '018f0000-0000-7000-8000-000000000043', name: 'Build box', kind: 'container', status: 'offline', local: false }
@@ -53,6 +53,30 @@ describe('agents across machines', () => {
     await expect(listAgents(failing(['local', studio.id]), list)).rejects.toThrow('local down')
   })
 
+  it('keeps the agents of a machine that does not answer this time from the last listing', async () => {
+    let down = []
+    const tauri = { invoke: vi.fn(async (_, { runtime, operation }) => {
+      if (down.includes(runtime)) throw new Error(`${runtime} busy`)
+      if (operation === 'agent.threads') return { threads: [] }
+      return runtime === 'local'
+        ? { agents: [{ id: 'morning', name: 'Tauri Morning' }], primary_threads: { morning: 't1' }, latest_runs: { morning: run('r1', 'local', '2026-01-01T00:00:00Z', { agent_id: 'morning' }) } }
+        : { agents: [{ id: 'editor' }], primary_threads: { editor: 't5' } }
+    }) }
+    const first = await listAgents(tauri, list)
+    expect(first.answered).toEqual(['local', studio.id])
+    // This computer's runtime is busy during the next refresh.
+    down = ['local']
+    const next = await listAgents(tauri, list, first)
+    expect(next.agents).toEqual([{ id: 'morning', name: 'Tauri Morning', runtimeId: 'local' }, { id: 'editor', runtimeId: studio.id }])
+    expect(next.primaryThreads).toEqual({ morning: 't1', editor: 't5' })
+    expect(next.latestRuns.morning.runtimeId).toBe('local')
+    expect(next.answered).toEqual(['local', studio.id])
+    // With no listing before, a machine that does not answer holds nothing.
+    const cold = await listAgents(tauri, list)
+    expect(cold.agents.map((agent) => agent.id)).toEqual(['editor'])
+    expect(cold.answered).toEqual([studio.id])
+  })
+
   it('merges run pages newest first and applies each run update once', async () => {
     const tauri = { invoke: vi.fn(async (_, { runtime, body }) => ({ runs: runtime === 'local' ? [run('r1', 'local', '2026-01-01T10:00:00Z')] : [run('r2', 's', '2026-01-01T11:00:00Z')], body })) }
     const runs = await listRuns(tauri, list)
@@ -71,5 +95,45 @@ describe('agents across machines', () => {
     expect(agentMachine(list, { runtimeId: studio.id }).name).toBe('Studio')
     expect(agentMachine(list, {}).kind).toBe('local')
     expect(agentMachine(null, { runtimeId: 'gone' }).name).toBe('Paired machine')
+  })
+})
+
+describe('a listing that answers after a run event', () => {
+  const agents = [{ id: 'scout', runtimeId: 'local' }, { id: 'clerk', runtimeId: 'local' }]
+  const running = { id: 'run-1', agent_id: 'scout', status: 'running', updated_at: '2026-11-01T16:07:50Z', runtimeId: 'local' }
+  const failed = { ...running, status: 'failed', error: 'The key was refused.', updated_at: '2026-11-01T16:07:57.550Z' }
+
+  it('keeps the settled run the event brought over the same run the listing still names active', () => {
+    const next = keepNewerRuns({ latestRuns: { scout: failed } }, { agents, latestRuns: { scout: running } })
+    expect(next.latestRuns.scout).toBe(failed)
+    // Even when the listing's copy carries a later lease time.
+    expect(keepNewerRuns({ latestRuns: { scout: failed } }, { agents, latestRuns: { scout: { ...running, updated_at: '2026-11-01T16:08:00Z' } } }).latestRuns.scout).toBe(failed)
+  })
+
+  it('takes the listing\'s run when it is newer or either side names none', () => {
+    const later = { id: 'run-2', agent_id: 'scout', status: 'running', updated_at: '2026-11-01T16:09:00Z', runtimeId: 'local' }
+    expect(keepNewerRuns({ latestRuns: { scout: failed } }, { agents, latestRuns: { scout: later } }).latestRuns.scout).toBe(later)
+    expect(keepNewerRuns({ latestRuns: { scout: running } }, { agents, latestRuns: { scout: failed } }).latestRuns.scout).toBe(failed)
+    expect(keepNewerRuns({ latestRuns: {} }, { agents, latestRuns: { scout: failed } }).latestRuns.scout).toBe(failed)
+    expect(keepNewerRuns({ latestRuns: { scout: failed } }, { agents, latestRuns: {} }).latestRuns).toEqual({})
+  })
+
+  it('drops the run of an agent the listing no longer names', () => {
+    expect(keepNewerRuns({ latestRuns: { scout: failed } }, { agents: [], latestRuns: {} }).latestRuns).toEqual({})
+  })
+})
+
+describe('agentRead', () => {
+  it('asks again after a busy answer and never repeats a refusal', async () => {
+    let busy = 1
+    const invoke = vi.fn(async () => { if (busy-- > 0) throw new Error('Muniment is busy with another request. Try again.'); return { ok: true } })
+    expect(await agentRead({ invoke }, 'local', 'agent.replays', { id: 'a' }, [0])).toEqual({ ok: true })
+    expect(invoke).toHaveBeenCalledTimes(2)
+    const refuse = vi.fn(async () => { throw new Error('The machine refused the agent request. Check the fields and try again.') })
+    await expect(agentRead({ invoke: refuse }, 'local', 'agent.replays', {}, [0, 0])).rejects.toThrow('The machine refused')
+    expect(refuse).toHaveBeenCalledTimes(1)
+    const down = vi.fn(async () => { throw new Error('Muniment cannot reach its background service.') })
+    await expect(agentRead({ invoke: down }, 'local', 'agent.replays', {}, [0, 0])).rejects.toThrow('cannot reach')
+    expect(down).toHaveBeenCalledTimes(3)
   })
 })

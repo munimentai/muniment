@@ -256,6 +256,7 @@ fn run_runtime_activation_inner(
     stop: Receiver<()>,
 ) -> Result<RuntimeActivationExit, RuntimeActivationError> {
     let runtime_directory = runtime_directory.as_ref();
+    let memory_directory = profile_directory.as_ref().join("memory");
     let state = Arc::new(
         RuntimeAttachState::open(crate::desktop_host(), profile_directory, config_directory)
             .map_err(|_| RuntimeActivationError::State)?,
@@ -342,6 +343,7 @@ fn run_runtime_activation_inner(
                     return Err(RuntimeActivationError::Bind);
                 }
             };
+            crate::spawn_memory_extension_sweep(memory_directory);
             retention_thread = Some(start_retention_schedule(
                 Arc::clone(&state),
                 RETENTION_INTERVAL,
@@ -373,6 +375,7 @@ fn run_runtime_activation_inner(
                 move || service_state.attach_service(),
                 takeover_deadline,
                 move || {
+                    crate::spawn_memory_extension_sweep(memory_directory);
                     let thread = start_retention_schedule(
                         retention_state,
                         RETENTION_INTERVAL,
@@ -390,6 +393,7 @@ fn run_runtime_activation_inner(
     };
     let _ = wake_tx.send(ActivationWake::ListenerFinished);
     state.stop_remote_route();
+    state.stop_idle_processes();
     let _ = command_tx.send(RetentionScheduleCommand::Stop);
     if let Some(retention_thread) = retention_thread {
         retention_thread

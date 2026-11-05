@@ -79,6 +79,19 @@ describe('the roster', () => {
     expect(swarmThreads(swarm)).toEqual({ t1: 'a1', t3: 'a3' })
   })
 
+  it('never lists an agent this computer holds as a synced copy while this computer has not answered', () => {
+    const swarm = mergeSwarm(answers())
+    // The box's directory names an agent whose primary is this computer.
+    swarm.agents.push({ agent_id: 'a4', name: 'Tauri Morning', primary_runtime: LAPTOP, epoch: 0, primary_thread: 't4', runtimeId: 'box' })
+    const view = (listing) => swarmRoster(listing, swarm).map((agent) => [agent.id, agent.replica, agent.runtimeId])
+    // Only the box answered: this computer's agent waits for its own listing, and the studio's stays a copy.
+    expect(view({ agents: [{ id: 'a1', name: 'Scout', runtimeId: 'box' }], answered: ['box'] })).toEqual([['a1', false, 'box'], ['a3', true, 'local']])
+    expect(view({ agents: [], answered: [] })).toEqual([['a3', true, 'local']])
+    // Once this computer answers, its own copy lists, never the box's.
+    expect(view({ agents: [{ id: 'a1', name: 'Scout', runtimeId: 'box' }, { id: 'a4', name: 'Tauri Morning', runtimeId: 'local' }], answered: ['local', 'box'] }))
+      .toEqual([['a1', false, 'box'], ['a4', false, 'local'], ['a3', true, 'local']])
+  })
+
   it('names this computer and falls back to the runtime list for a machine with no swarm', () => {
     const swarm = mergeSwarm(answers())
     expect(memberMachine(swarm, LAPTOP)).toMatchObject({ name: 'This computer', kind: 'local', online: true })
@@ -160,8 +173,21 @@ describe('link lines', () => {
     const now = Date.parse('2026-01-01T14:10:00Z')
     expect(linkLabel({ direction: 'outbound', state: 'connected', last_seen_at: '2026-01-01T14:00:00Z' }, now)).toBe('Connected · 10m ago')
     expect(linkLabel({ direction: 'inbound', state: 'connected', last_seen_at: '2026-01-01T14:10:00Z' }, now)).toBe('Connected · now')
+    expect(linkLabel({ direction: 'outbound', state: 'connected', last_seen_at: '2026-01-01T11:37:00Z' }, now)).toBe('Connected · 2h ago')
     expect(linkLabel({ direction: 'outbound', state: 'backoff', last_error: 'The machine did not answer.' }, now)).toBe('Retrying: The machine did not answer.')
     expect(linkLabel({ direction: 'outbound', state: 'revoked' }, now)).toBe('Access revoked. Join the machines again.')
     expect(linkLabel(null)).toBe('Through another machine')
+  })
+})
+
+describe('keychainRefusal', () => {
+  it('names the fleet key and the other refused secrets once each, or nothing', async () => {
+    const { keychainRefusal } = await import('./swarm.js')
+    expect(keychainRefusal(null)).toBe(null)
+    expect(keychainRefusal({ fleet_key: null, keychain: [] })).toBe(null)
+    expect(keychainRefusal({ fleet_key: { state: 'failed' }, keychain: [{ label: 'webhook secrets', state: 'failed' }, { label: 'webhook secrets', state: 'failed' }] }))
+      .toEqual({ declined: false, labels: ['fleet key', 'webhook secrets'] })
+    expect(keychainRefusal({ members: [], keychain: [{ label: 'protected prompts', state: 'declined' }] }))
+      .toEqual({ declined: true, labels: ['protected prompts'] })
   })
 })

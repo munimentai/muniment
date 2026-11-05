@@ -58,6 +58,17 @@ describe('chat composer and projection', () => {
     })
   })
 
+  it('counts a live reply from the start the runtime names, and keeps it across text deltas', () => {
+    const initial = { id: 'r', phase: 'thinking', text: '', startedAt: '2026-01-01T00:00:00.700Z' }
+    const live = applyChatEvent(initial, { runId: 'r', phase: 'thinking', text: '', startedAt: '2026-01-01T00:00:00.512345Z' })
+    expect(live.startedAt).toBe('2026-01-01T00:00:00.512345Z')
+    const streamed = applyChatEvent(live, { runId: 'r', type: 'text-delta', text: 'Hi' })
+    expect(streamed.startedAt).toBe('2026-01-01T00:00:00.512345Z')
+    expect(applyChatEvent(streamed, { runId: 'r', phase: 'complete', text: 'Hi', receipt: { time: '5.612s' } }).startedAt).toBe('2026-01-01T00:00:00.512345Z')
+    // Restored history names the same start: the run's first event.
+    expect(historyMessages([{ runId: 'r', phase: 'complete', text: 'Hi', sentAt: '2026-01-01T00:00:00.512345Z' }])[0].run.startedAt).toBe('2026-01-01T00:00:00.512345Z')
+  })
+
   it('keeps the prompt storage notice across live events and restored history', () => {
     const promptStorageNotice = 'Prompt text stays in runtime memory for this run. Keyring error -25307: A default keychain could not be found.'
     const entry = { runId: 'r', phase: 'streaming', text: 'Reply', promptStorageNotice }
@@ -81,9 +92,9 @@ describe('chat composer and projection', () => {
 
   it('tracks the in-flight word from the projections: Routing, Thinking, the tool verb, Writing', () => {
     let run = { id: 'r', phase: 'thinking', text: '' }
-    expect(stageWord(run.stage)).toBe('Routing')
+    expect(stageWord(run.stage)).toBe('Starting')
     run = applyChatEvent(run, { runId: 'r', phase: 'thinking', text: '', toolActivity: [] })
-    expect(stageWord(run.stage)).toBe('Routing')
+    expect(stageWord(run.stage)).toBe('Starting')
     run = applyChatEvent(run, { runId: 'r', phase: 'thinking', text: '', turnStarted: true, toolActivity: [] })
     expect(stageWord(run.stage)).toBe('Thinking')
     run = applyChatEvent(run, { runId: 'r', phase: 'thinking', text: '', turnStarted: true, toolActivity: [{ effectId: 'e1', displayName: 'bash', status: 'running' }] })
@@ -108,7 +119,19 @@ describe('chat composer and projection', () => {
     run = applyChatEvent(run, { runId: 'r', phase: 'acquiring-pi', text: '', routingStage: 'folder-access', toolActivity: [] })
     expect(stageWord(run.stage)).toBe('macOS is asking for access to this folder. Choose Allow.')
     run = applyChatEvent(run, { runId: 'r', phase: 'thinking', text: '', routingStage: null, toolActivity: [] })
-    expect(stageWord(run.stage)).toBe('Routing')
+    expect(stageWord(run.stage)).toBe('Starting')
+  })
+
+  it('names the server a retried model call waits on until the reply moves on', () => {
+    let run = { id: 'r', phase: 'thinking', text: '' }
+    run = applyChatEvent(run, { runId: 'r', phase: 'thinking', text: '', turnStarted: true, routingStage: 'retrying:2:2:DO Test', toolActivity: [] })
+    expect(stageWord(run.stage)).toBe('DO Test is not answering. Retrying (2 of 2)…')
+    expect(stageWord('retrying:3:4')).toBe('The model did not answer. Retrying (3 of 4)…')
+    run = applyChatEvent(run, { runId: 'r', phase: 'thinking', text: '', turnStarted: true, routingStage: 'thinking', toolActivity: [] })
+    expect(stageWord(run.stage)).toBe('Thinking')
+    run = applyChatEvent(run, { runId: 'r', phase: 'thinking', text: '', turnStarted: true, routingStage: 'retrying:2:4', toolActivity: [] })
+    run = applyChatEvent(run, { runId: 'r', phase: 'streaming', text: 'Hi', turnStarted: true, routingStage: null, toolActivity: [] })
+    expect(stageWord(run.stage)).toBe('Writing')
   })
 
   it('names every tool by a plain verb and never by a vendor, a model or a harness', () => {
@@ -121,8 +144,8 @@ describe('chat composer and projection', () => {
     expect(toolVerb('mcp')).toBe('Calling a server')
     expect(toolVerb('mcp__github__search')).toBe('Calling github')
     expect(toolVerb('unknown_tool')).toBe('Working')
-    expect(stageWord(undefined)).toBe('Routing')
-    for (const word of ['Routing', 'Thinking', 'Writing', toolVerb('subagent')]) expect(word).not.toMatch(/pi|muniment|claude|openai|gpt/i)
+    expect(stageWord(undefined)).toBe('Starting')
+    for (const word of ['Starting', 'Thinking', 'Writing', toolVerb('subagent')]) expect(word).not.toMatch(/pi|muniment|claude|openai|gpt/i)
   })
 
   it('moves thinking to streaming and removes signal on every terminal event', () => {
@@ -171,6 +194,31 @@ describe('chat composer and projection', () => {
     expect(runFailureDetails({ failureReason: 'Reply failed.' })).toEqual([])
   })
 
+  it('shows a sentence a stored reason repeats once, live and restored', () => {
+    const failureReason = 'No eligible model served this turn. No eligible model served this turn.'
+    const restored = historyMessages([{ runId: 'r', phase: 'failed', text: '', failureReason }])[0].run
+    expect(runFailureMessage(restored)).toBe('No eligible model served this turn.')
+    expect(runFailureMessage({ failureReason: 'No eligible model served this turn. The OpenAI key was refused. No eligible model served this turn.' }))
+      .toBe('No eligible model served this turn. The OpenAI key was refused.')
+    expect(runAnnouncement({ phase: 'failed', failureReason })).toBe('No eligible model served this turn.')
+  })
+
+  it('reads an old stored expired-token answer as the step that fixes it, with the answer behind Show log', () => {
+    const failureReason = '{ "error": { "message": "Your authentication token has expir…'
+    const restored = historyMessages([{ runId: 'r', phase: 'failed', text: '', failureReason }])[0].run
+    expect(runFailureMessage(restored)).toBe('The sign-in expired. Sign in again in Models.')
+    expect(runFailureDetails(restored)).toEqual([failureReason])
+  })
+
+  it('names a refused route by its model name, live and restored, and leaves addresses alone', () => {
+    const failureReason = 'openai/gpt-6.1-sol: Every account for this provider is temporarily unavailable.'
+    const restored = historyMessages([{ runId: 'r', phase: 'failed', text: '', failureReason }])[0].run
+    expect(runFailureMessage(restored)).toBe('GPT-6.1 Sol: Every account for this provider is temporarily unavailable.')
+    expect(runFailureMessage({ failureReason: 'No eligible model served this turn. anthropic/claude-opus-4-7: Every account for this provider is turned off.' }))
+      .toBe('No eligible model served this turn. Claude Opus 4.7: Every account for this provider is turned off.')
+    expect(runFailureMessage({ failureReason: 'Cannot reach https://example.com/v1: refused' })).toBe('Cannot reach https://example.com/v1: refused.')
+  })
+
   it('keeps cause punctuation and folds line breaks without changing addresses or decimals', () => {
     expect(runFailureMessage({ failureReason: '  Cannot reach\nhttps://example.com after 1.5 seconds  ' }))
       .toBe('Cannot reach https://example.com after 1.5 seconds.')
@@ -201,6 +249,13 @@ describe('chat composer and projection', () => {
   ])('preserves punctuation and all recorded cause text in %j', (failureReason) => {
     expect(runFailureMessage({ failureReason })).toBe(failureReason)
     expect(runAnnouncement({ phase: 'failed', failureReason })).toBe(failureReason)
+  })
+
+  it('announces a complete reply as plain words without its Markdown', () => {
+    expect(runAnnouncement({ phase: 'complete', text: 'Saved **Live44 Taker**.\n\n- Runs `daily-check` at [9 AM](https://example.com)' }))
+      .toBe('Reply complete. Saved Live44 Taker. Runs daily-check at 9 AM')
+    expect(runAnnouncement({ phase: 'complete', text: '' })).toBe('Reply complete.')
+    expect(runAnnouncement({ phase: 'complete' })).toBe('Reply complete.')
   })
 
   it('threads projected tool activity into the active run', () => {
@@ -256,7 +311,7 @@ describe('chat composer and projection', () => {
       capabilities: [{ name: 'search', version: '2' }],
       tools: [{ name: 'read', calls: 2, failed: 0 }],
     })).toEqual({ route: 'analysis/high', model: 'GLM 5.2', time: '4s' })
-    expect(receiptSummary({ model: 'openai-codex/gpt-5.5', time: '12.6s' })).toEqual({ route: null, model: 'OpenAI Codex · GPT 5.5', time: '13s' })
+    expect(receiptSummary({ model: 'openai-codex/gpt-5.5', time: '12.6s' })).toEqual({ route: null, model: 'OpenAI Codex · GPT-5.5', time: '13s' })
     expect(modelLabel('hf.co/lmstudio-community/Qwen3.5-4B-GGUF:Q4_K_M')).toBe('Hf.co · LM Studio Community · Qwen 3.5 4B GGUF:Q4 K M')
     expect(modelLabel('')).toBe(null)
   })
@@ -466,7 +521,7 @@ it('keeps a saved partial reply and calls a generic start failure an interruptio
 it('compares model and classifier usage in separate columns', () => {
   const receipt = { model: 'openai/gpt-5.6-luna', cost: '$0.002 est.', tokens: { input: 11736, output: 5 }, turns: 1, classifiers: [{ model: 'typesafe/jev-latest', cost: 0.000040, tokens: { input: 942, output: 151 } }] }
   expect(receiptUsageColumns(receipt)).toEqual([
-    { model: 'OpenAI · GPT 5.6 Luna', cost: '$0.002 est.', tokens: '11,736 in, 5 out' },
+    { model: 'OpenAI · GPT-5.6 Luna', cost: '$0.002 est.', tokens: '11,736 in, 5 out' },
     { model: 'TypeSafe · Jev Latest', cost: '$0.000040 est.', tokens: '942 in, 151 out' },
   ])
   expect(receiptRows(receipt)).toEqual([{ label: 'Turns', value: '1', route: false }])

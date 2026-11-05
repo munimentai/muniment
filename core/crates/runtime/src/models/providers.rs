@@ -114,6 +114,13 @@ pub(super) struct InventoryProvider {
     /// The decision models the server reported. They answer on its System One
     /// route, so the classifier list offers them and the chat picker does not.
     decision_models: Vec<String>,
+    /// Whether a chat on the endpoint runs without tools.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    tools_off: bool,
+    /// Whether the endpoint's server never answered the last discovery, so
+    /// its models are the saved list.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    unreachable: bool,
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -128,11 +135,17 @@ pub(super) struct ProviderInventory {
     /// The classifier model that picks a route per turn, when the router runs
     /// one. The composer's picker puts the router first and names it.
     router_classifier: Option<String>,
+    /// Whether a decision model is connected, whether or not routing runs.
+    /// The picker then says routing is off in place of asking for one.
+    router_decision_model: bool,
     /// Every model the router serves, with the family and model it stands for
     /// and how many accounts stand behind it. The picker lists each under its
     /// provider once and marks the ones two or more accounts serve, because
     /// picking one of those balances across them.
     router_models: Vec<RouterModel>,
+    /// The last name of each disconnected endpoint by provider id, so usage
+    /// history reads by a name and not the raw id.
+    former_names: std::collections::BTreeMap<String, String>,
 }
 
 /// One model the router serves, as the picker places it under its provider.
@@ -206,14 +219,28 @@ fn read_json_file(
             Err(_) => return Err(READ_SETTINGS_ERROR.into()),
         }
     }
-    let _lock = locked
-        .then(|| lock_pi_auth_file(path))
-        .transpose()
-        .map_err(|_| READ_SETTINGS_ERROR.to_string())?;
-    let bytes = match fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(_) => return Err(READ_SETTINGS_ERROR.into()),
+    let read = || -> Result<Option<Vec<u8>>, String> {
+        match fs::read(path) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(_) => Err(READ_SETTINGS_ERROR.into()),
+        }
+    };
+    // A read takes no lock while the file parses, so a writer that holds the
+    // lock never stalls it. Only a file a writer has half written waits for
+    // the writer's lock and reads again.
+    let Some(bytes) = read()? else {
+        return Ok(None);
+    };
+    if let Ok(root) = serde_json::from_slice(&bytes) {
+        return Ok(Some(root));
+    }
+    if !locked {
+        return Err(READ_SETTINGS_ERROR.into());
+    }
+    let _lock = lock_pi_auth_file(path).map_err(|_| READ_SETTINGS_ERROR.to_string())?;
+    let Some(bytes) = read()? else {
+        return Ok(None);
     };
     serde_json::from_slice(&bytes)
         .map(Some)
@@ -389,7 +416,9 @@ fn store_local_provider_in(models_file: &Path, base_url: &str, key: &str) -> Res
 }
 
 /// Saves a named endpoint and answers its provider id. When Pi names no
-/// default yet, the endpoint's first model becomes it.
+/// default yet, the endpoint's first model becomes it. `tools_off` turns
+/// the endpoint's tools off or on, and `None` keeps the saved setting.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn store_endpoint(
     agent: &Path,
     engine: &PiRpcEngine,
@@ -398,8 +427,12 @@ pub(super) fn store_endpoint(
     base_url: &str,
     key: &str,
     models: &[String],
+    tools_off: Option<bool>,
 ) -> Result<String, String> {
     let provider = pi_models::store_endpoint(agent, kind, name, base_url, key, models)?;
+    if let Some(off) = tools_off {
+        pi_models::set_tools_off(agent, &provider, off)?;
+    }
     if default_model_unset(agent) {
         let _ = adopt_provider_default(agent, engine, &provider, false);
     }
@@ -592,13 +625,15 @@ fn refresh_provider_models(
     })
 }
 
-/// The models Pi listed on the last full inventory read, which a cached read
-/// reuses so it never starts Pi.
+/// The models Pi listed on the last full inventory read and the endpoints
+/// that read found not answering, which a cached read reuses so it never
+/// starts Pi.
 #[derive(Default)]
 pub(super) struct ListedModels(std::sync::Mutex<Option<Listed>>);
 
-/// Pi's model rows and their thinking levels.
-type Listed = (Vec<PiModelRow>, Vec<PiModelThinking>);
+/// Pi's model rows, their thinking levels and the provider ids of the
+/// endpoints whose server never answered.
+type Listed = (Vec<PiModelRow>, Vec<PiModelThinking>, Vec<String>);
 
 impl ListedModels {
     fn held(&self) -> std::sync::MutexGuard<'_, Option<Listed>> {
@@ -615,38 +650,60 @@ pub(super) fn cached_inventory(
     agent: &Path,
     listed: &ListedModels,
 ) -> Result<ProviderInventory, String> {
-    let (models, thinking) = listed.held().clone().unwrap_or_default();
-    provider_inventory_with(agent, &models, &thinking, read_json_unlocked)
+    let (models, thinking, unreachable) = listed.held().clone().unwrap_or_default();
+    let mut inventory = provider_inventory_with(agent, &models, &thinking, read_json_unlocked)?;
+    mark_unreachable(&mut inventory, &unreachable);
+    Ok(inventory)
 }
 
 /// Everything the picker and Settings read about providers: the endpoint
 /// discovery and Pi's model list run side by side, so the page waits for the
 /// slower one, not both. A changed endpoint list relists once, so the
 /// inventory reads what the server serves now. `listed` keeps Pi's answer
-/// for the next cached read.
+/// and the endpoints that did not answer for the next cached read.
 pub(super) fn inventory(
     agent: &Path,
     engine: &PiRpcEngine,
     force: bool,
     listed: &ListedModels,
+    key: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<ProviderInventory, String> {
     // A saved default the router stopped offering moves before the picker reads it.
     super::router::settle_default(agent, None, false);
-    let discovery_agent = agent.to_path_buf();
-    let discovery = std::thread::spawn(move || pi_models::refresh_endpoints(&discovery_agent));
     let thinking_engine = engine.clone();
     let thinking = std::thread::spawn(move || thinking_engine.list_model_thinking());
-    let mut models = engine.list_models();
-    let provider_changed = refresh_provider_models(agent, &models, force).unwrap_or(false);
-    if discovery.join().ok().and_then(Result::ok) == Some(true) || provider_changed {
-        models = engine.list_models();
-    }
+    let models = std::thread::scope(|scope| {
+        // `key` answers each endpoint's key for the list read, and never
+        // with a keychain prompt.
+        let discovery = scope.spawn(|| pi_models::refresh_endpoints_checked(agent, key));
+        let mut models = engine.list_models();
+        let provider_changed = refresh_provider_models(agent, &models, force).unwrap_or(false);
+        let refresh = discovery
+            .join()
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or_default();
+        if refresh.changed || provider_changed {
+            models = engine.list_models();
+        }
+        (models, refresh.unreachable)
+    });
+    let (models, unreachable) = models;
     super::router::settle_default(agent, None, false);
     let thinking = thinking.join().unwrap_or_default();
     let mut inventory = provider_inventory(agent, &models, &thinking)?;
-    *listed.held() = Some((models, thinking));
+    mark_unreachable(&mut inventory, &unreachable);
+    *listed.held() = Some((models, thinking, unreachable));
     adopt_shown_default(agent, &mut inventory);
     Ok(inventory)
+}
+
+/// Marks each endpoint whose server never answered the discovery, so the page
+/// can say its list is the saved one.
+fn mark_unreachable(inventory: &mut ProviderInventory, unreachable: &[String]) {
+    for provider in &mut inventory.providers {
+        provider.unreachable = unreachable.contains(&provider.id);
+    }
 }
 
 fn provider_inventory(
@@ -686,6 +743,8 @@ fn provider_inventory_with(
             base_url: None,
             models: Vec::new(),
             decision_models: Vec::new(),
+            tools_off: false,
+            unreachable: false,
         });
     }
     if let Some(endpoints) = models_file
@@ -728,7 +787,12 @@ fn provider_inventory_with(
                             .map(str::to_owned);
                         Some((id, name))
                     })
-                    .filter(|(id, _)| !id.trim().is_empty())
+                    .filter(|(id, _)| {
+                        !id.trim().is_empty()
+                            && muniment_core::model_router::model_catalog::runs_with_tools(
+                                provider, id,
+                            )
+                    })
                     .map(|(id, name)| InventoryModel {
                         id: id.to_owned(),
                         name,
@@ -741,6 +805,8 @@ fn provider_inventory_with(
                     })
                     .collect(),
                 decision_models: decision_models(&record, provider),
+                tools_off: pi_models::tools_off(&record, provider),
+                unreachable: false,
             });
         }
     }
@@ -763,9 +829,14 @@ fn provider_inventory_with(
             base_url: None,
             models: Vec::new(),
             decision_models: Vec::new(),
+            tools_off: false,
+            unreachable: false,
         });
     }
-    for row in models {
+    // A model that refuses the tools every turn sends never reaches a picker.
+    for row in models.iter().filter(|row| {
+        muniment_core::model_router::model_catalog::runs_with_tools(&row.provider, &row.id)
+    }) {
         if let Some(known) = providers.iter_mut().find(|known| known.id == row.provider) {
             let mut model = InventoryModel::from(row);
             if let Some(existing) = known.models.iter_mut().find(|entry| entry.id == model.id) {
@@ -781,6 +852,7 @@ fn provider_inventory_with(
             model.settle_thinking(&provider.id, thinking, &settings);
         }
     }
+    let former_names = former_names(&record, &providers);
     Ok(ProviderInventory {
         providers,
         default_provider: settings
@@ -794,8 +866,26 @@ fn provider_inventory_with(
         hidden: record_strings(&record, "hidden"),
         shown: record_strings(&record, "shown"),
         router_classifier: router_classifier(agent),
+        router_decision_model: router_decision_model(agent),
         router_models: router_models(agent),
+        former_names,
     })
+}
+
+/// The former names the record keeps for endpoints `providers` no longer
+/// lists.
+fn former_names(
+    record: &serde_json::Map<String, serde_json::Value>,
+    providers: &[InventoryProvider],
+) -> std::collections::BTreeMap<String, String> {
+    record
+        .get(pi_models::FORMER_NAMES)
+        .and_then(serde_json::Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter(|(id, _)| !providers.iter().any(|known| known.id == **id))
+        .filter_map(|(id, name)| Some((id.clone(), name.as_str()?.to_owned())))
+        .collect()
 }
 
 /// The models the router serves and the accounts behind each: the accounts
@@ -886,6 +976,17 @@ fn router_classifier(agent: &Path) -> Option<String> {
     (!model.is_empty()).then(|| model.to_owned())
 }
 
+/// Whether Settings lists a decision model: a saved connection, or a ready
+/// classifier from before connections were saved.
+fn router_decision_model(agent: &Path) -> bool {
+    let Ok(config) = muniment_core::model_router::config::load(agent) else {
+        return false;
+    };
+    config.classifier.ready()
+        || super::connections::views(agent, &config.classifier)
+            .is_ok_and(|connections| !connections.is_empty())
+}
+
 pub(super) fn set_default_model(agent: &Path, provider: &str, model: &str) -> Result<(), String> {
     if !valid_identifier(provider, 128) || !valid_identifier(model, 512) {
         return Err("Choose a provider and a model.".into());
@@ -917,6 +1018,26 @@ pub(super) fn replace_default_model(
     settings.insert("defaultProvider".into(), provider.into());
     settings.insert("defaultModel".into(), model.into());
     merge_pi_settings(&mut settings, PI_SELECTED_ARTIFACT);
+    lock.check()?;
+    pi_models::write_json(&settings_file, &settings)?;
+    Ok(true)
+}
+
+/// Removes the saved default when `forget` holds for it, so the next
+/// inventory read adopts the shown model the chip names.
+pub(super) fn forget_default_model(
+    agent: &Path,
+    forget: impl FnOnce(Option<&str>, Option<&str>) -> bool,
+) -> std::io::Result<bool> {
+    let settings_file = pi_settings_file(&pi_models_file(agent));
+    let lock = muniment_core::pi_settings::lock_settings(&settings_file)?;
+    let mut settings = pi_models::read_json(&settings_file)?;
+    let saved = |key: &str| settings.get(key).and_then(serde_json::Value::as_str);
+    if !forget(saved("defaultProvider"), saved("defaultModel")) {
+        return Ok(false);
+    }
+    settings.remove("defaultProvider");
+    settings.remove("defaultModel");
     lock.check()?;
     pi_models::write_json(&settings_file, &settings)?;
     Ok(true)
@@ -1074,26 +1195,33 @@ fn adopt_shown_default(agent: &Path, inventory: &mut ProviderInventory) {
     if saved_shown {
         return;
     }
-    // The router's own pick leads its models: the most capable model the
-    // catalog knows that some plan behind it offers. A model the catalog does
-    // not describe, which a plan may not offer, never becomes the default
-    // ahead of it.
+    // The router's own pick leads: the most capable model the catalog knows
+    // that some plan behind it offers. A model the catalog does not describe,
+    // which a plan may not offer, never becomes the default ahead of it.
     let pooled = super::router::default_choice(agent);
-    let first = inventory.providers.iter().find_map(|group| {
-        let pick = (group.id == ROUTER_PROVIDER)
-            .then_some(pooled.as_deref())
-            .flatten()
-            .filter(|model| {
-                group.models.iter().any(|entry| entry.id == *model) && !hidden(&group.id, model)
-            });
-        pick.or_else(|| {
+    let router_pick = pooled.as_deref().and_then(|model| {
+        inventory
+            .providers
+            .iter()
+            .find(|group| group.id == ROUTER_PROVIDER)
+            .filter(|group| {
+                group.models.iter().any(|entry| entry.id == model) && !hidden(&group.id, model)
+            })
+            .map(|group| (group.id.clone(), model.to_owned()))
+    });
+    // Else a signed-in account answers before a server the user runs, which
+    // may be stopped, and a server that runs without tools comes last, so the
+    // order the providers were connected in never names a down server.
+    let mut groups: Vec<&InventoryProvider> = inventory.providers.iter().collect();
+    groups.sort_by_key(|group| default_rank(group));
+    let first = router_pick.or_else(|| {
+        groups.into_iter().find_map(|group| {
             group
                 .models
                 .iter()
                 .find(|model| !hidden(&group.id, &model.id))
-                .map(|model| model.id.as_str())
+                .map(|model| (group.id.clone(), model.id.clone()))
         })
-        .map(|model| (group.id.clone(), model.to_owned()))
     });
     let Some((provider, model)) = first else {
         return;
@@ -1101,6 +1229,18 @@ fn adopt_shown_default(agent: &Path, inventory: &mut ProviderInventory) {
     if set_default_model(agent, &provider, &model).is_ok() {
         inventory.default_provider = Some(provider);
         inventory.default_model = Some(model);
+    }
+}
+
+/// How early a provider's models stand for a default the user never chose:
+/// accounts first, then local servers, then custom endpoints, and a server
+/// that runs without tools last.
+fn default_rank(group: &InventoryProvider) -> u8 {
+    match (group.tools_off, group.source) {
+        (true, _) => 3,
+        (false, "custom") => 2,
+        (false, "local") => 1,
+        _ => 0,
     }
 }
 
@@ -1161,6 +1301,7 @@ pub(super) fn disconnect_provider(agent: &Path, provider: &str) -> Result<(), St
         if pi_models_file(agent).is_file() {
             remove_json_entry(&pi_models_file(agent), provider)?;
         }
+        pi_models::forget_endpoint(agent, provider)?;
     }
     let settings_file = pi_settings_file(&pi_models_file(agent));
     if settings_file.is_file() {
@@ -1293,8 +1434,8 @@ llama     qwen3              32K      16.4K    yes       no\n";
     }
 
     fn temporary_directory() -> std::path::PathBuf {
-        let path =
-            std::env::temp_dir().join(format!("muniment-local-mode-{}", uuid::Uuid::new_v4()));
+        let path = muniment_core::state_root::test_root()
+            .join(format!("muniment-local-mode-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&path).unwrap();
         path
     }
@@ -1332,6 +1473,95 @@ llama     qwen3              32K      16.4K    yes       no\n";
         let mut again = provider_inventory(&agent, &models, &[]).unwrap();
         adopt_shown_default(&agent, &mut again);
         assert_eq!(again.default_model.as_deref(), Some("gpt-5.6-luna"));
+    }
+
+    #[test]
+    fn a_default_the_user_never_chose_is_the_router_pick_ahead_of_a_custom_server() {
+        use muniment_core::model_router::config::{self, Account, Credential, RouterConfig};
+        let agent = temporary_directory();
+        let saved = RouterConfig {
+            enabled: true,
+            accounts: vec![Account {
+                id: "s1".into(),
+                family: "openai".into(),
+                label: "pat@example.com".into(),
+                credential: Credential::Subscription {
+                    provider: "openai-codex".into(),
+                    access: "at".into(),
+                    refresh: None,
+                    expires_ms: None,
+                    account_id: Some("s1".into()),
+                    email: None,
+                    plan: None,
+                    renews_at_ms: None,
+                },
+                base_url: None,
+                models: vec!["gpt-6-astra".into()],
+                enabled: true,
+                weight: 1,
+                overflow: false,
+            }],
+            ..RouterConfig::default()
+        };
+        config::save(&agent, &saved).unwrap();
+        // The custom server was connected first, so its entry leads Pi's file.
+        fs::write(
+            agent.join("models.json"),
+            serde_json::json!({"providers": {
+                "custom-do-test": {"baseUrl": "http://127.0.0.1:9/v1", "models": [{"id": "qwen2.5-1.5b"}]},
+                ROUTER_PROVIDER: {"baseUrl": "http://127.0.0.1:1/v1", "models": [{"id": "openai/gpt-6-astra"}]}
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        let mut inventory = provider_inventory(&agent, &[], &[]).unwrap();
+        assert_eq!(inventory.providers[0].id, "custom-do-test");
+        adopt_shown_default(&agent, &mut inventory);
+        assert_eq!(inventory.default_provider.as_deref(), Some(ROUTER_PROVIDER));
+        assert_eq!(
+            inventory.default_model.as_deref(),
+            Some("openai/gpt-6-astra")
+        );
+
+        // With the router off, a key account still answers before the server.
+        let mut off = saved;
+        off.enabled = false;
+        config::save(&agent, &off).unwrap();
+        fs::write(agent.join("settings.json"), "{}").unwrap();
+        fs::write(
+            agent.join("models.json"),
+            r#"{"providers":{"custom-do-test":{"baseUrl":"http://127.0.0.1:9/v1","models":[{"id":"qwen2.5-1.5b"}]},"ollama":{"baseUrl":"http://127.0.0.1:11434/v1","models":[{"id":"llama3.2:3b"}]}}}"#,
+        )
+        .unwrap();
+        let mut inventory = provider_inventory(&agent, &[], &[]).unwrap();
+        assert_eq!(inventory.providers[0].id, "custom-do-test");
+        adopt_shown_default(&agent, &mut inventory);
+        assert_eq!(inventory.default_provider.as_deref(), Some("ollama"));
+        assert_eq!(inventory.default_model.as_deref(), Some("llama3.2:3b"));
+        fs::remove_dir_all(agent).unwrap();
+    }
+
+    #[test]
+    fn names_a_connected_decision_model_while_routing_is_off() {
+        use muniment_core::model_router::config::{self, Classifier, RouterConfig};
+        let agent = temporary_directory();
+        assert!(!router_decision_model(&agent));
+        // Routing is off, so no classifier picks a route, but one is connected.
+        let saved = RouterConfig {
+            enabled: false,
+            classifier: Classifier::Typesafe {
+                api_key: "test-key".into(),
+                model: "jev-latest".into(),
+                base_url: None,
+                max_options: None,
+                limits: Default::default(),
+            },
+            ..RouterConfig::default()
+        };
+        config::save(&agent, &saved).unwrap();
+        let inventory = provider_inventory(&agent, &[], &[]).unwrap();
+        assert_eq!(inventory.router_classifier, None);
+        assert!(inventory.router_decision_model);
     }
 
     #[test]
@@ -1433,7 +1663,11 @@ llama     qwen3              32K      16.4K    yes       no\n";
 
         // A full read keeps what Pi listed, and a cached read reuses it even
         // while a slow step holds the store locks.
-        *listed.held() = Some((vec![row("openai", "gpt-test", "128K")], Vec::new()));
+        *listed.held() = Some((
+            vec![row("openai", "gpt-test", "128K")],
+            Vec::new(),
+            vec!["ollama".to_owned()],
+        ));
         let _models = pi_models::lock(&pi_models_file(&agent)).unwrap();
         let _auth = lock_pi_auth_file(&pi_auth_file(&agent)).unwrap();
         let started = std::time::Instant::now();
@@ -1441,9 +1675,59 @@ llama     qwen3              32K      16.4K    yes       no\n";
         assert!(started.elapsed() < Duration::from_secs(1));
         assert_eq!(cached.providers[0].models[0].id, "gpt-test");
         assert_eq!(cached.providers[1].models[0].id, "local-model");
+        // It carries the endpoints the last full read found not answering.
+        assert!(cached.providers[1].unreachable);
+        assert!(!cached.providers[0].unreachable);
+        assert!(!first.providers[1].unreachable);
         // It never adopts a default from rows a full read has not confirmed.
         assert_eq!(cached.default_provider, None);
         drop((_models, _auth));
+        fs::remove_dir_all(agent).unwrap();
+    }
+
+    #[test]
+    fn reads_provider_settings_at_once_while_a_lock_is_held_or_abandoned() {
+        let agent = temporary_directory();
+        fs::write(agent.join("models.json"), serde_json::json!({
+            "providers": {"ollama": {"baseUrl": "http://localhost:11434/v1", "models": [{"id": "local-model"}]}}
+        }).to_string()).unwrap();
+        fs::write(pi_auth_file(&agent), "{}").unwrap();
+        // A runtime killed during a write leaves both lock directories.
+        fs::create_dir(pi_models::lock_path(&pi_models_file(&agent))).unwrap();
+        fs::create_dir(pi_models::lock_path(&pi_auth_file(&agent))).unwrap();
+        let started = std::time::Instant::now();
+        let status = provider_status(&agent).unwrap();
+        let inventory = provider_inventory(&agent, &[], &[]).unwrap();
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(status.iter().any(|provider| provider.configured));
+        assert_eq!(inventory.providers[0].models[0].id, "local-model");
+        fs::remove_dir_all(agent).unwrap();
+    }
+
+    #[test]
+    fn an_unreachable_endpoint_says_so_and_keeps_its_saved_models() {
+        let agent = temporary_directory();
+        fs::write(agent.join("models.json"), serde_json::json!({
+            "providers": {
+                "ollama": {"baseUrl": "http://localhost:11434/v1", "models": [{"id": "local-model"}]},
+                "custom-dead": {"baseUrl": "http://192.0.2.1:8000/v1", "models": [{"id": "kept"}]}
+            }
+        }).to_string()).unwrap();
+        let mut inventory = provider_inventory(&agent, &[], &[]).unwrap();
+        mark_unreachable(&mut inventory, &["custom-dead".to_owned()]);
+        let value = serde_json::to_value(&inventory).unwrap();
+        let provider = |id: &str| {
+            value["providers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|provider| provider["id"] == id)
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(provider("custom-dead")["unreachable"], true);
+        assert_eq!(provider("custom-dead")["models"][0]["id"], "kept");
+        assert!(provider("ollama").get("unreachable").is_none());
         fs::remove_dir_all(agent).unwrap();
     }
 
@@ -1471,6 +1755,40 @@ llama     qwen3              32K      16.4K    yes       no\n";
         assert_eq!(inventory.providers[0].models.len(), 1);
         assert_eq!(inventory.providers[0].models[0].context, "128K");
         assert!(inventory.providers[0].models[0].images);
+    }
+
+    #[test]
+    fn the_picker_never_offers_a_model_that_refuses_tools() {
+        let agent = temporary_directory();
+        fs::write(
+            agent.join("models.json"),
+            serde_json::json!({
+                "providers": {"muniment-router": {"baseUrl": "http://127.0.0.1:1/v1", "models": [
+                    {"id": "xai/grok-4.20-multi-agent-0309"},
+                    {"id": "xai/grok-4.7"}
+                ]}}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fs::write(
+            agent.join("auth.json"),
+            r#"{"xai":{"type":"api_key","key":"k"}}"#,
+        )
+        .unwrap();
+        let rows = [
+            row("xai", "grok-4.20-multi-agent-0309", "2M"),
+            row("xai", "grok-4.7", "256K"),
+            row("muniment-router", "xai/grok-4.20-multi-agent-0309", "2M"),
+        ];
+        let inventory = provider_inventory(&agent, &rows, &[]).unwrap();
+        let ids: Vec<_> = inventory
+            .providers
+            .iter()
+            .flat_map(|provider| provider.models.iter().map(|model| model.id.as_str()))
+            .collect();
+        assert_eq!(ids, ["grok-4.7", "xai/grok-4.7"]);
+        fs::remove_dir_all(agent).unwrap();
     }
 
     #[test]
@@ -1546,7 +1864,7 @@ llama     qwen3              32K      16.4K    yes       no\n";
             r#"{"defaultProvider":"ollama","defaultModel":"llama3.2:3b"}"#,
         )
         .unwrap();
-        fs::write(agent.join(MODELS_RECORD_FILE), r#"{"hidden":["anthropic/claude-haiku-4-5"],"names":{"custom-proxy":"My proxy"},"claudeCode":true}"#).unwrap();
+        fs::write(agent.join(MODELS_RECORD_FILE), r#"{"hidden":["anthropic/claude-haiku-4-5"],"names":{"custom-proxy":"My proxy"},"formerNames":{"custom-live30":"Live30","custom-proxy":"Old proxy"},"claudeCode":true}"#).unwrap();
         let models = vec![
             PiModelRow {
                 provider: "ollama".into(),
@@ -1594,6 +1912,12 @@ llama     qwen3              32K      16.4K    yes       no\n";
         assert_eq!(inventory.default_provider.as_deref(), Some("ollama"));
         assert_eq!(inventory.default_model.as_deref(), Some("llama3.2:3b"));
         assert_eq!(inventory.hidden, vec!["anthropic/claude-haiku-4-5"]);
+        // A disconnected endpoint keeps its last name for usage history,
+        // and a connected one reads by its live name alone.
+        assert_eq!(
+            serde_json::to_value(&inventory).unwrap()["former_names"],
+            serde_json::json!({"custom-live30": "Live30"})
+        );
         fs::remove_dir_all(agent).unwrap();
     }
 

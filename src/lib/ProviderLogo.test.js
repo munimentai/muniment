@@ -1,5 +1,6 @@
 import { afterEach, expect, it } from 'vitest'
 import { cleanup, render } from '@testing-library/svelte'
+import '@testing-library/jest-dom/vitest'
 import ProviderLogo from './ProviderLogo.svelte'
 afterEach(cleanup)
 it('uses the Typesafe SVG for the unqualified Jev classifier name', () => {
@@ -33,4 +34,23 @@ it('shows the oMLX mark for the oMLX server and its custom endpoint, and the gen
   expect(generic).not.toContain('omlx-tile')
   cleanup()
   expect(mark('custom-proxy')).toBe(generic)
+})
+it('draws a named endpoint as its monogram on a tile in a tint its id keeps, and keeps every built-in mark', () => {
+  const tile = (provider, name) => render(ProviderLogo, { provider, name }).container.querySelector('.monogram')
+  const doTest = tile('custom-do-test', 'DO Test')
+  expect(doTest).toHaveTextContent('DT')
+  expect(doTest.style.getPropertyValue('--tint')).toMatch(/^var\(--tint-(blue|green|amber|rose|teal|orange)\)$/)
+  const tint = doTest.style.getPropertyValue('--tint')
+  cleanup()
+  expect(tile('custom-do-test', 'DO Test').style.getPropertyValue('--tint')).toBe(tint)
+  cleanup()
+  expect(tile('custom-live31', 'Live31')).toHaveTextContent('L3')
+  cleanup()
+  expect(tile('custom-proxy', 'proxy')).toHaveTextContent('P')
+  cleanup()
+  // A built-in provider, a server kind's mark and an unnamed endpoint keep their marks.
+  for (const [provider, name] of [['openai', 'OpenAI'], ['custom-omlx', 'oMLX'], ['custom-proxy', '']]) {
+    expect(tile(provider, name)).toBeNull()
+    cleanup()
+  }
 })

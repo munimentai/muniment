@@ -214,6 +214,80 @@ mod tests {
     }
 
     #[test]
+    fn a_steer_keeps_its_place_in_the_reply_after_a_reload() {
+        let path = std::env::temp_dir().join(format!("muniment-steer-{}.sqlite3", Uuid::now_v7()));
+        let run_id = Uuid::now_v7().to_string();
+        let mut journal =
+            RunJournal::open_with_busy_timeout(&path, Duration::from_secs(60)).unwrap();
+        let mut projector = ChatProjector::new();
+        for (seq, kind, payload) in [
+            (1, "run.started", json!({})),
+            (2, "model.stream.delta", json!({"text": "héllo "})),
+            (
+                3,
+                crate::journal::pi_translation::RUN_STEERED,
+                crate::journal::pi_translation::run_steered_payload("use the 😀 file"),
+            ),
+            (4, "model.stream.delta", json!({"text": "sure"})),
+        ] {
+            append_run_event_in_place(
+                &mut journal,
+                &mut projector,
+                &envelope(&run_id, seq, kind, payload),
+            )
+            .unwrap();
+        }
+        let live = projector.projection().unwrap();
+        drop(journal);
+
+        let mut reopened =
+            RunJournal::open_with_busy_timeout(&path, Duration::from_secs(60)).unwrap();
+        let replayed =
+            crate::journal::reducer::project_chat(&reopened.events(&run_id).unwrap()).unwrap();
+        for chat in [&live, &replayed] {
+            assert_eq!(chat.text, "héllo sure");
+            assert_eq!(
+                chat.steers,
+                vec![crate::journal::reducer::ProjectedSteer {
+                    text: "use the 😀 file".into(),
+                    text_offset: 6,
+                    sent_at: "2026-08-05T00:00:00Z".into(),
+                }]
+            );
+        }
+        drop(reopened);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_failed_steer_append_leaves_no_steer() {
+        let mut journal =
+            RunJournal::open_with_busy_timeout(":memory:", Duration::from_secs(60)).unwrap();
+        let run_id = Uuid::now_v7().to_string();
+        let mut projector = ChatProjector::new();
+        append_run_event_in_place(
+            &mut journal,
+            &mut projector,
+            &envelope(&run_id, 1, "run.started", json!({})),
+        )
+        .unwrap();
+        journal
+            .append(1, &envelope(&run_id, 2, "model.prompt.accepted", json!({})))
+            .unwrap();
+        let steer = envelope(
+            &run_id,
+            2,
+            crate::journal::pi_translation::RUN_STEERED,
+            crate::journal::pi_translation::run_steered_payload("stop"),
+        );
+        assert!(matches!(
+            append_run_event_in_place(&mut journal, &mut projector, &steer),
+            Err(RunAppendError::Append(_))
+        ));
+        assert!(projector.projection().unwrap().steers.is_empty());
+    }
+
+    #[test]
     fn failed_append_leaves_projector_unchanged() {
         let mut journal =
             RunJournal::open_with_busy_timeout(":memory:", Duration::from_secs(60)).unwrap();

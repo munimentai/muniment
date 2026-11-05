@@ -690,11 +690,10 @@ fn map_routines(
         let mut routine = Routine {
             id: String::new(),
             name: name.unwrap_or_else(|| {
-                let words: String = prompt.chars().take(60).collect();
-                if words.trim().is_empty() {
+                if prompt.trim().is_empty() {
                     format!("Routine {}", index + 1)
                 } else {
-                    words
+                    crate::agent_extract::routine_name(&prompt)
                 }
             }),
             enabled: false,
@@ -706,6 +705,8 @@ fn map_routines(
             proposed: true,
             last_poll: None,
             next_fire_at: None,
+            cut_short: false,
+            default_time: false,
         };
         portable_routine(&mut routine);
         routine.proposed = true;

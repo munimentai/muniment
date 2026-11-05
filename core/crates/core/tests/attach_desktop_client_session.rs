@@ -1005,6 +1005,7 @@ fn desktop_client_reads_proposes_and_commits_on_the_record() {
         serde_json::json!({"sql": "select 1", "other": true}),
         serde_json::json!({"sql": "select 1", "company_id": ""}),
     ] {
+        let empty_company = body.get("company_id").is_some();
         let Envelope::Error(error) = exchange(
             &mut client,
             request(
@@ -1017,6 +1018,14 @@ fn desktop_client_reads_proposes_and_commits_on_the_record() {
             panic!("the record.sql body was not validated");
         };
         assert_eq!(error.error.code(), ErrorCode::InvalidRequest);
+        assert!(!error.error.retryable());
+        if empty_company {
+            assert!(
+                error.error.to_string().contains("company_id is empty"),
+                "{}",
+                error.error
+            );
+        }
     }
 
     let Envelope::Response(response) = exchange(
@@ -1751,6 +1760,7 @@ fn desktop_chat_subscription_delivers_events_and_owns_the_session() {
             .send(ChatEvent {
                 run_id: "018f0000-0000-7000-8000-000000000211".into(),
                 thread_id: None,
+                started_at: None,
                 phase: phase.into(),
                 text: text.into(),
                 prompt_accepted: false,
@@ -1841,6 +1851,7 @@ fn desktop_chat_subscription_stays_responsive_under_sustained_events() {
                 .send(ChatEvent {
                     run_id: "018f0000-0000-7000-8000-000000000214".into(),
                     thread_id: None,
+                    started_at: None,
                     phase: "running".into(),
                     text: "event".into(),
                     prompt_accepted: false,
@@ -2432,7 +2443,7 @@ impl ThreadListService for ThreadMutationService {
         request_id: &Id,
         idempotency_key: &Id,
         provenance: CompanionProvenance,
-    ) -> Result<(), ProtocolError> {
+    ) -> Result<serde_json::Value, ProtocolError> {
         self.deletes.push((
             workspace.into(),
             thread_id.clone(),
@@ -2440,7 +2451,7 @@ impl ThreadListService for ThreadMutationService {
             idempotency_key.clone(),
             provenance,
         ));
-        Ok(())
+        Ok(serde_json::json!({}))
     }
 }
 

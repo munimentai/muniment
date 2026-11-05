@@ -5,6 +5,7 @@ use muniment_core::active_run::ChatDelivery;
 use muniment_core::attach::{RuntimeActivityRegistry, SignedWorkspaceApproval};
 use muniment_core::memory_runtime::ApplicationMemoryRuntime;
 use muniment_core::run_start::RunAttachBoundaries;
+use muniment_core::serde_json;
 use muniment_core::session_thread::SessionThread;
 use muniment_runtime_core::{
     open_companion_registry, open_profile_storage, run_prompt, RuntimeAttachBoundaries,
@@ -24,6 +25,19 @@ fn queued_message_reaches_a_live_runtime_run(
     message: &str,
     command: &str,
 ) {
+    queued_message_answers_after(test_name, run_id, delivery, message, command, None);
+}
+
+/// Sends `message` into a live reply that wrote `held_text`, when given,
+/// before the message reached it, and answers the reply's text.
+fn queued_message_answers_after(
+    test_name: &str,
+    run_id: &str,
+    delivery: ChatDelivery,
+    message: &str,
+    command: &str,
+    held_text: Option<&str>,
+) -> String {
     let _environment = ENVIRONMENT.lock().unwrap();
     common::use_test_prompt_store();
     let temporary_profile = TemporaryProfile::new(test_name, true);
@@ -33,6 +47,10 @@ fn queued_message_reaches_a_live_runtime_run(
     let descriptor = stage_pi_stub(&temporary_root);
     let steer_capture = temporary_root.join("steer.json");
     std::env::set_var("PI_RESUME_STUB_STEER_CAPTURE", &steer_capture);
+    match held_text {
+        Some(text) => std::env::set_var("PI_RESUME_STUB_HELD_TEXT", text),
+        None => std::env::remove_var("PI_RESUME_STUB_HELD_TEXT"),
+    }
 
     let storage = open_profile_storage(&profile).unwrap();
     let runtime = muniment_core::pi_execution::PiProcesses::default();
@@ -55,6 +73,7 @@ fn queued_message_reaches_a_live_runtime_run(
         open_companion_registry(&profile).unwrap(),
     );
     let (subscriber, events) = mpsc::channel();
+    let mut live_text = String::new();
     std::thread::scope(|scope| {
         let run = scope.spawn(|| {
             run_prompt(
@@ -82,12 +101,16 @@ fn queued_message_reaches_a_live_runtime_run(
         boundaries
             .queue_attach_message("workspace-a", run_id, delivery, message)
             .unwrap();
-        let delivered = events
-            .iter()
-            .take_while(|event| {
-                !matches!(event.phase.as_str(), "complete" | "failed" | "cancelled")
-            })
-            .any(|event| event.text.contains(command));
+        let mut delivered = false;
+        for event in events.iter() {
+            delivered |= event.text.contains(command);
+            if !event.text.is_empty() {
+                live_text.clone_from(&event.text);
+            }
+            if matches!(event.phase.as_str(), "complete" | "failed" | "cancelled") {
+                break;
+            }
+        }
         assert!(delivered);
         run.join().unwrap().unwrap();
     });
@@ -110,11 +133,54 @@ fn queued_message_reaches_a_live_runtime_run(
         journal_events.last().map(|event| event.event_type.as_str()),
         Some("run.completed" | "run.failed" | "run.cancelled")
     ));
+    // The journal keeps the message as the user wrote it, and the history
+    // read of the reopened profile places it inside the reply.
+    let steered: Vec<_> = journal_events
+        .iter()
+        .filter(|event| event.event_type == "run.steered")
+        .collect();
+    assert_eq!(steered.len(), 1, "{journal_events:?}");
+    let thread_id = {
+        let storage = storage.lock().unwrap();
+        storage.journal.run_thread_id(run_id).unwrap().unwrap()
+    };
+    let page = {
+        let mut storage = storage.lock().unwrap();
+        muniment_core::thread_history::chat_thread_open_page(
+            &mut storage.journal,
+            None,
+            Some("owner"),
+            &temporary_root,
+            &thread_id,
+            10,
+            None,
+        )
+        .unwrap()
+    };
+    let entry = page
+        .entries
+        .iter()
+        .find(|entry| entry.run_id == run_id)
+        .unwrap();
+    assert_eq!(entry.steers.len(), 1);
+    let steer = &entry.steers[0];
+    assert_eq!(steer.text, message);
+    assert_eq!(steer.sent_at, steered[0].recorded_at);
+    assert!(steer.text_offset <= entry.text.encode_utf16().count());
+    let wire = serde_json::to_value(entry).unwrap();
+    assert_eq!(wire["steers"][0]["text"], message);
+    assert_eq!(wire["steers"][0]["textOffset"], steer.text_offset);
+    assert_eq!(wire["steers"][0]["sentAt"], steer.sent_at.as_str());
 
+    // The reply streams the text its history keeps.
+    assert_eq!(live_text, entry.text);
+    let text = entry.text.clone();
     drop(journal_events);
     drop(storage);
     std::env::remove_var("PI_RESUME_STUB_STEER_CAPTURE");
+    std::env::remove_var("PI_RESUME_STUB_HELD_TEXT");
     std::env::remove_var("MUNIMENT_PI_ROOT");
+    text
 }
 
 #[test]
@@ -137,4 +203,17 @@ fn a_queued_follow_up_reaches_a_live_runtime_run() {
         "then do this",
         "follow_up",
     );
+}
+
+#[test]
+fn the_answer_to_a_steer_starts_a_paragraph_after_the_text_before_it() {
+    let text = queued_message_answers_after(
+        "steer-paragraph",
+        "018f0000-0000-7000-8000-000000000116",
+        ChatDelivery::Steer,
+        "count on",
+        "steer",
+        Some("one hundred"),
+    );
+    assert_eq!(text, "one hundred\n\nsteer");
 }

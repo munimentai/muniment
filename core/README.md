@@ -1100,8 +1100,15 @@ The runtime keeps the key of each Ollama, LM Studio or custom endpoint in its
 credential store, the keychain on the desktop and `FileCredentialStore` on a
 headless host, under the service `ai.muniment.endpoints` with the provider id
 as the name. Pi's `models.json` holds a command in its place,
-`!"<runtime executable>" secret get <provider>`, which Pi runs for the key and
-which `muniment-runtime` and `muniment-server` answer from the same store. At
+`!"<runtime executable>" secret get <provider>`, which Pi runs for the key. The
+command asks the running runtime over the owner-only socket
+`<state_dir>/endpoint-keys/socket` and reads the store itself only when no
+runtime answers there. Pi kills the command after 10 seconds, so the runtime
+reads the store on its own thread, one read per key at a time, holds the
+command at most 8 seconds and then answers that the key is pending. It keeps a
+key it read for later requests and a refusal for the person's retry. It reads
+a key only for a request that uses the endpoint, and a model list read sends
+only a key it already holds. At
 startup and after every model action the runtime moves any plain key it finds
 in `models.json` into the store and points each command at its current
 executable. A stand-in key, an environment reference and a command the user

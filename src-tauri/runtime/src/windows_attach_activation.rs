@@ -162,6 +162,7 @@ pub fn run_windows_attach_activation_with_retention_schedule(
 
     let remote_state = acceptor.retention_state();
     if let Some(state) = &remote_state {
+        crate::spawn_memory_extension_sweep(state.profile_directory().join("memory"));
         crate::start_remote_route(state);
     }
     let (retention_commands, retention_command_rx) = mpsc::channel();
@@ -184,6 +185,7 @@ pub fn run_windows_attach_activation_with_retention_schedule(
     let loop_exit = run_windows_attach_accept_loop(&mut acceptor);
     if let Some(state) = &remote_state {
         state.stop_remote_route();
+        state.stop_idle_processes();
     }
     let _ = retention_commands.send(RetentionScheduleCommand::Stop);
     if let Some(retention_thread) = retention_thread {

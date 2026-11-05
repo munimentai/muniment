@@ -72,7 +72,7 @@ it('edits a routing statement once a decision model is connected', async () => {
  render(ModelRouterSection,{tauri:{invoke},settings,onsettings,inventory:inventory('jev-latest')})
  expect(screen.getByRole('heading',{name:'Routing statements'})).toBeInTheDocument()
  expect(screen.getByText('Short answers')).toBeInTheDocument()
- await fireEvent.click(screen.getByRole('button',{name:'Edit statement for GPT 6.1 Sol'}))
+ await fireEvent.click(screen.getByRole('button',{name:'Edit statement for GPT-6.1 Sol'}))
  await fireEvent.input(screen.getByLabelText('When should this model answer?'),{target:{value:' Code reviews '}})
  await fireEvent.click(screen.getByRole('button',{name:'Save statement'}))
  await waitFor(()=>expect(invoke).toHaveBeenCalledWith('model_router_save_routes',{routes:saved.routes,fallback:null,minConfidence:0.6}))

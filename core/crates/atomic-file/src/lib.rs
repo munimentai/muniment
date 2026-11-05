@@ -1,6 +1,28 @@
+pub mod test_root;
+
 use std::fs;
 use std::io;
 use std::path::Path;
+
+/// Whether `path` is a regular file that already holds `bytes` and, on
+/// Unix, opens to its owner alone. A save of the same private content then
+/// leaves the file, its inode and a full disk alone.
+pub fn holds_private(path: &Path, bytes: &[u8]) -> bool {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return false;
+    };
+    if !metadata.is_file() || metadata.len() != bytes.len() as u64 {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o777 != 0o600 {
+            return false;
+        }
+    }
+    fs::read(path).is_ok_and(|current| current == bytes)
+}
 
 /// Replaces `destination` with `source` atomically.
 #[cfg(not(target_os = "windows"))]
@@ -62,6 +84,37 @@ fn replace_once(source: &Path, destination: &Path) -> io::Result<()> {
         return Err(io::Error::last_os_error());
     }
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod private_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn holds_private_matches_only_the_same_private_bytes() {
+        let root = test_root::test_root().join("holds-private");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("auth.json");
+        assert!(!holds_private(&path, b"{}"));
+        fs::write(&path, b"{}").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(
+            !holds_private(&path, b"{}"),
+            "a shared file is rewritten private"
+        );
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(holds_private(&path, b"{}"));
+        assert!(!holds_private(&path, b"[]"));
+        assert!(!holds_private(&path, b"{ }"));
+        let link = root.join("link.json");
+        std::os::unix::fs::symlink(&path, &link).unwrap();
+        assert!(
+            !holds_private(&link, b"{}"),
+            "a link is replaced, not followed"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
 }
 
 #[cfg(all(test, windows))]

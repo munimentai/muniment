@@ -15,6 +15,8 @@ vi.mock('./feature-flags.js', () => ({featureFlags: {cloud: true, companyRecord:
 import { historyMessages } from './lib/chat-state.js'
 import { SCAN_RETRY_DELAYS } from './lib/first-run-providers.js'
 import { cronLabel } from './agents/cron.js'
+import { shown } from './lib/focus-landing.js'
+import { forgetDeletedThreads } from './lib/deleted-threads.svelte.js'
 
 const extensionInstances = vi.hoisted(() => [])
 vi.mock('./extend/ComposerExtensions.svelte', async (importOriginal) => {
@@ -172,6 +174,8 @@ const device = (device_id, overrides = {}) => ({
 async function findWorkspaceComposer() {
   const composer = await screen.findByLabelText('Message', { selector: '#composer-message' })
   expect(composer).toHaveAttribute('placeholder', 'Ask anything')
+  // The composer takes typing once the launch hold lifts on the first thread view.
+  await waitFor(() => expect(composer.closest('[data-launch-hold]')).toBeNull())
   return composer
 }
 
@@ -192,6 +196,9 @@ async function stopClickCapture(voice) {
   await fireEvent.click(voice)
   await fireEvent.click(voice)
 }
+
+// The sidebar fills once the first thread page and the agent listing are in.
+const sidebarRows = () => waitFor(() => expect(document.querySelector('#sidebar .thread-row')).not.toBeNull())
 
 function deferred() {
   let resolve
@@ -390,7 +397,9 @@ describe('launcher requests', () => {
     await waitFor(() => expect(screen.getByText('Start here', { selector: '.user-message p' })).toBeInTheDocument())
     expect(invoke).toHaveBeenCalledWith('chat_new_thread')
     expect(invoke).toHaveBeenCalledWith('chat_submit', { prompt: 'Start here', files: [] })
-    expect(composer.value).toBe('Keep my main draft')
+    // The draft stays with the thread it was written in.
+    await fireEvent.click(document.querySelector('#sidebar .thread-row[data-thread-id="thread-1"]'))
+    await waitFor(() => expect(composer.value).toBe('Keep my main draft'))
     expect(launcherReply).toHaveBeenCalledWith('launcher', 'launcher-result', { id: 'launcher-request', error: '' })
   })
 })
@@ -694,7 +703,7 @@ describe('workspace composer entry', () => {
     }
   })
 
-  it('shows the foreground-only notice over the composer once per launch after it times out', async () => {
+  it('keeps the foreground-only notice over the composer past the notice timeout until the user closes it', async () => {
     runtimeState = { revision: 1, lastEvent: 'connected', visible: false, busy: false, foregroundOnly: true }
     invoke.mockImplementation(async (command) => {
       if (command === 'project_list') return { projects: {}, threads: {} }
@@ -715,7 +724,9 @@ describe('workspace composer entry', () => {
       expect(notice.parentElement).toBe(composer.closest('.composer'))
       expect(notice).toHaveAttribute('data-composer-panel')
       expect(within(notice).getByText('Scheduled agents run only while Muniment is open.')).not.toHaveClass('record')
-      await vi.advanceTimersByTimeAsync(6000)
+      await vi.advanceTimersByTimeAsync(30000)
+      expect(screen.getByTestId('foreground-only-notice')).toBeInTheDocument()
+      await fireEvent.click(within(notice).getByRole('button', { name: 'Dismiss background service notice' }))
       await waitFor(() => expect(screen.queryByTestId('foreground-only-notice')).not.toBeInTheDocument())
       runtimeListener({ payload: { revision: 2, lastEvent: 'connected', visible: false, busy: false, foregroundOnly: true } })
       await vi.advanceTimersByTimeAsync(1000)
@@ -723,8 +734,52 @@ describe('workspace composer entry', () => {
       runtimeListener({ payload: { revision: 3, lastEvent: 'connected', visible: false, busy: false, foregroundOnly: false } })
       await vi.advanceTimersByTimeAsync(10)
       runtimeListener({ payload: { revision: 4, lastEvent: 'connected', visible: false, busy: false, foregroundOnly: true } })
-      expect(await screen.findByTestId('foreground-only-notice')).toBeInTheDocument()
+      await vi.advanceTimersByTimeAsync(10)
+      // The close control keeps it away for the launch.
+      expect(screen.queryByTestId('foreground-only-notice')).not.toBeInTheDocument()
     } finally { vi.useRealTimers() }
+  })
+
+  it('keeps the workspace while Login Items turns the service off and a child takes over', async () => {
+    runtimeState = { revision: 1, lastEvent: 'connected', visible: false, busy: false, foregroundOnly: false }
+    render(App)
+    await findWorkspaceComposer()
+    const sequence = [
+      { lastEvent: 'disconnected', reconnecting: true, foregroundOnly: false },
+      { lastEvent: 'disconnected', reconnecting: true, foregroundOnly: true, busy: true },
+      { lastEvent: 'childStarted', reconnecting: true, foregroundOnly: true },
+    ]
+    for (const [index, step] of sequence.entries()) {
+      runtimeListener({ payload: { revision: index + 2, visible: false, busy: false, ...step } })
+      expect(await screen.findByTestId('runtime-reconnecting')).toHaveTextContent('Reconnecting…')
+      expect(screen.queryByTestId('runtime-notice')).not.toBeInTheDocument()
+      expect(screen.queryByText('The runtime service did not start, so the desktop runs the runtime itself.')).not.toBeInTheDocument()
+      expect(screen.getByLabelText('Message', { selector: '#composer-message' })).toBeInTheDocument()
+    }
+    const notice = await screen.findByTestId('foreground-only-notice')
+    expect(within(notice).getByRole('button', { name: 'Open Login Items' })).toBeVisible()
+    runtimeListener({ payload: { revision: 5, lastEvent: 'connected', visible: false, busy: false, reconnecting: false, foregroundOnly: true } })
+    await waitFor(() => expect(screen.queryByTestId('runtime-reconnecting')).not.toBeInTheDocument())
+    expect(screen.queryByTestId('runtime-notice')).not.toBeInTheDocument()
+    expect(screen.getByTestId('foreground-only-notice')).toBeInTheDocument()
+  })
+
+  it('keeps the foreground-only state in Settings > General after the composer notice closes', async () => {
+    runtimeState = { revision: 1, lastEvent: 'connected', visible: false, busy: false, foregroundOnly: true }
+    const fallback = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, args) => command === 'open_login_items' ? undefined : fallback(command, args))
+    render(App)
+    await findWorkspaceComposer()
+    const notice = await screen.findByTestId('foreground-only-notice')
+    await fireEvent.click(within(notice).getByRole('button', { name: 'Dismiss background service notice' }))
+    await waitFor(() => expect(screen.queryByTestId('foreground-only-notice')).not.toBeInTheDocument())
+    const dialog = await openSettings('General')
+    const group = await within(dialog).findByRole('region', { name: 'Background service' })
+    expect(within(group).getByText('Scheduled agents run only while Muniment is open.')).toBeVisible()
+    await fireEvent.click(within(group).getByRole('button', { name: 'Open Login Items' }))
+    expect(invoke).toHaveBeenCalledWith('open_login_items')
+    runtimeListener({ payload: { revision: 2, lastEvent: 'connected', visible: false, busy: false, foregroundOnly: false } })
+    await waitFor(() => expect(within(dialog).queryByRole('region', { name: 'Background service' })).not.toBeInTheDocument())
   })
 
   it('says once over the workspace that scheduled agents run only while the app is open', async () => {
@@ -1371,8 +1426,10 @@ describe('workspace composer entry', () => {
       return fallback(command, payload)
     })
     render(App)
-    const composer = await findWorkspaceComposer()
+    const composer = await screen.findByLabelText('Message', { selector: '#composer-message' })
     await waitFor(() => expect(composer).toBeDisabled())
+    // The launch hold keeps the held composer out of sight while the thread restores.
+    expect(composer.closest('[data-launch-hold]')).not.toBeNull()
 
     // A stale input event can land as the thread restore starts.
     await fireEvent.input(composer, { target: { value: 'Keep this prompt' } })
@@ -1550,6 +1607,40 @@ describe('workspace composer entry', () => {
     expect(await screen.findByText('Connect a model in the composer to start chatting.')).toBeInTheDocument()
   })
 
+  it('names no model and offers no connection on the chip until the model inventory settles', async () => {
+    localModeStatus = true
+    const router = { id: 'muniment-router', name: 'Muniment router', source: 'router', base_url: null, models: [] }
+    const served = { providers: [router], default_provider: 'muniment-router', default_model: 'openai/gpt-6-astra', hidden: [], shown: [], router_models: [{ id: 'openai/gpt-6-astra', name: 'GPT-6 Astra', family: 'openai', model: 'gpt-6-astra', accounts: 1 }] }
+    const reads = [deferred(), deferred()]
+    let read = 0
+    const defaultInvoke = invoke.getMockImplementation()
+    invoke.mockImplementation((command, ...args) => command === 'local_mode_provider_inventory' ? reads[Math.min(read++, 1)].promise : defaultInvoke(command, ...args))
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      render(App)
+      const chip = await screen.findByRole('button', { name: 'Model: Checking models…' })
+      expect(chip).toBeDisabled()
+      expect(screen.queryByRole('button', { name: 'Model: Connect a model' })).not.toBeInTheDocument()
+      // The router answers before it lists its models, so the read goes on.
+      reads[0].resolve({ ...served, router_models: [] })
+      await vi.advanceTimersByTimeAsync(10)
+      expect(screen.getByRole('button', { name: 'Model: Checking models…' })).toBeDisabled()
+      expect(screen.queryByRole('button', { name: 'Model: Connect a model' })).not.toBeInTheDocument()
+      reads[1].resolve(served)
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(await screen.findByRole('button', { name: 'Model: GPT-6 Astra' })).toBeEnabled()
+    } finally { vi.useRealTimers() }
+  })
+
+  it('offers to connect a model on the chip once a settled inventory names none', async () => {
+    localModeStatus = true
+    const defaultInvoke = invoke.getMockImplementation()
+    invoke.mockImplementation((command, ...args) => command === 'local_mode_provider_inventory' ? Promise.resolve(emptyInventory) : defaultInvoke(command, ...args))
+    render(App)
+    expect(await screen.findByRole('button', { name: 'Model: Connect a model' })).toBeEnabled()
+    expect(screen.queryByRole('button', { name: 'Model: Checking models…' })).not.toBeInTheDocument()
+  })
+
   it('opens Settings in the sidebar column with Models, Preferences, Home, Companies and Account sections', async () => {
     localModeStatus = true
     render(App)
@@ -1614,6 +1705,99 @@ describe('workspace composer entry', () => {
     await fireEvent.keyDown(document, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument())
     await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Settings' })))
+  })
+
+  it('moves focus off the hidden composer when Settings opens over a thread', async () => {
+    localModeStatus = true
+    localStorage.setItem('muniment.sidebar-collapsed', 'collapsed')
+    // The app's own rule hides the thread under Settings. jsdom loads no component styles.
+    const hide = document.head.appendChild(document.createElement('style'))
+    hide.textContent = '.workspace.settings-open > :not(.titlebar, .sidebar, .sidebar-divider, .settings-layout, .workspace-panel) { visibility: hidden; }'
+    render(App)
+    const composer = await findWorkspaceComposer()
+    composer.focus()
+    expect(composer).toHaveFocus()
+    await fireEvent.keyDown(document, navigator.platform.startsWith('Mac') ? { key: ',', metaKey: true } : { key: ',', ctrlKey: true })
+    await vi.dynamicImportSettled()
+    await screen.findByRole('dialog', { name: 'Settings' }, { timeout: 5000 })
+    // Focus leaves the composer the page now hides, so no caret mark stays over Settings.
+    await waitFor(() => expect(composer).not.toHaveFocus())
+    expect(document.activeElement === document.body || shown(document.activeElement)).toBe(true)
+    hide.remove()
+  })
+
+  // WebKit gives a clicked button no focus and drops focus to the body, while
+  // the system's input-source mark stays at the composer's caret. Each page
+  // that replaces the thread takes focus on a part the user sees.
+  it.each([
+    ['Agents', { name: 'Agents', exact: true }, { name: 'Agents', exact: true }],
+    ['Artifacts', { name: 'Artifacts', exact: true }, { name: 'Artifacts', exact: true }],
+    ['Usage', { name: 'Usage', exact: true }, { name: 'Usage', exact: true }],
+    ['Notifications', { name: /^Notifications/ }, { name: 'Notifications', exact: true }],
+  ])('lands focus on the %s page after launch when the click leaves it on the body', async (_, button, region) => {
+    localModeStatus = true
+    const fallback = invoke.getMockImplementation()
+    const notifications = { needs_you: [], running: [], days: [], upcoming: [], counts: { needs_you: 0, running: 0, failed: 0, unread: 0 }, machines: [], agents: [] }
+    invoke.mockImplementation((command, args) => command === 'notifications_list' ? Promise.resolve(notifications) : fallback(command, args))
+    const hide = document.head.appendChild(document.createElement('style'))
+    hide.textContent = '.workspace.agents-open .thread-panel { display: none; }'
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    // Launch opens the thread with the composer focused.
+    await waitFor(() => expect(composer).toHaveFocus())
+    const sidebar = document.getElementById('sidebar')
+    const entry = within(sidebar).getAllByRole('button', button).find((node) => node.closest('.side-action, .sidebar-actions'))
+    await fireEvent.click(entry)
+    // jsdom leaves focus where it was on a click, so the test drops it to the body as WebKit does.
+    const sink = document.body.appendChild(document.createElement('button'))
+    sink.focus()
+    sink.remove()
+    expect(document.activeElement).toBe(document.body)
+    const page = await screen.findByRole('region', region, { timeout: 5000 })
+    await waitFor(() => expect(page).toContainElement(document.activeElement))
+    expect(shown(document.activeElement)).toBe(true)
+    expect(document.activeElement).not.toBe(composer)
+    hide.remove()
+  })
+
+  it('titles the window by the page that shows, and by the thread only while a thread shows', async () => {
+    localModeStatus = true
+    threadSummaryResult = [{ threadId: 'final', title: 'Final Verification Thread', updatedAt: '2026-07-28T11:55:00Z', runtimeId: 'local' }]
+    const fallback = invoke.getMockImplementation()
+    const notifications = { needs_you: [], running: [], days: [], upcoming: [], counts: { needs_you: 0, running: 0, failed: 0, unread: 0 }, machines: [], agents: [] }
+    invoke.mockImplementation((command, args) => command === 'notifications_list' ? Promise.resolve(notifications) : fallback(command, args))
+    const setTitle = vi.fn(async () => {})
+    window.__TAURI__.window = { getCurrentWindow: () => ({ setTitle }) }
+    onTestFinished(() => { delete window.__TAURI__.window })
+    render(App)
+    await findWorkspaceComposer()
+    await waitFor(() => expect(setTitle).toHaveBeenLastCalledWith('Final Verification Thread | muniment'))
+    const sidebar = document.getElementById('sidebar')
+    for (const [name, title] of [['Agents', 'Agents | muniment'], ['Usage', 'Usage | muniment'], ['Notifications', 'Notifications | muniment']]) {
+      await fireEvent.click(within(sidebar).getAllByRole('button', { name: new RegExp(`^${name}`) }).find((node) => node.closest('.side-action, .sidebar-actions')))
+      await waitFor(() => expect(setTitle).toHaveBeenLastCalledWith(title))
+      await fireEvent.click(document.querySelector('#sidebar .thread-row[data-thread-id="final"]'))
+      await waitFor(() => expect(setTitle).toHaveBeenLastCalledWith('Final Verification Thread | muniment'))
+    }
+    await openSettings('Data')
+    await waitFor(() => expect(setTitle).toHaveBeenLastCalledWith('Settings | muniment'))
+  })
+
+  it('lands focus on the Agents page after launch when the hidden composer keeps it', async () => {
+    localModeStatus = true
+    const hide = document.head.appendChild(document.createElement('style'))
+    hide.textContent = '.workspace.agents-open .thread-panel { display: none; }'
+    render(App)
+    const composer = await screen.findByPlaceholderText('Ask anything')
+    await waitFor(() => expect(composer).toHaveFocus())
+    await fireEvent.click(within(document.getElementById('sidebar')).getByRole('button', { name: 'Agents', exact: true }))
+    const page = await screen.findByRole('region', { name: 'Agents', exact: true }, { timeout: 5000 })
+    const title = within(page).getByRole('heading', { name: 'Agents' })
+    await waitFor(() => expect(document.activeElement).toBe(title))
+    expect(shown(title)).toBe(true)
+    // The heading takes focus from code only, never from Tab.
+    expect(title).toHaveAttribute('tabindex', '-1')
+    hide.remove()
   })
 
   it('opens Settings from the settings shortcut with a collapsed sidebar and toggles it', async () => {
@@ -1875,7 +2059,10 @@ describe('workspace composer entry', () => {
     await fireEvent.click(within(dialog).getByRole('button', { name: 'Save Ollama server' }))
     expect(invoke).toHaveBeenCalledWith('local_mode_store_local_provider', { baseUrl: 'http://localhost:11434/v1', apiKey: fails ? 'sk-ollama' : null })
     expect(url).toBeDisabled()
-    expect(within(dialog).getByRole('button', { name: 'Save Ollama server' })).toBeDisabled()
+    // The save shows it is busy while it runs, as it does while it waits on a lock.
+    const busy = within(dialog).getByRole('button', { name: 'Saving…' })
+    expect(busy).toBeDisabled()
+    expect(busy).toHaveAttribute('aria-busy', 'true')
 
     if (fails) save.reject(new Error('Ollama setup failed. Check the URL, then retry.'))
     else save.resolve()
@@ -2852,9 +3039,9 @@ describe('artifact rail', () => {
   it('toggles the artifact rail and sidebar from the focused composer', async () => {
     render(App)
     const toggle = await screen.findByRole('button', { name: 'Artifacts' })
-    const composer = screen.getByPlaceholderText('Ask anything')
+    const composer = await findWorkspaceComposer()
     const mac = navigator.platform.startsWith('Mac')
-    expect(composer).toHaveFocus()
+    await waitFor(() => expect(composer).toHaveFocus())
 
     await fireEvent.keyDown(composer, { key: 'j', metaKey: mac, ctrlKey: !mac })
     await waitFor(() => expect(toggle).toHaveAttribute('aria-expanded', 'true'))
@@ -3030,7 +3217,7 @@ describe('thread name', () => {
 
     expect(heading).toContainElement(screen.getByRole('button', { name: 'Rename thread' }))
     expect(listHeading).toBeInTheDocument()
-    expect(within(list).getAllByRole('listitem')).toHaveLength(2)
+    await waitFor(() => expect(within(list).getAllByRole('listitem')).toHaveLength(2))
     expect(screen.getByRole('region', { name: 'Transcript: Lease renewal' })).toBeInTheDocument()
   })
 
@@ -3084,6 +3271,82 @@ describe('thread name', () => {
     expect(within(list).getByRole('button', { name: 'Unassigned notes' })).toBeInTheDocument()
   })
 
+  it('opens a row\'s menu only for the row a right press began on, when a re-render moves another row under the pointer', async () => {
+    threadSummaryResult = [{ threadId: 'thread-9', title: 'Run Saved Agent Instructions', updatedAt: new Date().toISOString() }]
+    const catalog = { projects: { research: 'Research' }, threads: {} }
+    const baseInvoke = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, payload) => command === 'project_list' ? structuredClone(catalog) : baseInvoke(command, payload))
+    render(App)
+    const project = await screen.findByRole('button', { name: 'Project Research' })
+    const thread = (await screen.findByRole('button', { name: 'Actions for Run Saved Agent Instructions' })).closest('.thread-record')
+    // The press lands on the project row, and the context menu then lands on the thread row.
+    await fireEvent.pointerDown(project, { button: 2 })
+    await fireEvent.contextMenu(thread, { clientX: 40, clientY: 120 })
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+    await fireEvent.pointerDown(thread, { button: 0, ctrlKey: true })
+    await fireEvent.contextMenu(project, { clientX: 40, clientY: 60 })
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+    // A press and its context menu on one row open that row's menu.
+    await fireEvent.pointerDown(project, { button: 2 })
+    await fireEvent.contextMenu(project, { clientX: 40, clientY: 60 })
+    expect(screen.getByRole('menu', { name: 'Research actions' })).toBeInTheDocument()
+    await fireEvent.keyDown(screen.getByRole('menu', { name: 'Research actions' }), { key: 'Escape' })
+    await fireEvent.pointerDown(thread, { button: 2 })
+    await fireEvent.contextMenu(thread, { clientX: 40, clientY: 120 })
+    expect(screen.getByRole('menu', { name: 'Run Saved Agent Instructions actions' })).toBeInTheDocument()
+  })
+
+  it('keeps the sidebar scroll and selects no title word when a right press opens and closes a thread row menu', async () => {
+    threadSummaryResult = [{ threadId: 'thread-9', title: 'Run Saved Agent Instructions', updatedAt: new Date().toISOString() }]
+    render(App)
+    const thread = (await screen.findByRole('button', { name: 'Actions for Run Saved Agent Instructions' })).closest('.thread-record')
+    const title = thread.querySelector('.thread-row-title')
+    // WebKit selects the word under a right press and scrolls to the row it focuses.
+    const down = new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 2 })
+    title.dispatchEvent(down)
+    expect(down.defaultPrevented).toBe(true)
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus')
+    try {
+      await fireEvent.pointerDown(title, { button: 2 })
+      await fireEvent.contextMenu(thread, { clientX: 40, clientY: 120 })
+      const menu = screen.getByRole('menu', { name: 'Run Saved Agent Instructions actions' })
+      await fireEvent.keyDown(menu, { key: 'Escape' })
+      await waitFor(() => expect(document.activeElement?.dataset.threadId).toBe('thread-9'))
+      expect(focus.mock.calls.length).toBeGreaterThanOrEqual(2)
+      for (const [options] of focus.mock.calls) expect(options).toEqual({ preventScroll: true })
+    } finally { focus.mockRestore() }
+  })
+
+  it('deletes a project from its menu after a confirm that says its threads stay', async () => {
+    const catalog = { projects: { research: 'Research' }, threads: { 'thread-1': 'research' } }
+    const baseInvoke = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, payload) => {
+      if (command === 'project_list') return structuredClone(catalog)
+      if (command === 'project_delete') {
+        delete catalog.projects[payload.projectId]
+        for (const [thread, project] of Object.entries(catalog.threads)) if (project === payload.projectId) delete catalog.threads[thread]
+        return '/home/me/projects/Research-1'
+      }
+      return baseInvoke(command, payload)
+    })
+    render(App)
+    await screen.findByRole('button', { name: 'Project Research' })
+    await fireEvent.contextMenu(screen.getByRole('button', { name: 'Project Research' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete', exact: true }))
+    let dialog = await screen.findByRole('dialog', { name: 'Delete Research?' })
+    expect(dialog).toHaveTextContent('Its thread stays, in no project. Its folder is removed unless it holds your files.')
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Delete Research?' })).not.toBeInTheDocument())
+    expect(invoke).not.toHaveBeenCalledWith('project_delete', expect.anything())
+    await fireEvent.contextMenu(screen.getByRole('button', { name: 'Project Research' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete', exact: true }))
+    dialog = await screen.findByRole('dialog', { name: 'Delete Research?' })
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Delete project' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('project_delete', { projectId: 'research' }))
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Project Research' })).not.toBeInTheDocument())
+    expect(await screen.findByTestId('project-folder-kept-notice')).toHaveTextContent("The project's folder holds your files, so it stays. /home/me/projects/Research-1")
+  })
+
   it.each([false, true])('creates and renames a project with the catalog open: %s', async (catalogOpen) => {
     const catalog = { projects: { research: 'Research' }, threads: { 'thread-1': 'research' } }
     const baseInvoke = invoke.getMockImplementation()
@@ -3098,19 +3361,56 @@ describe('thread name', () => {
     render(App)
     await screen.findByRole('button', { name: 'Project Research' })
     await fireEvent.click(screen.getByRole('button', { name: 'New project' }))
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'Project name' })).toHaveFocus())
+    // macOS autocorrect and spelling never change a name as it is typed.
+    for (const [name, value] of [['spellcheck', 'false'], ['autocorrect', 'off'], ['autocapitalize', 'off'], ['autocomplete', 'off']]) expect(screen.getByRole('textbox', { name: 'Project name' })).toHaveAttribute(name, value)
     await fireEvent.input(screen.getByRole('textbox', { name: 'Project name' }), { target: { value: 'Contracts' } })
-    await fireEvent.click(screen.getByRole('button', { name: 'Create' }))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Project Contracts' })).toHaveAttribute('aria-expanded', 'true'))
+    // Core may place the new project below the fold, so Create scrolls it into view and marks it.
+    const scrolled = []
+    Element.prototype.scrollIntoView = function (options) { scrolled.push([this.getAttribute('aria-label'), options]) }
+    try {
+      await fireEvent.click(screen.getByRole('button', { name: 'Create' }))
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Project Contracts' })).toHaveAttribute('aria-expanded', 'true'))
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Project Contracts' })).toHaveFocus())
+      expect(screen.getByRole('button', { name: 'Project Contracts' })).toHaveAttribute('aria-current', 'true')
+      expect(scrolled).toContainEqual(['Project Contracts', { block: 'nearest' }])
+      // The mark lasts while the new row holds focus.
+      screen.getByRole('button', { name: 'Project Contracts' }).blur()
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Project Contracts' })).not.toHaveAttribute('aria-current'))
+    } finally { delete Element.prototype.scrollIntoView }
     expect(invoke).not.toHaveBeenCalledWith('chat_new_thread', expect.anything())
     await fireEvent.click(screen.getByRole('button', { name: 'New thread in Contracts' }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_new_thread', { projectId: 'created' }))
     await waitFor(() => expect(screen.getByRole('button', { name: 'New thread in Contracts' })).toBeEnabled())
     if (catalogOpen) await openSidebarPage('Projects')
     await fireEvent.contextMenu(screen.getByRole('button', { name: 'Project Contracts' }))
-    await fireEvent.click(screen.getByRole('menuitem', { name: 'Rename', exact: true }))
+    const opened = []
+    Element.prototype.scrollIntoView = function (options) { opened.push([this.className, options]) }
+    try {
+      await fireEvent.click(screen.getByRole('menuitem', { name: 'Rename', exact: true }))
+      await waitFor(() => expect(screen.getByRole('textbox', { name: 'Project name' })).toHaveFocus())
+      // The field opens in place of the project's row, however low it sits, and scrolls into view.
+      await waitFor(() => expect(opened).toContainEqual([expect.stringContaining('row-rename'), { block: 'nearest' }]))
+    } finally { delete Element.prototype.scrollIntoView }
+    const renameField = screen.getByRole('textbox', { name: 'Project name' })
+    expect(renameField.closest('[data-project-id]')).toHaveAttribute('data-project-id', 'created')
+    expect(screen.queryByRole('button', { name: 'Project Contracts' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Project Research' })).toBeInTheDocument()
+    // The old name is selected, so the first keystroke replaces it.
+    await waitFor(() => expect([renameField.selectionStart, renameField.selectionEnd]).toEqual([0, 'Contracts'.length]))
+    // The New project tooltip sits over the name field, so it hides while the form is open.
+    const newProject = () => document.querySelector('.section-control[aria-label="New project"]')
+    expect(newProject()).toHaveClass('tipless')
     await fireEvent.input(screen.getByRole('textbox', { name: 'Project name' }), { target: { value: 'Agreements' } })
-    await fireEvent.click(screen.getByRole('button', { name: 'Save' }))
-    await screen.findByRole('button', { name: 'Project Agreements' })
+    // Save brings the renamed project into view.
+    const renamed = []
+    Element.prototype.scrollIntoView = function (options) { renamed.push([this.getAttribute('aria-label'), options]) }
+    try {
+      await fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+      await screen.findByRole('button', { name: 'Project Agreements' })
+      await waitFor(() => expect(renamed).toContainEqual(['Project Agreements', { block: 'nearest' }]))
+    } finally { delete Element.prototype.scrollIntoView }
+    expect(newProject()).not.toHaveClass('tipless')
     expect(invoke).toHaveBeenCalledWith('project_rename', { projectId: 'created', name: 'Agreements' })
     if (catalogOpen) await fireEvent.keyDown(document, { key: 'Escape' })
     await fireEvent.contextMenu(screen.getByRole('button', { name: 'Project Agreements' }))
@@ -3152,6 +3452,54 @@ describe('thread name', () => {
     await waitFor(() => expect(document.querySelector('.thread-row-title')).toHaveTextContent('Vendor audit'))
   })
 
+  it('fills the list past 12 archived threads, offers older threads, and searches every page', async () => {
+    const titles = Array.from({ length: 42 }, (_, index) => ({ threadId: `t${index}`, title: index === 41 ? 'Red Trek Bicycle Rocket' : `Plain thread ${index}`, updatedAt: new Date(Date.UTC(2026, 9, 1) - index * 60000).toISOString(), runtimeId: 'local' }))
+    localStorage.setItem('muniment.thread-organization', JSON.stringify(Object.fromEntries(Array.from({ length: 12 }, (_, index) => [`t${index + 1}`, { archived: true }]))))
+    const core = window.__TAURI__.core.invoke
+    window.__TAURI__.core.invoke = (command, ...args) => {
+      if (command !== 'chat_thread_summaries') return core(command, ...args)
+      const from = args[0]?.cursor ? Number(args[0].cursor) : 0
+      return Promise.resolve({ summaries: titles.slice(from, from + 20), nextCursor: from + 20 < titles.length ? String(from + 20) : null })
+    }
+    onTestFinished(() => { window.__TAURI__.core.invoke = core })
+    render(App)
+    const list = await screen.findByRole('list', { name: 'Projects list' })
+    await waitFor(() => expect(within(list).getAllByRole('listitem').length).toBeGreaterThanOrEqual(20))
+    expect(await screen.findByRole('button', { name: 'Older threads' })).toBeEnabled()
+    expect(within(list).queryByText('Red Trek Bicycle Rocket')).toBeNull()
+    await fireEvent.input(screen.getByRole('searchbox', { name: 'Search threads' }), { target: { value: 'red trek' } })
+    expect(await screen.findByRole('button', { name: 'Red Trek Bicycle Rocket' })).toBeInTheDocument()
+    expect(screen.queryByText('No matching threads.')).not.toBeInTheDocument()
+  })
+
+  it('shows a refused thread select in place, marks the requested row and holds sending', async () => {
+    threadSummaryResult = [
+      { threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' },
+      { threadId: 'thread-2', title: 'Vendor audit', updatedAt: '' },
+    ]
+    const baseInvoke = invoke.getMockImplementation()
+    let refusing = false
+    invoke.mockImplementation((command, payload) => command === 'chat_select_thread' && refusing
+      ? Promise.reject('Muniment is busy with another request. Try again.')
+      : baseInvoke(command, payload))
+    render(App)
+    await screen.findByRole('heading', { level: 1, name: 'Lease renewal' })
+    const composer = await findReadyWorkspaceComposer()
+    refusing = true
+    await fireEvent.click(screen.getByRole('button', { name: 'Vendor audit' }))
+    const alert = await screen.findByText(/This thread did not open, so sending waits\./, {}, { timeout: 5000 })
+    expect(alert).toHaveTextContent('Muniment is busy with another request.')
+    expect(screen.getByRole('heading', { level: 1, name: 'Vendor audit' })).toBeInTheDocument()
+    expect(document.querySelector('#sidebar .thread-row[aria-current="true"] .thread-row-title')).toHaveTextContent('Vendor audit')
+    expect(screen.getByText('Send waits for the thread. Your draft stays here.')).toBeInTheDocument()
+    expect(composer).toBeDisabled()
+    expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
+    refusing = false
+    await fireEvent.click(within(alert.closest('.history-error')).getByRole('button', { name: 'Open again' }))
+    await waitFor(() => expect(screen.queryByText(/This thread did not open/)).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.getByPlaceholderText('Ask anything')).toBeEnabled())
+  }, 15_000)
+
   it('searches older titles and renames a thread without opening it', async () => {
     threadSummaryResult = [{ threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' }]
     olderThreadSummaryResult = [{ threadId: 'thread-2', title: 'Vendor audit', updatedAt: '' }]
@@ -3164,6 +3512,8 @@ describe('thread name', () => {
     expect(screen.getByRole('searchbox')).toHaveValue('vendor')
     await fireEvent.click(screen.getByRole('button', { name: 'Actions for Vendor audit' }))
     await fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }))
+    // macOS autocorrect and spelling never change a name as it is typed.
+    for (const [name, value] of [['spellcheck', 'false'], ['autocorrect', 'off'], ['autocapitalize', 'off'], ['autocomplete', 'off']]) expect(screen.getByRole('textbox', { name: 'Thread name' })).toHaveAttribute(name, value)
     await fireEvent.input(screen.getByRole('textbox', { name: 'Thread name' }), { target: { value: 'Vendor terms' } })
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_rename_thread', { threadId: 'thread-2', title: 'Vendor terms' }))
@@ -3192,6 +3542,10 @@ describe('thread name', () => {
     expect(menu).toHaveStyle({ left: '120px', top: '80px' })
     const remove = within(menu).getByRole('menuitem', { name: 'Delete Vendor audit' })
     expect(within(menu).getByRole('menuitem', { name: 'Rename' })).toHaveFocus()
+    // Delete is the menu's one destructive item and reads in the danger color, as the native popup draws it too.
+    expect(remove).toHaveAttribute('data-danger')
+    expect(within(menu).getAllByRole('menuitem').filter((item) => item.hasAttribute('data-danger'))).toEqual([remove])
+    expect(appRules.get('.thread-menu button[data-danger]')).toMatch(/color:\s*var\(--danger\)/)
 
     await fireEvent.keyDown(menu, { key: 'Escape' })
     expect(screen.queryByRole('menu')).not.toBeInTheDocument()
@@ -3257,6 +3611,7 @@ describe('thread name', () => {
     // Several rows confirm with explicit actions and a close control.
     const confirm = screen.getByLabelText('Delete 2 threads?')
     expect(within(confirm).getAllByRole('button').map((button) => button.textContent || button.getAttribute('aria-label'))).toEqual(['Close confirmation', 'Cancel', 'Delete 2 threads'])
+    expect(within(confirm).getByRole('button', { name: 'Delete 2 threads' })).toHaveClass('danger')
     await fireEvent.click(within(confirm).getByRole('button', { name: 'Delete 2 threads' }))
     await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'chat_delete_thread')).toHaveLength(2))
     expect(invoke).toHaveBeenCalledWith('chat_delete_thread', { threadId: 'thread-2' })
@@ -3330,6 +3685,7 @@ describe('thread name', () => {
     })
     render(App)
     await screen.findByText('Answer')
+    await sidebarRows()
     const open = document.querySelector('.thread-row[aria-current="true"]')
     expect(open.querySelector('.select-mark')).toBeNull()
     await fireEvent.click(screen.getByRole('button', { name: 'Archive review' }), { shiftKey: true })
@@ -3360,6 +3716,7 @@ describe('thread name', () => {
     })
     render(App)
     await screen.findByText('Answer')
+    await sidebarRows()
     const current = document.querySelector('.thread-row[aria-current="true"]')
     expect(current).toHaveTextContent('Lease renewal')
     await fireEvent.click(current, { metaKey: true })
@@ -3408,6 +3765,7 @@ describe('thread name', () => {
     })
     render(App)
     await screen.findByText('Answer')
+    await sidebarRows()
 
     await openDeleteMenu('Lease renewal')
     await fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
@@ -3417,6 +3775,108 @@ describe('thread name', () => {
     expect(document.querySelector('[data-fresh-thread]')).toBeNull()
     await waitFor(() => expect(within(screen.getByRole('list', { name: 'Projects list' })).queryAllByRole('listitem')).toHaveLength(0))
     expect(screen.getByPlaceholderText('Ask anything')).toHaveFocus()
+  })
+
+  it('names a deleted thread\'s kept folder in a notice that stays, reveals it and leaves on dismiss', async () => {
+    threadSummaryResult = [{ threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' }]
+    const folder = '/Users/me/Documents/muniment/sessions/Lease_renewal-12345678'
+    invoke.mockImplementation(async (command) => {
+      if (command === 'project_list') return { projects: {}, threads: {} }
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_thread_open') return [{ runId: 'run-1', phase: 'complete', prompt: 'Question', text: 'Answer', toolActivity: [] }]
+      // Core keeps the thread's folder that holds the user's files and says so.
+      if (command === 'chat_delete_thread') return { folder_kept: folder, message: "The thread's folder holds your files, so it stays." }
+      if (command === 'workspace_reveal') return undefined
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'chat_select_thread') return undefined
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    await screen.findByText('Answer')
+    await sidebarRows()
+    await openDeleteMenu('Lease renewal')
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      await fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+      const notice = await screen.findByTestId('thread-folder-kept-notice')
+      expect(notice).toHaveTextContent(`The thread's folder holds your files, so it stays. ${folder}`)
+      await vi.advanceTimersByTimeAsync(30000)
+      expect(screen.getByTestId('thread-folder-kept-notice')).toBe(notice)
+      await fireEvent.click(within(notice).getByRole('button', { name: /^Reveal in / }))
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith('workspace_reveal', { path: folder }))
+      await fireEvent.click(within(notice).getByRole('button', { name: 'Dismiss thread folder notice' }))
+      await waitFor(() => expect(screen.queryByTestId('thread-folder-kept-notice')).not.toBeInTheDocument())
+    } finally { vi.useRealTimers() }
+  })
+
+  it.each([
+    ['another thread opens', async () => { await fireEvent.click([...document.querySelectorAll('#sidebar .thread-row')].find((row) => row.querySelector('.thread-row-title')?.textContent === 'Tax return')) }],
+    ['another page opens', async () => { await openSidebarPage('Agents'); await screen.findByRole('region', { name: 'Agents', exact: true }) }],
+    ['a later delete keeps no folder', async () => { await openDeleteMenu('Tax return'); await fireEvent.click(screen.getByRole('button', { name: 'Delete' })); await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_delete_thread', { threadId: 'thread-3' })) }],
+  ])('keeps a deleted thread\'s kept folder notice on the thread the delete opened, and takes it away once %s', async (_, leave) => {
+    threadSummaryResult = [
+      { threadId: 'thread-1', title: 'Lease renewal', updatedAt: '2026-01-03T00:00:00Z' },
+      { threadId: 'thread-2', title: 'Garden plan', updatedAt: '2026-01-02T00:00:00Z' },
+      { threadId: 'thread-3', title: 'Tax return', updatedAt: '2026-01-01T00:00:00Z' },
+    ]
+    const folder = '/Users/me/Documents/muniment/sessions/Lease_renewal-12345678'
+    const pages = {
+      'thread-1': [{ runId: 'run-1', phase: 'complete', prompt: 'Question', text: 'Answer', toolActivity: [] }],
+      'thread-2': [{ runId: 'run-2', phase: 'complete', prompt: 'Plant what?', text: 'Tomatoes', toolActivity: [] }],
+      'thread-3': [{ runId: 'run-3', phase: 'complete', prompt: 'File when?', text: 'April', toolActivity: [] }],
+    }
+    const fallback = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, payload) => {
+      if (command === 'chat_thread_open') return pages[payload.threadId] ?? []
+      if (command === 'chat_delete_thread') return payload.threadId === 'thread-1' ? { folder_kept: folder, message: "The thread's folder holds your files, so it stays." } : null
+      if (command === 'chat_select_thread') return undefined
+      return fallback(command, payload)
+    })
+    render(App)
+    await screen.findByText('Answer')
+    await sidebarRows()
+    await openDeleteMenu('Lease renewal')
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    expect(await screen.findByText('Tomatoes')).toBeInTheDocument()
+    // The thread the delete opened is the notice's own view.
+    expect(await screen.findByTestId('thread-folder-kept-notice')).toHaveTextContent(folder)
+    await leave()
+    await waitFor(() => expect(screen.queryByTestId('thread-folder-kept-notice')).not.toBeInTheDocument())
+  })
+
+  it('opens the newest remaining thread after the open thread is deleted from its menu, and Back to threads keeps it', async () => {
+    threadSummaryResult = [
+      { threadId: 'thread-1', title: 'Lease renewal', updatedAt: '' },
+      { threadId: 'thread-2', title: 'Garden plan', updatedAt: '' },
+    ]
+    const pages = {
+      'thread-1': [{ runId: 'run-1', phase: 'complete', prompt: 'Question', text: 'Answer', toolActivity: [] }],
+      'thread-2': [{ runId: 'run-2', phase: 'complete', prompt: 'Plant what?', text: 'Tomatoes', toolActivity: [] }],
+    }
+    const fallback = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, payload) => {
+      if (command === 'chat_thread_open') return pages[payload.threadId] ?? []
+      if (command === 'chat_delete_thread' || command === 'chat_select_thread') return undefined
+      return fallback(command, payload)
+    })
+    render(App)
+    await screen.findByText('Answer')
+    await sidebarRows()
+
+    await openDeleteMenu('Lease renewal')
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+
+    expect(await screen.findByText('Tomatoes')).toBeInTheDocument()
+    expect(invoke).toHaveBeenCalledWith('chat_delete_thread', { threadId: 'thread-1' })
+    expect(screen.queryByText('Answer')).not.toBeInTheDocument()
+    expect(document.querySelector('[data-fresh-thread]')).toBeNull()
+
+    await openSettings()
+    await fireEvent.click(screen.getByRole('button', { name: 'Back to threads' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument())
+    expect(screen.getByText('Tomatoes')).toBeInTheDocument()
+    expect(invoke.mock.calls.filter(([command, payload]) => command === 'chat_thread_open' && payload.threadId === 'thread-1')).toHaveLength(1)
   })
 
   it('keeps the row and reports a failed delete', async () => {
@@ -3472,6 +3932,8 @@ describe('thread name', () => {
     const field = await screen.findByRole('textbox', { name: 'Thread name' })
     expect(field).toHaveValue('Stored name')
     expect(field).toHaveAttribute('maxlength', '160')
+    // macOS autocorrect and spelling never change a name as it is typed.
+    for (const [name, value] of [['spellcheck', 'false'], ['autocorrect', 'off'], ['autocapitalize', 'off'], ['autocomplete', 'off']]) expect(field).toHaveAttribute(name, value)
     expect(field.selectionStart).toBe(0)
     expect(field.selectionEnd).toBe('Stored name'.length)
 
@@ -3554,8 +4016,8 @@ describe('thread name', () => {
     })
     render(App)
 
-    const current = await screen.findByText('Lease renewal')
-    expect(current.closest('.thread-row')).toHaveAttribute('aria-current', 'true')
+    await screen.findByText('Lease renewal', { selector: '.thread-row-title' })
+    await waitFor(() => expect(document.querySelector('#sidebar .thread-row[data-thread-id="thread-1"]')).toHaveAttribute('aria-current', 'true'))
     expect(document.querySelectorAll('.thread-row')).toHaveLength(3)
     for (const summary of threadSummaryResult) {
       expect(document.querySelector(`time[datetime="${summary.updatedAt}"]`)).not.toHaveAttribute('title')
@@ -3605,6 +4067,7 @@ describe('thread name', () => {
     })
     render(App)
     await screen.findByText('The renewal date is September 1.')
+    await sidebarRows()
 
     const titlebarName = document.querySelector('.thread-title')
     const sidebarName = document.querySelector('.thread-row')
@@ -3622,18 +4085,19 @@ describe('thread name', () => {
     expect(appRules.get('input.thread-title')).toMatch(/text-overflow:\s*ellipsis/)
     expect(appRules.get('.thread-row-title')).toMatch(/overflow:\s*hidden/)
     expect(appRules.get('.thread-row-title')).toMatch(/white-space:\s*nowrap/)
-    // A row title that overflows fades at its end, one that fits shows whole, and the time keeps its width.
+    // A row title that overflows ends in an ellipsis, one that fits shows whole, and the time keeps its width.
     expect(appRules.get('.thread-row-title')).toMatch(/flex:\s*1 1 auto/)
+    expect(appRules.get('.thread-row-title')).toMatch(/text-overflow:\s*ellipsis/)
     expect(appRules.get('.thread-row-title')).not.toMatch(/mask-image/)
-    expect(appRules.get('.thread-row-title[data-overflow="true"]')).toMatch(/mask-image:\s*linear-gradient\(to right, currentColor calc\(100% - 28px\), transparent\)/)
     expect(appRules.get('.thread-row time')).toMatch(/flex:\s*none/)
   })
 
   it('marks the open row with the accent edge in place of a dot, so its text takes the width', async () => {
     threadSummaryResult = [{ threadId: 'thread-1', title: 'Lease renewal', updatedAt: '2026-07-28T11:55:00Z', runtimeId: 'local' }]
     render(App)
-    const row = (await screen.findByText('Lease renewal')).closest('.thread-row')
-    expect(row).toHaveAttribute('aria-current', 'true')
+    await screen.findByText('Lease renewal', { selector: '.thread-row-title' })
+    await waitFor(() => expect(document.querySelector('#sidebar .thread-row[data-thread-id="thread-1"]')).toHaveAttribute('aria-current', 'true'))
+    const row = document.querySelector('#sidebar .thread-row[data-thread-id="thread-1"]')
     expect(row).toHaveAttribute('data-accent-edge')
     // A normal thread takes the theme accent: no agent color is set.
     expect(row.style.getPropertyValue('--edge-color')).toBe('')
@@ -3644,7 +4108,7 @@ describe('thread name', () => {
   it('lays a row on one line, the title and then the time, while this computer is the only machine', async () => {
     threadSummaryResult = [{ threadId: 'thread-1', title: 'Lease renewal', updatedAt: '2026-07-28T11:55:00Z', runtimeId: 'local' }]
     render(App)
-    const row = (await screen.findByText('Lease renewal')).closest('.thread-row')
+    const row = (await screen.findByText('Lease renewal', { selector: '.thread-row-title' })).closest('.thread-row')
     const body = row.querySelector('.thread-row-body')
     expect(body).toHaveAttribute('data-layout', 'single')
     expect(row.querySelector('.thread-row-meta')).toBeNull()
@@ -3690,6 +4154,291 @@ describe('thread name', () => {
     expect(appRules.get('.thread-row-title[data-unread]')).toMatch(/font-weight:\s*var\(--weight-semibold\)/)
   })
 
+  it.each([true, false])('never shows the first run while the Home read is pending at launch (configured %s)', async (configured) => {
+    homeStatus = { configured, homePath: '/Documents/Muniment' }
+    const home = deferred()
+    const core = window.__TAURI__.core.invoke
+    window.__TAURI__.core.invoke = (command, ...args) => command === 'home_status' ? home.promise.then(() => core(command, ...args)) : core(command, ...args)
+    onTestFinished(() => { window.__TAURI__.core.invoke = core })
+    const seen = []
+    const observer = new MutationObserver(() => { if (/Finding Home|Connect a model/.test(document.body.textContent)) seen.push('first run') })
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true })
+    onTestFinished(() => observer.disconnect())
+    render(App)
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(screen.queryByRole('region', { name: 'First run' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Finding Home…')).not.toBeInTheDocument()
+    home.resolve()
+    if (configured) {
+      await findWorkspaceComposer()
+      expect(seen).toEqual([])
+    } else {
+      const firstRun = await screen.findByRole('region', { name: 'First run' })
+      expect(within(firstRun).getByRole('heading', { name: 'Connect a model' })).toBeVisible()
+      expect(within(firstRun).getByTestId('onboarding-home-path')).toHaveTextContent('/Documents/Muniment')
+    }
+  })
+
+  it('goes from the loading shell straight to the restored thread, with no untitled page, model check or held composer between', async () => {
+    localModeStatus = true
+    const at = '2026-07-28T11:55:00Z'
+    threadSummaryResult = [{ threadId: 'final', title: 'Final Verification Thread', updatedAt: at, runtimeId: 'local' }]
+    const open = deferred()
+    const models = deferred()
+    const fallback = invoke.getMockImplementation()
+    invoke.mockImplementation((command, payload) => {
+      if (command === 'chat_thread_open') return open.promise
+      if (command === 'local_mode_provider_inventory') return models.promise.then(() => fallback(command, payload))
+      return fallback(command, payload)
+    })
+    // Each frame the page draws counts: a held part is in the DOM but hidden.
+    const seen = []
+    const shown = (node) => !node.closest('[data-launch-hold]')
+    const look = () => {
+      for (const node of document.querySelectorAll('.thread-panel .empty, #composer-hint')) {
+        if (shown(node) && /Checking available models|Send waits for the thread/.test(node.textContent)) seen.push(node.textContent)
+      }
+      for (const node of document.querySelectorAll('.thread-title-heading')) {
+        if (shown(node) && !node.textContent.trim()) seen.push('untitled page')
+      }
+    }
+    const observer = new MutationObserver(look)
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true })
+    onTestFinished(() => observer.disconnect())
+    render(App)
+    const composer = await screen.findByLabelText('Message', { selector: '#composer-message' })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', expect.objectContaining({ threadId: 'final' })))
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    // The thread pane holds: title, transcript, composer and model line stay hidden.
+    expect(composer.closest('.thread-panel')).toHaveAttribute('data-launch-hold')
+    expect(composer.closest('.thread-panel').inert).toBe(true)
+    expect(document.querySelector('.titlebar-thread')).toHaveAttribute('data-launch-hold')
+    expect(appRules.get('[data-launch-hold]')).toMatch(/visibility:\s*hidden/)
+    expect(composer).not.toHaveFocus()
+    open.resolve([{ runId: 'run-1', phase: 'complete', prompt: 'Question', text: 'Answer', toolActivity: [] }])
+    expect(await screen.findByRole('heading', { level: 1, name: 'Final Verification Thread' })).toBeInTheDocument()
+    expect(document.querySelector('[data-launch-hold]')).toBeNull()
+    await waitFor(() => expect(composer).toHaveFocus())
+    models.resolve()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    look()
+    expect(seen).toEqual([])
+  })
+
+  it('shows a loading line, no empty list and no new thread until the first thread read settles at launch', async () => {
+    const at = '2026-07-28T11:55:00Z'
+    threadSummaryResult = [{ threadId: 'morning', title: 'Tauri Morning', updatedAt: at, runtimeId: 'local' }]
+    const summaries = deferred()
+    const core = window.__TAURI__.core.invoke
+    window.__TAURI__.core.invoke = (command, ...args) => command === 'chat_thread_summaries' && !args[0]?.cursor
+      ? summaries.promise.then(() => core(command, ...args))
+      : core(command, ...args)
+    onTestFinished(() => { window.__TAURI__.core.invoke = core })
+    render(App)
+    const sidebar = await waitFor(() => { const node = document.getElementById('sidebar'); expect(node).not.toBeNull(); return node })
+    expect(await within(sidebar).findByRole('status')).toHaveTextContent('Loading threads…')
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(within(sidebar).queryByText('No threads yet.')).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { level: 1, name: 'New thread' })).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 1, name: 'Loading threads…' })).toHaveAttribute('aria-busy', 'true')
+    expect(screen.queryByRole('region', { name: 'Start with' })).not.toBeInTheDocument()
+    summaries.resolve()
+    expect(await screen.findByRole('heading', { level: 1, name: 'Tauri Morning' })).not.toHaveAttribute('aria-busy', 'true')
+    await waitFor(() => expect(within(sidebar).queryByText('Loading threads…')).not.toBeInTheDocument())
+    expect(within(sidebar).queryByText('No threads yet.')).not.toBeInTheDocument()
+  })
+
+  it('reopens the thread open at quit on launch, with no empty list on the way, and keeps the next one opened', async () => {
+    const at = '2026-07-28T11:55:00Z'
+    localStorage.setItem('muniment.open-thread', 'lease')
+    threadSummaryResult = [{ threadId: 'morning', title: 'Tauri Morning', updatedAt: at, runtimeId: 'local' }, { threadId: 'lease', title: 'Lease renewal', updatedAt: '2026-07-27T11:55:00Z', runtimeId: 'local' }]
+    const shown = []
+    const observer = new MutationObserver(() => { const sidebar = document.getElementById('sidebar'); if (sidebar && /No threads yet\./.test(sidebar.textContent)) shown.push('empty') })
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true })
+    onTestFinished(() => observer.disconnect())
+    render(App)
+    expect(await screen.findByRole('heading', { level: 1, name: 'Lease renewal' })).not.toHaveAttribute('aria-busy', 'true')
+    expect(invoke).toHaveBeenCalledWith('chat_select_thread', { threadId: 'lease', runtimeId: 'local' })
+    expect(invoke).not.toHaveBeenCalledWith('chat_thread_open', expect.objectContaining({ threadId: 'morning' }))
+    expect(shown).toEqual([])
+    await fireEvent.click((await within(screen.getByRole('list', { name: 'Projects list' })).findByText('Tauri Morning')).closest('.thread-row'))
+    await waitFor(() => expect(localStorage.getItem('muniment.open-thread')).toBe('morning'))
+  })
+
+  it('shows no row and keeps the header neutral until launch settles on the thread open at quit', async () => {
+    localStorage.setItem('muniment.open-thread', 'lease')
+    threadSummaryResult = [{ threadId: 'morning', title: 'Tauri Morning', updatedAt: '2026-07-28T11:55:00Z', runtimeId: 'local' }, { threadId: 'lease', title: 'Lease renewal', updatedAt: '2026-07-27T11:55:00Z', runtimeId: 'local' }]
+    const held = deferred()
+    let opening = false
+    const core = window.__TAURI__.core.invoke
+    window.__TAURI__.core.invoke = (command, ...args) => command === 'chat_thread_open' && args[0]?.threadId === 'lease'
+      ? (opening = true, held.promise.then(() => core(command, ...args)))
+      : core(command, ...args)
+    onTestFinished(() => { window.__TAURI__.core.invoke = core })
+    const current = []
+    const observer = new MutationObserver(() => { for (const row of document.querySelectorAll('#sidebar [aria-current="true"][data-thread-id]')) current.push(row.dataset.threadId) })
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['aria-current'] })
+    onTestFinished(() => observer.disconnect())
+    render(App)
+    const list = await screen.findByRole('list', { name: 'Projects list' })
+    await waitFor(() => expect(opening).toBe(true))
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    // The list waits for the thread, so no row shows beside an empty pane.
+    expect(list.querySelector('.thread-row')).toBeNull()
+    expect(within(document.getElementById('sidebar')).getByRole('status')).toHaveTextContent('Loading threads…')
+    expect(screen.getByRole('heading', { level: 1, name: 'Loading threads…' })).toHaveAttribute('aria-busy', 'true')
+    held.resolve()
+    expect(await screen.findByRole('heading', { level: 1, name: 'Lease renewal' })).not.toHaveAttribute('aria-busy', 'true')
+    expect(within(list).getByText('Tauri Morning')).toBeInTheDocument()
+    await waitFor(() => expect(list.querySelector('[aria-current="true"]')?.dataset.threadId).toBe('lease'))
+    expect(current).not.toContain('morning')
+  })
+
+  it('opens the newest thread on launch when the thread open at quit is gone', async () => {
+    localStorage.setItem('muniment.open-thread', 'deleted')
+    threadSummaryResult = [{ threadId: 'morning', title: 'Tauri Morning', updatedAt: '2026-07-28T11:55:00Z', runtimeId: 'local' }]
+    const core = window.__TAURI__.core.invoke
+    window.__TAURI__.core.invoke = (command, ...args) => command === 'chat_thread_open' && args[0]?.threadId === 'deleted'
+      ? Promise.reject(new Error('thread not found'))
+      : core(command, ...args)
+    onTestFinished(() => { window.__TAURI__.core.invoke = core })
+    render(App)
+    expect(await screen.findByRole('heading', { level: 1, name: 'Tauri Morning' })).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    await waitFor(() => expect(localStorage.getItem('muniment.open-thread')).toBe('morning'))
+  })
+
+  it.each(['agents first', 'threads first'])('fills the sidebar in one step at launch with the %s', async (order) => {
+    threadSummaryResult = [
+      { threadId: 'morning-thread', title: 'Tauri Morning', updatedAt: '2026-07-28T11:55:00Z', runtimeId: 'local' },
+      { threadId: 'plain-thread', title: 'Lease renewal', updatedAt: '2026-07-27T11:55:00Z', runtimeId: 'local' },
+    ]
+    const summaries = deferred()
+    const agents = deferred()
+    const fallback = invoke.getMockImplementation()
+    // The first runtime list asks for the agents while the thread page is still out.
+    const machines = { appVersion: '0.2.0', deviceName: 'Laptop', selected: 'local', runtimes: [{ id: 'local', name: 'This computer', kind: 'local', status: 'online', local: true, active: true, scopes: [] }] }
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args) ? agents.promise : command === 'runtime_list' ? machines : fallback(command, args))
+    const core = window.__TAURI__.core.invoke
+    window.__TAURI__.core.invoke = (command, ...args) => command === 'chat_thread_summaries' && !args[0]?.cursor
+      ? summaries.promise.then(() => core(command, ...args))
+      : core(command, ...args)
+    onTestFinished(() => { window.__TAURI__.core.invoke = core })
+    const seen = new Set()
+    const observer = new MutationObserver(() => {
+      const rows = [...document.querySelectorAll('#sidebar .thread-row-title')].map((title) => title.textContent)
+      if (rows.length) seen.add(rows.join('|'))
+    })
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true })
+    onTestFinished(() => observer.disconnect())
+    render(App)
+    const answer = () => agents.resolve(agentListAnswer([{ id: 'agent-1', name: 'Morning', instructions: '', projectId: null, schedule: null, routines: [] }], { 'agent-1': 'morning-thread' }))
+    if (order === 'agents first') {
+      answer()
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', expect.objectContaining({ operation: 'agent.list' })))
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      summaries.resolve()
+    } else {
+      summaries.resolve()
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_select_thread', expect.objectContaining({ threadId: 'morning-thread' })))
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(document.querySelector('#sidebar .thread-row')).toBeNull()
+      expect(within(document.getElementById('sidebar')).getByRole('status')).toHaveTextContent('Loading threads…')
+      // The agent's thread waits for the listing, so it never draws as a plain thread.
+      expect(screen.getByRole('heading', { level: 1, name: 'Loading threads…' })).toHaveAttribute('aria-busy', 'true')
+      answer()
+    }
+    await waitFor(() => expect(document.querySelectorAll('#sidebar .thread-row-title')).toHaveLength(2))
+    expect([...seen]).toEqual(['Tauri Morning|Lease renewal'])
+  })
+
+  it.each(['agents first', 'threads first', 'thread open last'])('draws the restored agent thread with its chip, its profile and the list in one frame at launch with the %s', async (order) => {
+    threadSummaryResult = [
+      { threadId: 'morning-thread', title: 'Tauri Morning', updatedAt: '2026-07-28T11:55:00Z', runtimeId: 'local' },
+      { threadId: 'plain-thread', title: 'Lease renewal', updatedAt: '2026-07-27T11:55:00Z', runtimeId: 'local' },
+    ]
+    const summaries = deferred()
+    const agents = deferred()
+    const opened = deferred()
+    const fallback = invoke.getMockImplementation()
+    const machines = { appVersion: '0.2.0', deviceName: 'Laptop', selected: 'local', runtimes: [{ id: 'local', name: 'This computer', kind: 'local', status: 'online', local: true, active: true, scopes: [] }] }
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args) ? agents.promise : command === 'runtime_list' ? machines : fallback(command, args))
+    const core = window.__TAURI__.core.invoke
+    window.__TAURI__.core.invoke = (command, ...args) => command === 'chat_thread_summaries' && !args[0]?.cursor ? summaries.promise.then(() => core(command, ...args))
+      : command === 'chat_thread_open' && order === 'thread open last' ? opened.promise.then(() => core(command, ...args))
+        : core(command, ...args)
+    onTestFinished(() => { window.__TAURI__.core.invoke = core })
+    // Each state the page draws: the thread pane shows or holds, and what the
+    // header, the profile and the list show with it.
+    const frames = new Set()
+    const look = () => {
+      const header = document.querySelector('.titlebar-thread')
+      if (!header) return
+      // A held header is in the DOM but hidden, so what it holds never draws.
+      const held = header.hasAttribute('data-launch-hold')
+      const heading = header.querySelector('.thread-title-heading')?.textContent.trim() ?? ''
+      frames.add(JSON.stringify({
+        held,
+        chip: held ? null : header.querySelector('.agent-chat-title')?.textContent.trim() ?? null,
+        plain: !held && !!heading,
+        profile: !!document.querySelector('aside[aria-label="Agent profile"]'),
+        rows: document.querySelectorAll('#sidebar .thread-row').length,
+      }))
+    }
+    const observer = new MutationObserver(look)
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true })
+    onTestFinished(() => observer.disconnect())
+    render(App)
+    const answer = () => agents.resolve(agentListAnswer([{ id: 'agent-1', name: 'Morning', instructions: '', projectId: null, schedule: null, routines: [] }], { 'agent-1': 'morning-thread' }))
+    const pause = () => new Promise((resolve) => setTimeout(resolve, 50))
+    if (order === 'agents first') { answer(); await pause(); summaries.resolve() }
+    else if (order === 'threads first') { summaries.resolve(); await pause(); answer() }
+    else { summaries.resolve(); answer(); await pause(); opened.resolve() }
+    await screen.findByRole('complementary', { name: 'Agent profile' })
+    await waitFor(() => expect(document.querySelectorAll('#sidebar .thread-row')).toHaveLength(2))
+    look()
+    const settled = JSON.stringify({ held: false, chip: 'Morning', plain: false, profile: true, rows: 2 })
+    const loading = JSON.stringify({ held: true, chip: null, plain: false, profile: false, rows: 0 })
+    expect([...frames].filter((frame) => frame !== settled && frame !== loading)).toEqual([])
+    expect(frames).toContain(settled)
+  })
+
+  it('names an empty thread list once the first read finds no threads', async () => {
+    threadSummaryResult = []
+    render(App)
+    expect(await screen.findByText('No threads yet.')).toBeInTheDocument()
+    expect(screen.queryByText('Loading threads…')).not.toBeInTheDocument()
+    expect(await screen.findByRole('heading', { level: 1, name: 'New thread' })).toBeInTheDocument()
+  })
+
+  it('lights no result on a row until the first thread opens at launch, and never on the open thread', async () => {
+    const at = '2026-07-28T11:55:00Z'
+    threadSummaryResult = [{ threadId: 'morning', title: 'Tauri Morning', updatedAt: at, runtimeId: 'local' }, { threadId: 'other', title: 'Other result', updatedAt: at, runtimeId: 'local' }]
+    const thread = (id, title) => ({ thread_id: id, title, project_id: '', project_name: '', status: 'done', status_label: 'Done', home: false, pinned: false, updated_at: at })
+    const project = (row) => ({ id: row.thread_id, name: row.title, kind: 'thread', triggers: '', agent_ids: [], updated_at: at, status: row.status, status_label: row.status_label, pinned: false, threads: [row] })
+    let open
+    let opening = false
+    const opened = new Promise((resolve) => { open = resolve })
+    const core = window.__TAURI__.core.invoke
+    // Core's arrangement made before the window knows the open thread calls both results unread.
+    window.__TAURI__.core.invoke = (command, ...args) => command === 'sidebar_arrange'
+      ? Promise.resolve({ projects: [thread('morning', 'Tauri Morning'), thread('other', 'Other result')].map(project), archived: [], results: [] })
+      : command === 'chat_current_thread' ? Promise.resolve('morning')
+        : command === 'chat_thread_open' ? (opening = true, opened.then(() => core(command, ...args)))
+          : core(command, ...args)
+    onTestFinished(() => { window.__TAURI__.core.invoke = core })
+    render(App)
+    const list = await screen.findByRole('list', { name: 'Projects list' })
+    const row = async (title) => (await within(list).findByText(title, { selector: '.thread-row-title' })).closest('.thread-row')
+    await waitFor(() => expect(opening).toBe(true))
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    // The list waits for the thread, so no row lights before it opens.
+    expect(list.querySelector('.thread-row')).toBeNull()
+    open()
+    await waitFor(async () => expect((await row('Other result')).querySelector('.status-ring')).toHaveAttribute('data-phase', 'lit'))
+    expect((await row('Tauri Morning')).querySelector('.status-ring')).toBeNull()
+  })
+
   it('draws a hovered row lighter than the open thread and a selection darker', () => {
     const hover = appRules.get('button.thread-row:hover:not([aria-disabled="true"])')
     expect(hover).toMatch(/background:\s*color-mix\(in srgb, var\(--faint\) 55%, transparent\)/)
@@ -3725,6 +4474,17 @@ describe('window chrome', () => {
       cleanup()
       platformMock.mockRestore()
     }
+  })
+
+  it('names why the title actions wait on an empty new thread and opens no menu', async () => {
+    threadSummaryResult = []
+    render(App)
+    const actions = await screen.findByRole('button', { name: 'Thread actions' })
+    await waitFor(() => expect(actions).toHaveAttribute('aria-disabled', 'true'))
+    expect(actions).toHaveAccessibleDescription('Send a message to use thread actions.')
+    expect(actions).toHaveAttribute('data-tooltip', 'Send a message to use thread actions.')
+    await fireEvent.click(actions)
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
   })
 
   it('uses the title actions with a collapsed sidebar and keeps delete confirmation visible', async () => {
@@ -3816,6 +4576,101 @@ async function openSidebarPage(label) {
 const agentListAnswer = (agents, primaryThreads = {}) => ({ agents, primary_threads: primaryThreads, latest_runs: {}, errors: [] })
 const isAgentList = (command, args) => command === 'agent_request' && args?.operation === 'agent.list'
 
+describe('launch rows', () => {
+  const machines = { appVersion: '0.2.0', deviceName: 'Laptop', selected: 'local', runtimes: [
+    // The shell lists this computer offline until its runtime connects.
+    { id: 'local', name: 'This computer', kind: 'local', formFactor: 'laptop', status: 'offline', local: true, active: true, scopes: [] },
+    { id: 'box', name: 'Build box', kind: 'container', status: 'online', local: false, active: false, scopes: ['run.write'] },
+  ] }
+  const rowMeta = (title) => [...document.querySelectorAll('#sidebar .thread-row')].find((row) => row.querySelector('.thread-row-title')?.textContent === title)?.querySelector('.thread-row-meta')
+
+  function launch({ connected }) {
+    const agents = deferred()
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args) ? agents.promise
+      : command === 'runtime_list' ? machines
+        : command === 'attach_listener_status' ? { connected, supervisor_running: true }
+          : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
+    threadSummaryResult = [
+      { threadId: 'morning-thread', title: 'Tauri Morning', updatedAt: '2026-07-28T11:55:00Z', runtimeId: 'local' },
+      { threadId: 'plain-thread', title: 'Lease renewal', updatedAt: '2026-07-27T11:55:00Z', runtimeId: 'local' },
+    ]
+    const seen = []
+    const observer = new MutationObserver(() => {
+      const meta = rowMeta('Tauri Morning')
+      if (meta) seen.push({ morning: meta.textContent, dots: document.querySelectorAll('#sidebar .thread-row .status-chip').length })
+    })
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true })
+    onTestFinished(() => observer.disconnect())
+    render(App)
+    return { seen, answerAgents: () => agents.resolve(agentListAnswer([{ id: 'agent-1', name: 'Morning', instructions: '', projectId: null, schedule: null, routines: [] }], { 'agent-1': 'morning-thread' })) }
+  }
+
+  it('names no machine on a row before the agent list arrives, and no offline dot before the runtime connects', async () => {
+    const { seen, answerAgents } = launch({ connected: true })
+    // A slow agent listing holds the list for at most a second.
+    await waitFor(() => expect(rowMeta('Tauri Morning')).toBeTruthy(), { timeout: 3000 })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', expect.objectContaining({ operation: 'agent.list' })))
+    // Before the agent list answers, each row holds its meta line to its time.
+    expect(rowMeta('Tauri Morning')).not.toHaveTextContent('This computer')
+    expect(rowMeta('Lease renewal')).not.toHaveTextContent('This computer')
+    answerAgents()
+    await waitFor(() => expect(rowMeta('Tauri Morning').querySelector('.row-agent')).toHaveTextContent('Morning'))
+    await waitFor(() => expect(rowMeta('Lease renewal')).toHaveTextContent('This computer'))
+    // The agent's row never read as this computer's, and no row drew an offline dot.
+    expect(seen.length).toBeGreaterThan(0)
+    expect(seen.filter((state) => state.morning.includes('This computer'))).toEqual([])
+    expect(seen.filter((state) => state.dots)).toEqual([])
+    expect(document.querySelectorAll('#sidebar .thread-row .status-chip')).toHaveLength(0)
+  })
+
+  it('draws this computer offline once launch settles and the runtime reports no connection', async () => {
+    const { answerAgents } = launch({ connected: false })
+    answerAgents()
+    await waitFor(() => expect(rowMeta('Lease renewal')).toHaveTextContent('This computer'))
+    await waitFor(() => expect(rowMeta('Lease renewal').querySelector('.status-chip')).toHaveTextContent('Offline'))
+  })
+
+  it('never shows the hub as the restored thread\'s machine when the hub answers the launch list before this computer', async () => {
+    const hubMachines = { ...machines, runtimes: [machines.runtimes[0], { id: 'hub', name: 'Factory hub', kind: 'server', status: 'online', local: false, active: false, scopes: ['run.write'] }] }
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, args) => command === 'runtime_list' ? hubMachines
+      : command === 'attach_listener_status' ? { connected: true, supervisor_running: true }
+        : command === 'chat_select_thread' ? undefined
+          : command === 'chat_thread_open' ? [{ runId: 'run-1', phase: 'complete', prompt: 'Question', text: 'Answer', toolActivity: [] }]
+            : original(command, args))
+    // The hub connects first and lists its synced copy of this computer's
+    // thread. This computer's runtime answers on the third ask.
+    const hubCopy = { threadId: 'ours', title: 'Lease renewal', updatedAt: '2026-07-28T11:55:00Z', runtimeId: 'hub', replica: true, owner_runtime: 'core-laptop' }
+    const ownCopy = { ...hubCopy, runtimeId: 'local', replica: false }
+    const lists = [
+      { summaries: [hubCopy], nextCursor: null, runtimeIds: ['hub'] },
+      { summaries: [hubCopy], nextCursor: null, runtimeIds: ['hub'] },
+    ]
+    const shell = window.__TAURI__.core.invoke
+    window.__TAURI__.core.invoke = (command, ...args) => command === 'chat_thread_summaries'
+      ? Promise.resolve(lists.shift() ?? { summaries: [ownCopy], nextCursor: null, runtimeIds: ['local', 'hub'] })
+      : shell(command, ...args)
+    onTestFinished(() => { window.__TAURI__.core.invoke = shell })
+    const seen = []
+    const observer = new MutationObserver(() => {
+      const badge = document.querySelector('.titlebar-thread .machine-badge')
+      if (badge) seen.push(badge.textContent)
+    })
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true })
+    onTestFinished(() => observer.disconnect())
+    render(App)
+    expect(await screen.findByText('Answer', {}, { timeout: 3000 })).toBeInTheDocument()
+    // The title never named the hub, and launch selected this computer only.
+    expect(seen).toEqual([])
+    expect(lists).toEqual([])
+    expect(document.querySelector('.titlebar-thread .machine-badge')).toBeNull()
+    const selects = invoke.mock.calls.filter(([command]) => command === 'chat_select_thread').map(([, payload]) => payload)
+    expect(selects.length).toBeGreaterThan(0)
+    expect(selects.filter((payload) => payload.runtimeId === 'hub')).toEqual([])
+  })
+})
+
 describe('agent poll', () => {
   it('skips the agent poll while the window is hidden and refreshes once when it shows', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
@@ -3894,7 +4749,7 @@ describe('sidebar collapse', () => {
     expect(within(projects).queryByRole('button', { name: 'Projects with triggers' })).toBeNull()
   })
 
-  it('opens an agent profile alone from the action card menu', async () => {
+  it('opens an agent profile beside the agent\'s own thread from the action card menu', async () => {
     const original = invoke.getMockImplementation()
     invoke.mockImplementation(async (command, args) => isAgentList(command, args)
       ? agentListAnswer([{ id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null, routines: [] }], { 'agent-1': 'agent-thread' })
@@ -3908,7 +4763,361 @@ describe('sidebar collapse', () => {
     await fireEvent.click(within(menu).getByRole('menuitem', { name: 'Open profile' }))
     await screen.findByRole('complementary', { name: 'Agent profile' })
     expect(screen.queryByRole('region', { name: 'Agents', exact: true })).toBeNull()
-    expect(invoke).not.toHaveBeenCalledWith('chat_select_thread', { threadId: 'agent-thread' })
+    expect(invoke).toHaveBeenCalledWith('chat_select_thread', { threadId: 'agent-thread' })
+    expect(invoke.mock.calls.filter(([cmd]) => cmd === 'chat_new_thread')).toHaveLength(0)
+  })
+
+  it('turns an archived agent\'s routines off and a restore turns back on only the ones that were on', async () => {
+    const original = invoke.getMockImplementation()
+    const cron = (expr) => ({ kind: 'cron', expr, tz: 'UTC' })
+    let scout = { id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null, routines: [
+      { id: 'on', name: 'Morning', enabled: true, trigger: cron('0 9 * * *'), prompt: 'Read.' },
+      { id: 'off', name: 'Evening', enabled: false, trigger: cron('0 18 * * *'), prompt: 'Sum up.' },
+      { id: 'proposal', name: 'Friday', enabled: false, proposed: true, trigger: cron('0 9 * * 5'), prompt: 'Back up.' },
+    ] }
+    const saves = []
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args) ? agentListAnswer([scout], { 'agent-1': 'agent-thread' })
+      : command === 'agent_request' && args?.operation === 'agent.read' ? { agent: scout }
+      : command === 'agent_request' && args?.operation === 'agent.save' ? (saves.push(args.body.agent), scout = args.body.agent, { agent: scout })
+      : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
+    const states = () => Object.fromEntries(scout.routines.map(routine => [routine.id, routine.enabled]))
+    render(App)
+    await openSidebarPage('Agents')
+    const agents = await screen.findByRole('region', { name: 'Agents', exact: true })
+    await fireEvent.click(within(await within(agents).findByRole('article', { name: 'Scout' })).getByRole('button', { name: 'Actions for Scout' }))
+    await fireEvent.click(within(screen.getByRole('menu', { name: 'Actions for Scout' })).getByRole('menuitem', { name: 'Archive' }))
+    await waitFor(() => expect(within(agents).queryByRole('article', { name: 'Scout' })).toBeNull())
+    expect(states()).toEqual({ on: false, off: false, proposal: false })
+    await fireEvent.click(within(agents).getByRole('button', { name: 'Show archived' }))
+    await fireEvent.click(within(await within(agents).findByRole('article', { name: 'Scout' })).getByRole('button', { name: 'Actions for Scout' }))
+    await fireEvent.click(within(screen.getByRole('menu', { name: 'Actions for Scout' })).getByRole('menuitem', { name: 'Restore' }))
+    await waitFor(() => expect(saves).toHaveLength(2))
+    expect(states()).toEqual({ on: true, off: false, proposal: false })
+    expect(scout.routines.find(routine => routine.id === 'proposal').proposed).toBe(true)
+    expect(localStorage.getItem('muniment.catalog-archive-routines')).toBe('{}')
+  })
+
+  it('keeps the agent profile open while a connection approval shows and after it is answered', async () => {
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args)
+      ? agentListAnswer([{ id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null, routines: [] }], { 'agent-1': 'agent-thread' })
+      : command === 'agent_request' && args?.operation === 'agent.run_now' ? Promise.resolve({ run: { id: 'run-now', agent_id: 'agent-1', status: 'queued', thread_id: null } })
+      : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
+    const profileOpen = () => !!document.querySelector('.workspace.agent-profile-open')
+    render(App)
+    await openSidebarPage('Agents')
+    const card = await within(await screen.findByRole('region', { name: 'Agents', exact: true })).findByRole('article', { name: 'Scout' })
+    await fireEvent.click(within(card).getByRole('button', { name: 'Actions for Scout' }))
+    await fireEvent.click(within(screen.getByRole('menu', { name: 'Actions for Scout' })).getByRole('menuitem', { name: 'Open profile' }))
+    const profile = await screen.findByRole('complementary', { name: 'Agent profile' })
+    await fireEvent.click(within(profile).getByRole('button', { name: 'Run now' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', expect.objectContaining({ operation: 'agent.run_now' })))
+    const run = { id: 'run-now', agent_id: 'agent-1', status: 'running', thread_id: 'agent-thread', updated_at: new Date().toISOString(), trigger: { kind: 'manual', source: 'run_now' } }
+    for (const [name, handle] of window.__TAURI__.event.listen.mock.calls) if (name === 'agent-run-updated') handle({ payload: { runtimeId: 'local', run } })
+    await waitFor(() => expect(pairingListener).toBeDefined())
+    pairingListener({ payload: { challenge: 'profile-pairing', claimed_kind: 'cli', claimed_version: '0.4.2', workspace: 'w', scopes: ['thread.read'] } })
+    const dialog = await screen.findByRole('dialog', { name: 'Approve Muniment connection' })
+    expect(profileOpen()).toBe(true)
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Deny' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Approve Muniment connection' })).toBeNull())
+    for (const [name, handle] of window.__TAURI__.event.listen.mock.calls) if (name === 'agent-run-updated') handle({ payload: { runtimeId: 'local', run: { ...run, status: 'failed', error: 'the desktop pairing connection was closed.' } } })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(profileOpen()).toBe(true)
+  })
+
+  it('opens the profile from "Add or edit in the profile" beside the agent\'s thread, not the open one', async () => {
+    threadSummaryResult = [{ threadId: 'ordinary-thread', title: 'Single Word Acknowledgment', updatedAt: '2026-01-02T00:00:00Z' }, { threadId: 'agent-thread', title: 'Scout chat', updatedAt: '2026-01-01T00:00:00Z' }]
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args)
+      ? agentListAnswer([{ id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null, routines: [] }], { 'agent-1': 'agent-thread' })
+      : command === 'chat_current_thread' ? Promise.resolve('ordinary-thread')
+      : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
+    render(App)
+    await waitFor(() => expect(document.querySelector('.thread-row.active-thread .thread-row-title')).toHaveTextContent('Single Word Acknowledgment'))
+    await openSidebarPage('Agents')
+    const card = await within(await screen.findByRole('region', { name: 'Agents', exact: true })).findByRole('article', { name: 'Scout' })
+    await fireEvent.click(within(card).getByRole('tab', { name: 'Routines' }))
+    await fireEvent.click(within(card).getByRole('button', { name: 'Add or edit in the profile' }))
+    await screen.findByRole('complementary', { name: 'Agent profile' })
+    expect(invoke).toHaveBeenCalledWith('chat_select_thread', { threadId: 'agent-thread' })
+    await waitFor(() => expect(document.querySelector('.thread-row.active-thread .thread-row-title')).toHaveTextContent('Scout chat'))
+  })
+
+  // A failed scheduled run moves only its run's time, so the thread's summary
+  // time stays under the old read mark while the run reads newer.
+  const failedRunReadSetup = () => {
+    const runAt = '2026-01-01T06:00:00Z'
+    localStorage.setItem('muniment.thread-read-baseline', '2025-12-01T00:00:00Z')
+    localStorage.setItem('muniment.thread-read', JSON.stringify({ 'agent-thread': '2026-01-01T00:00:00Z' }))
+    threadSummaryResult = [{ threadId: 'ordinary-thread', title: 'Single Word Acknowledgment', updatedAt: '2026-01-02T00:00:00Z' }, { threadId: 'agent-thread', title: 'Tauri Morning', updatedAt: '2026-01-01T00:00:00Z' }]
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args)
+      ? { ...agentListAnswer([{ id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null, routines: [] }], { 'agent-1': 'agent-thread' }), latest_runs: { 'agent-1': { id: 'run-1', agent_id: 'agent-1', thread_id: 'agent-thread', status: 'failed', error: 'The model refused.', created_at: '2026-01-01T05:59:00Z', updated_at: runAt } } }
+      : command === 'chat_current_thread' ? Promise.resolve('ordinary-thread')
+      : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
+    const readAt = () => Date.parse(JSON.parse(localStorage.getItem('muniment.thread-read') || '{}')['agent-thread'] ?? '')
+    // Core settles a row against the read times the window hands it.
+    let input = null
+    const core = window.__TAURI__.core.invoke
+    window.__TAURI__.core.invoke = (command, ...args) => { if (command === 'sidebar_arrange') input = args[0]?.input; return core(command, ...args) }
+    onTestFinished(() => { window.__TAURI__.core.invoke = core })
+    return { runAt: Date.parse(runAt), readAt, arranged: () => input }
+  }
+
+  it('reads an agent thread opened from "Open chat", so leaving it leaves no unread row', async () => {
+    const { runAt, readAt, arranged } = failedRunReadSetup()
+    render(App)
+    await waitFor(() => expect(document.querySelector('.thread-row.active-thread .thread-row-title')).toHaveTextContent('Single Word Acknowledgment'))
+    await openSidebarPage('Agents')
+    const card = await within(await screen.findByRole('region', { name: 'Agents', exact: true })).findByRole('article', { name: 'Scout' })
+    await fireEvent.click(within(card).getByRole('button', { name: 'Open chat' }))
+    await waitFor(() => expect(document.querySelector('.thread-row.active-thread .thread-row-title')).toHaveTextContent('Tauri Morning'))
+    await waitFor(() => expect(readAt()).toBeGreaterThanOrEqual(runAt))
+    await fireEvent.click(within(screen.getByRole('list', { name: 'Projects list' })).getByText('Single Word Acknowledgment').closest('.thread-row'))
+    await waitFor(() => expect(arranged()?.current).toBe('ordinary-thread'))
+    expect(Date.parse(arranged().read['agent-thread'])).toBeGreaterThanOrEqual(runAt)
+  })
+
+  it('reads an agent thread opened beside its profile from "Add or edit in the profile"', async () => {
+    const { runAt, readAt, arranged } = failedRunReadSetup()
+    render(App)
+    await waitFor(() => expect(document.querySelector('.thread-row.active-thread .thread-row-title')).toHaveTextContent('Single Word Acknowledgment'))
+    await openSidebarPage('Agents')
+    const card = await within(await screen.findByRole('region', { name: 'Agents', exact: true })).findByRole('article', { name: 'Scout' })
+    await fireEvent.click(within(card).getByRole('tab', { name: 'Routines' }))
+    await fireEvent.click(within(card).getByRole('button', { name: 'Add or edit in the profile' }))
+    await screen.findByRole('complementary', { name: 'Agent profile' })
+    await waitFor(() => expect(readAt()).toBeGreaterThanOrEqual(runAt))
+    await fireEvent.click(within(screen.getByRole('list', { name: 'Projects list' })).getByText('Single Word Acknowledgment').closest('.thread-row'))
+    await waitFor(() => expect(arranged()?.current).toBe('ordinary-thread'))
+    expect(Date.parse(arranged().read['agent-thread'])).toBeGreaterThanOrEqual(runAt)
+  })
+
+  it('opens an agent\'s fresh home thread from "Open chat" when its runs posted into it, and reads it', async () => {
+    const { runAt, readAt } = failedRunReadSetup()
+    // The chat list names the thread once its first page lists it, so a new thread stays fresh until then.
+    threadSummaryResult = threadSummaryResult.filter((summary) => summary.threadId !== 'agent-thread')
+    let current = 'ordinary-thread'
+    const mocked = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, args) => command === 'chat_new_thread' ? (current = 'agent-thread')
+      : command === 'chat_current_thread' ? current : mocked(command, args))
+    render(App)
+    await waitFor(() => expect(document.querySelector('.thread-row.active-thread .thread-row-title')).toHaveTextContent('Single Word Acknowledgment'))
+    // A new thread whose id the agent then names as its home thread.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'New thread' })).toBeEnabled())
+    await fireEvent.click(screen.getByRole('button', { name: 'New thread' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_new_thread'))
+    const opens = () => invoke.mock.calls.filter(([command, args]) => command === 'chat_thread_open' && args?.threadId === 'agent-thread').length
+    const before = opens()
+    await openSidebarPage('Agents')
+    const card = await within(await screen.findByRole('region', { name: 'Agents', exact: true })).findByRole('article', { name: 'Scout' })
+    await fireEvent.click(within(card).getByRole('button', { name: 'Open chat' }))
+    await waitFor(() => expect(opens()).toBeGreaterThan(before))
+    await waitFor(() => expect(readAt()).toBeGreaterThanOrEqual(runAt))
+  })
+
+  it('keeps a run that fails while the Agents page covers its thread unread, and reads it when the thread shows again', async () => {
+    const { readAt, arranged } = failedRunReadSetup()
+    // The run lands after this clock, so only a read made after it reaches its time.
+    const runAt = '2099-01-01T00:00:00Z'
+    let latest = {}
+    const mocked = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args)
+      ? { ...agentListAnswer([{ id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null, routines: [] }], { 'agent-1': 'agent-thread' }), latest_runs: latest }
+      : command === 'chat_current_thread' ? 'agent-thread' : mocked(command, args))
+    localStorage.setItem('muniment.open-thread', 'agent-thread')
+    render(App)
+    await waitFor(() => expect(document.querySelector('.thread-row.active-thread .thread-row-title')).toHaveTextContent('Tauri Morning'))
+    await waitFor(() => expect(arranged()?.current).toBe('agent-thread'))
+    await openSidebarPage('Agents')
+    const card = await within(await screen.findByRole('region', { name: 'Agents', exact: true })).findByRole('article', { name: 'Scout' })
+    await waitFor(() => expect(arranged()?.current).toBeNull())
+    // The run fails while the page shows, and the next listing names it.
+    latest = { 'agent-1': { id: 'run-2', agent_id: 'agent-1', thread_id: 'agent-thread', status: 'failed', error: 'The model refused.', created_at: runAt, updated_at: runAt } }
+    document.dispatchEvent(new Event('visibilitychange'))
+    await waitFor(() => expect(card).toHaveTextContent('The model refused.'))
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(readAt()).toBeLessThan(Date.parse(runAt))
+    expect(arranged().current).toBeNull()
+    await fireEvent.click(within(screen.getByRole('list', { name: 'Projects list' })).getByText('Tauri Morning').closest('.thread-row'))
+    await waitFor(() => expect(arranged()?.current).toBe('agent-thread'))
+    await waitFor(() => expect(readAt()).toBeGreaterThanOrEqual(Date.parse(runAt)))
+  })
+
+  it('reads nothing while the window is hidden, and reads the open thread when it shows again', async () => {
+    const { runAt, readAt } = failedRunReadSetup()
+    const mocked = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, args) => command === 'chat_current_thread' ? 'agent-thread' : mocked(command, args))
+    localStorage.setItem('muniment.open-thread', 'agent-thread')
+    const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true)
+    onTestFinished(() => hidden.mockRestore())
+    render(App)
+    await waitFor(() => expect(document.querySelector('.thread-row.active-thread .thread-row-title')).toHaveTextContent('Tauri Morning'))
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(readAt()).toBeLessThan(runAt)
+    hidden.mockReturnValue(false)
+    document.dispatchEvent(new Event('visibilitychange'))
+    await waitFor(() => expect(readAt()).toBeGreaterThanOrEqual(runAt))
+  })
+
+  it('opens a card\'s Delete confirmation in the profile beside the agent\'s own thread, not the open one', async () => {
+    threadSummaryResult = [{ threadId: 'ordinary-thread', title: 'Single Word Acknowledgment', updatedAt: '2026-01-02T00:00:00Z' }, { threadId: 'agent-thread', title: 'Scout chat', updatedAt: '2026-01-01T00:00:00Z' }]
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args)
+      ? agentListAnswer([{ id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null, routines: [] }], { 'agent-1': 'agent-thread' })
+      : command === 'chat_current_thread' ? Promise.resolve('ordinary-thread')
+      : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
+    render(App)
+    await waitFor(() => expect(document.querySelector('.thread-row.active-thread .thread-row-title')).toHaveTextContent('Single Word Acknowledgment'))
+    await openSidebarPage('Agents')
+    const page = await screen.findByRole('region', { name: 'Agents', exact: true })
+    await fireEvent.click(await within(page).findByRole('button', { name: 'Actions for Scout' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
+    const profile = await screen.findByRole('complementary', { name: 'Agent profile' })
+    expect(await within(profile).findByRole('group', { name: 'Delete agent' })).toBeInTheDocument()
+    expect(within(profile).getByText('Scout', { selector: '.name' })).toBeInTheDocument()
+    expect(invoke).toHaveBeenCalledWith('chat_select_thread', { threadId: 'agent-thread' })
+    await waitFor(() => expect(document.querySelector('.thread-row.active-thread .thread-row-title')).toHaveTextContent('Scout chat'))
+  })
+
+  it('returns to the Agents page after a card\'s Delete is confirmed, while the next thread opens under it', async () => {
+    threadSummaryResult = [{ threadId: 'agent-thread', title: 'Scout chat', updatedAt: '2026-01-03T00:00:00Z' }, { threadId: 'other-thread', title: 'Live34 File Creation Test', updatedAt: '2026-01-02T00:00:00Z' }]
+    const original = invoke.getMockImplementation()
+    const scout = { id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null, routines: [] }
+    let deleted = false
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args) ? agentListAnswer(deleted ? [] : [scout], deleted ? {} : { 'agent-1': 'agent-thread' })
+      : command === 'agent_request' && args?.operation === 'agent.delete' ? (deleted = true, {})
+      : command === 'chat_thread_open' ? []
+      : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
+    render(App)
+    await openSidebarPage('Agents')
+    await fireEvent.click(await within(await screen.findByRole('region', { name: 'Agents', exact: true })).findByRole('button', { name: 'Actions for Scout' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
+    await fireEvent.click(within(await screen.findByRole('group', { name: 'Delete agent' })).getByRole('button', { name: 'Confirm delete' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', expect.objectContaining({ operation: 'agent.delete' })))
+    // The agent's thread goes, so the next thread opens under the page the delete started on.
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'other-thread', limit: 100 }))
+    expect(await screen.findByRole('region', { name: 'Agents', exact: true })).toBeInTheDocument()
+    expect(screen.queryByRole('complementary', { name: 'Agent profile' })).not.toBeInTheDocument()
+  })
+
+  it('stays on the next thread when the agent is deleted from its profile after a card\'s Delete was cancelled', async () => {
+    threadSummaryResult = [{ threadId: 'agent-thread', title: 'Scout chat', updatedAt: '2026-01-03T00:00:00Z' }, { threadId: 'other-thread', title: 'Live34 File Creation Test', updatedAt: '2026-01-02T00:00:00Z' }]
+    const original = invoke.getMockImplementation()
+    const scout = { id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null, routines: [] }
+    let deleted = false
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args) ? agentListAnswer(deleted ? [] : [scout], deleted ? {} : { 'agent-1': 'agent-thread' })
+      : command === 'agent_request' && args?.operation === 'agent.delete' ? (deleted = true, {})
+      : command === 'chat_thread_open' ? []
+      : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
+    render(App)
+    await openSidebarPage('Agents')
+    await fireEvent.click(await within(await screen.findByRole('region', { name: 'Agents', exact: true })).findByRole('button', { name: 'Actions for Scout' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
+    const profile = await screen.findByRole('complementary', { name: 'Agent profile' })
+    await fireEvent.click(within(await within(profile).findByRole('group', { name: 'Delete agent' })).getByRole('button', { name: 'Cancel' }))
+    await fireEvent.click(await within(profile).findByRole('button', { name: 'Delete agent' }))
+    await fireEvent.click(within(await within(profile).findByRole('group', { name: 'Delete agent' })).getByRole('button', { name: 'Confirm delete' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'other-thread', limit: 100 }))
+    await waitFor(() => expect(document.querySelector('.thread-row.active-thread .thread-row-title')).toHaveTextContent('Live34 File Creation Test'))
+    expect(screen.queryByRole('region', { name: 'Agents', exact: true })).not.toBeInTheDocument()
+  })
+
+  it('opens "Open profile" on an agent with no run thread beside its creation chat, not the last viewed thread', async () => {
+    threadSummaryResult = [{ threadId: 'ordinary-thread', title: 'Single Word Acknowledgment', updatedAt: '2026-01-02T00:00:00Z' }, { threadId: 'creation-thread', title: 'Scout', updatedAt: '2026-01-01T00:00:00Z' }]
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args)
+      ? agentListAnswer([{ id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null, routines: [] }], {})
+      : command === 'creation_list' ? [{ threadId: 'creation-thread', kind: 'agent', goal: 'Read sources', output: '', resultId: 'agent-1', turns: [{ message: 'Read sources', at: '2026-01-01T00:00:00Z', reply: { draft: { name: 'Scout' } } }] }]
+      : command === 'chat_current_thread' ? Promise.resolve('ordinary-thread')
+      : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
+    render(App)
+    await waitFor(() => expect(document.querySelector('.thread-row.active-thread .thread-row-title')).toHaveTextContent('Single Word Acknowledgment'))
+    await openSidebarPage('Agents')
+    const page = await screen.findByRole('region', { name: 'Agents', exact: true })
+    await fireEvent.click(await within(page).findByRole('button', { name: 'Actions for Scout' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Open profile' }))
+    const profile = await screen.findByRole('complementary', { name: 'Agent profile' })
+    expect(within(profile).getByText('Scout', { selector: '.name' })).toBeInTheDocument()
+    expect(invoke).toHaveBeenCalledWith('chat_select_thread', { threadId: 'creation-thread' })
+    await waitFor(() => expect(document.querySelector('.thread-row.active-thread')).toHaveAttribute('data-thread-id', 'creation-thread'))
+    expect(invoke.mock.calls.filter(([cmd]) => cmd === 'chat_new_thread')).toHaveLength(0)
+  })
+
+  it.each([['Open profile', 'before'], ['Delete', 'before'], ['Open profile', 'on'], ['Delete', 'on']])('gives the rail to the profile from a card\'s %s while Files, opened %s the Agents page, is open, so the two never overlap', async (action, opened) => {
+    threadSummaryResult = [{ threadId: 'agent-thread', title: 'Scout chat', updatedAt: '2026-01-03T00:00:00Z' }, { threadId: 'other-thread', title: 'Other', updatedAt: '2026-01-02T00:00:00Z' }]
+    const original = invoke.getMockImplementation()
+    const scout = { id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null, routines: [] }
+    let deleted = false
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args) ? agentListAnswer(deleted ? [] : [scout], deleted ? {} : { 'agent-1': 'agent-thread' })
+      : command === 'agent_request' && args?.operation === 'agent.delete' ? (deleted = true, {})
+      : command === 'chat_current_thread' ? Promise.resolve('other-thread')
+      : command === 'chat_thread_open' ? []
+      : command === 'workspace_folders' ? [{ label: 'Thread workspace', path: '/home/sessions/Other' }]
+      : command === 'workspace_list' ? { path: args.path, entries: [] }
+      : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
+    render(App)
+    await findReadyWorkspaceComposer()
+    const openFiles = async () => {
+      await fireEvent.click(screen.getByRole('button', { name: 'Workspace tools' }))
+      await fireEvent.click(screen.getByRole('menuitem', { name: 'Files', exact: true }))
+      await waitFor(() => expect(document.querySelector('.workspace')).toHaveClass('tools-open'))
+    }
+    if (opened === 'before') await openFiles()
+    await openSidebarPage('Agents')
+    const agents = await screen.findByRole('region', { name: 'Agents', exact: true })
+    if (opened === 'on') await openFiles()
+    await fireEvent.click(await within(agents).findByRole('button', { name: 'Actions for Scout' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: action }))
+    const profile = await screen.findByRole('complementary', { name: 'Agent profile' })
+    await waitFor(() => expect(document.querySelector('.thread-row.active-thread')).toHaveAttribute('data-thread-id', 'agent-thread'))
+    await tick()
+    expect(document.querySelector('.workspace')).not.toHaveClass('tools-open')
+    expect(document.querySelector('.workspace')).toHaveClass('agent-profile-open')
+    if (action !== 'Delete') return
+    await fireEvent.click(within(await within(profile).findByRole('group', { name: 'Delete agent' })).getByRole('button', { name: 'Confirm delete' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', expect.objectContaining({ operation: 'agent.delete' })))
+    await waitFor(() => expect(screen.queryByRole('complementary', { name: 'Agent profile' })).toBeNull())
+  })
+
+  it('opens "Open profile" on an agent with no thread or creation chat beside the Agents page, and closes it with the page', async () => {
+    threadSummaryResult = [{ threadId: 'ordinary-thread', title: 'Single Word Acknowledgment', updatedAt: '2026-01-02T00:00:00Z' }]
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args)
+      ? agentListAnswer([{ id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null, routines: [] }], {})
+      : command === 'chat_current_thread' ? Promise.resolve('ordinary-thread')
+      : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
+    render(App)
+    await waitFor(() => expect(document.querySelector('.thread-row.active-thread .thread-row-title')).toHaveTextContent('Single Word Acknowledgment'))
+    await openSidebarPage('Agents')
+    const page = await screen.findByRole('region', { name: 'Agents', exact: true })
+    const switches = () => invoke.mock.calls.filter(([cmd]) => cmd === 'chat_select_thread' || cmd === 'chat_new_thread').length
+    const before = switches()
+    await fireEvent.click(await within(page).findByRole('button', { name: 'Actions for Scout' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Open profile' }))
+    const profile = await screen.findByRole('complementary', { name: 'Agent profile' })
+    expect(within(profile).getByText('Scout', { selector: '.name' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Agents', exact: true })).toBeInTheDocument()
+    expect(document.querySelector('.workspace')).toHaveClass('agents-open')
+    expect(switches()).toBe(before)
+    // The thread under the page never shows beside the profile.
+    await fireEvent.click(screen.getByRole('button', { name: 'Agents', exact: true }))
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Agents', exact: true })).toBeNull())
+    expect(screen.queryByRole('complementary', { name: 'Agent profile' })).toBeNull()
+  })
+
+  it('opens the profile of an agent with no thread alone, with no new thread', async () => {
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args)
+      ? agentListAnswer([{ id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null, routines: [] }], {})
+      : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
+    render(App)
+    await openSidebarPage('Agents')
+    const card = await within(await screen.findByRole('region', { name: 'Agents', exact: true })).findByRole('article', { name: 'Scout' })
+    await fireEvent.click(within(card).getByRole('tab', { name: 'Routines' }))
+    await fireEvent.click(within(card).getByRole('button', { name: 'Add or edit in the profile' }))
+    await screen.findByRole('complementary', { name: 'Agent profile' })
+    expect(invoke.mock.calls.filter(([cmd]) => cmd === 'chat_new_thread')).toHaveLength(0)
   })
 
   it('opens the existing agent chat with one shared composer and restores a regular chat', async () => {
@@ -3955,6 +5164,269 @@ describe('sidebar collapse', () => {
     await waitFor(() => expect(screen.queryByRole('complementary', { name: 'Agent profile' })).not.toBeInTheDocument())
     expect(invoke).toHaveBeenCalledWith('chat_new_thread')
     expect(screen.getAllByRole('textbox', { name: 'Message' })).toHaveLength(1)
+  })
+
+  it('opens the agent profile again when its thread shows after a round trip to Usage, and not beside another thread', async () => {
+    threadSummaryResult = [{ threadId: 'agent-thread', title: 'Scout chat', updatedAt: '2026-01-02T00:00:00Z' }, { threadId: 'ordinary-thread', title: 'Ordinary chat', updatedAt: '2026-01-01T00:00:00Z' }]
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args)
+      ? agentListAnswer([{ id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null }], { 'agent-1': 'agent-thread' })
+      : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
+    render(App)
+    await openSidebarPage('Agents')
+    const catalog = await screen.findByRole('region', { name: 'Agents', exact: true })
+    await fireEvent.click(within(await within(catalog).findByRole('article', { name: 'Scout' })).getByRole('button', { name: 'Open chat' }))
+    await screen.findByRole('complementary', { name: 'Agent profile' })
+    const sidebar = document.getElementById('sidebar')
+    const usage = () => within(sidebar).getAllByRole('button', { name: 'Usage', exact: true }).find((node) => node.closest('.side-action, .sidebar-actions'))
+
+    await fireEvent.click(usage())
+    await screen.findByRole('region', { name: 'Usage' })
+    expect(screen.queryByRole('complementary', { name: 'Agent profile' })).not.toBeInTheDocument()
+    await fireEvent.click(document.querySelector('#sidebar .thread-row[data-thread-id="agent-thread"]'))
+    expect(await screen.findByRole('complementary', { name: 'Agent profile' })).toBeInTheDocument()
+
+    // A profile the user closed stays closed after the round trip.
+    await fireEvent.click(screen.getByRole('button', { name: 'Collapse agent profile' }))
+    await fireEvent.click(usage())
+    await screen.findByRole('region', { name: 'Usage' })
+    await fireEvent.click(document.querySelector('#sidebar .thread-row[data-thread-id="agent-thread"]'))
+    await waitFor(() => expect(document.querySelector('.workspace')).not.toHaveClass('agents-open'))
+    expect(screen.queryByRole('complementary', { name: 'Agent profile' })).not.toBeInTheDocument()
+
+    // Another thread never takes the profile put aside.
+    await fireEvent.click(screen.getByRole('button', { name: 'Reveal agent profile' }))
+    await screen.findByRole('complementary', { name: 'Agent profile' })
+    await fireEvent.click(usage())
+    await screen.findByRole('region', { name: 'Usage' })
+    await fireEvent.click(document.querySelector('#sidebar .thread-row[data-thread-id="ordinary-thread"]'))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'ordinary-thread', limit: 100 }))
+    await waitFor(() => expect(document.querySelector('.workspace')).not.toHaveClass('agents-open'))
+    expect(screen.queryByRole('complementary', { name: 'Agent profile' })).not.toBeInTheDocument()
+  })
+
+  it('moves off a deleted agent\'s run thread to the newest remaining thread, and Back to threads and launch never reopen it', async () => {
+    const original = invoke.getMockImplementation()
+    let deleted = false
+    const scout = { id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null }
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args) ? agentListAnswer(deleted ? [] : [scout], deleted ? {} : { 'agent-1': 'agent-thread' })
+      : command === 'agent_request' && args?.operation === 'agent.delete' ? (deleted = true, {})
+      : command === 'chat_thread_open' ? []
+      : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
+    threadSummaryResult = [
+      { threadId: 'agent-thread', title: 'Carry out your saved agent instructions', updatedAt: '2026-01-02T00:00:00Z' },
+      { threadId: 'plain-thread', title: 'Lease renewal', updatedAt: '2026-01-01T00:00:00Z' },
+    ]
+    render(App)
+    await openSidebarPage('Agents')
+    await fireEvent.click(within(await within(await screen.findByRole('region', { name: 'Agents', exact: true })).findByRole('article', { name: 'Scout' })).getByRole('button', { name: 'Open chat' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'agent-thread', limit: 100 }))
+    await waitFor(() => expect(localStorage.getItem('muniment.open-thread')).toBe('agent-thread'))
+    await openSidebarPage('Agents')
+    await fireEvent.click(await within(await screen.findByRole('region', { name: 'Agents', exact: true })).findByRole('button', { name: 'Actions for Scout' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
+    await fireEvent.click(within(await screen.findByRole('group', { name: 'Delete agent' })).getByRole('button', { name: 'Confirm delete' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', expect.objectContaining({ operation: 'agent.delete' })))
+    // The main pane leaves the agent's run thread for the newest thread the sidebar lists.
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'plain-thread', limit: 100 }))
+    await waitFor(() => expect(localStorage.getItem('muniment.open-thread')).toBe('plain-thread'))
+    const opened = () => invoke.mock.calls.filter(([command, args]) => command === 'chat_thread_open' && args?.threadId === 'agent-thread').length
+    const before = opened()
+    await openSettings()
+    await fireEvent.click(screen.getByRole('button', { name: 'Back to threads' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument())
+    expect(opened()).toBe(before)
+    expect(screen.queryByText('Carry out your saved agent instructions', { selector: '#sidebar .thread-row-title' })).toBeNull()
+  })
+
+  it.each([
+    ['moves its threads to Archived', false],
+    ['deletes its threads when asked, and names a folder the delete keeps', true],
+  ])('says what happens to a deleted agent\'s threads and %s', async (_, removeThreads) => {
+    const original = invoke.getMockImplementation()
+    let deleted = false
+    const folder = '/Users/me/Muniment/Threads/agent-thread'
+    const scout = { id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null }
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args) ? agentListAnswer(deleted ? [] : [scout], deleted ? {} : { 'agent-1': 'agent-thread' })
+      : command === 'agent_request' && args?.operation === 'agent.delete' ? (deleted = true, {})
+      : command === 'chat_delete_thread' ? { folder_kept: folder, message: "The thread's folder holds your files, so it stays." }
+      : command === 'chat_thread_open' ? []
+      : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
+    threadSummaryResult = [
+      { threadId: 'agent-thread', title: 'Carry out your saved agent instructions', updatedAt: '2026-01-02T00:00:00Z' },
+      { threadId: 'plain-thread', title: 'Lease renewal', updatedAt: '2026-01-01T00:00:00Z' },
+    ]
+    render(App)
+    await openSidebarPage('Agents')
+    await fireEvent.click(within(await within(await screen.findByRole('region', { name: 'Agents', exact: true })).findByRole('article', { name: 'Scout' })).getByRole('button', { name: 'Open chat' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'agent-thread', limit: 100 }))
+    const profile = await screen.findByRole('complementary', { name: 'Agent profile' })
+    await fireEvent.click(within(profile).getByRole('button', { name: 'Delete agent' }))
+    const confirm = await screen.findByRole('group', { name: 'Delete agent' })
+    expect(within(confirm).getByText('Its threads move to Archived.')).toBeInTheDocument()
+    if (removeThreads) await fireEvent.click(within(confirm).getByRole('checkbox', { name: 'Also delete its threads' }))
+    await fireEvent.click(within(confirm).getByRole('button', { name: 'Confirm delete' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'plain-thread', limit: 100 }))
+    const organization = JSON.parse(localStorage.getItem('muniment.thread-organization') || '{}')
+    if (removeThreads) {
+      expect(invoke).toHaveBeenCalledWith('chat_delete_thread', { threadId: 'agent-thread' })
+      expect(organization['agent-thread']?.archived).not.toBe(true)
+      expect(await screen.findByText(new RegExp(folder))).toBeInTheDocument()
+    } else {
+      expect(invoke.mock.calls.some(([command]) => command === 'chat_delete_thread')).toBe(false)
+      expect(organization['agent-thread']?.archived).toBe(true)
+    }
+  })
+
+  it.each([
+    ['names it as the agent\'s thread', { 'agent-1': 'agent-fresh' }],
+    ['does not name it yet', {}],
+  ])('moves off the new thread "Open agent" started to the newest thread when the agent is deleted from its profile, while the listing %s', async (_, mapping) => {
+    const original = invoke.getMockImplementation()
+    let deleted = false
+    let started = false
+    const scout = { id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null }
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args) ? agentListAnswer(deleted ? [] : [scout], deleted || !started ? {} : mapping)
+      : command === 'agent_request' && args?.operation === 'agent.delete' ? (deleted = true, {})
+      : command === 'chat_new_thread' ? (started = true, 'agent-fresh')
+      : command === 'chat_thread_open' ? []
+      : command === 'chat_select_thread' ? undefined : original(command, args))
+    threadSummaryResult = [
+      { threadId: 'plain-thread', title: 'Pass Ten Start Check', updatedAt: '2026-01-02T00:00:00Z' },
+      { threadId: 'older-thread', title: 'Lease renewal', updatedAt: '2026-01-01T00:00:00Z' },
+    ]
+    render(App)
+    await openSidebarPage('Agents')
+    await fireEvent.click(within(await within(await screen.findByRole('region', { name: 'Agents', exact: true })).findByRole('article', { name: 'Scout' })).getByRole('button', { name: 'Open chat' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_new_thread', { agentId: 'agent-1' }))
+    const profile = await screen.findByRole('complementary', { name: 'Agent profile' })
+    const opened = () => invoke.mock.calls.filter(([command, args]) => command === 'chat_thread_open' && args?.threadId === 'plain-thread').length
+    const before = opened()
+    await fireEvent.click(within(profile).getByRole('button', { name: 'Delete agent' }))
+    await fireEvent.click(within(await screen.findByRole('group', { name: 'Delete agent' })).getByRole('button', { name: 'Confirm delete' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', expect.objectContaining({ operation: 'agent.delete' })))
+    // The main pane opens the newest remaining thread, never a second new thread.
+    await waitFor(() => expect(opened()).toBe(before + 1))
+    expect(invoke.mock.calls.filter(([command]) => command === 'chat_new_thread')).toHaveLength(1)
+  })
+
+  it.each([
+    ['Agents', 'Agents'],
+    ['Artifacts', 'Artifacts'],
+    ['Usage', 'Usage'],
+    ['Notifications', 'Notifications'],
+  ])('opens %s on the first press while an agent delete still opens the next thread', async (button, page) => {
+    const original = invoke.getMockImplementation()
+    let deleted = false
+    let release
+    const held = new Promise((resolve) => { release = resolve })
+    const scout = { id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null }
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args) ? agentListAnswer(deleted ? [] : [scout], deleted ? {} : { 'agent-1': 'agent-thread' })
+      : command === 'agent_request' && args?.operation === 'agent.delete' ? (deleted = true, {})
+      : command === 'chat_thread_open' && args?.threadId === 'plain-thread' ? held.then(() => [])
+      : command === 'chat_thread_open' ? []
+      : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
+    threadSummaryResult = [
+      { threadId: 'agent-thread', title: 'Carry out your saved agent instructions', updatedAt: '2026-01-02T00:00:00Z' },
+      { threadId: 'plain-thread', title: 'Lease renewal', updatedAt: '2026-01-01T00:00:00Z' },
+    ]
+    render(App)
+    await openSidebarPage('Agents')
+    await fireEvent.click(within(await within(await screen.findByRole('region', { name: 'Agents', exact: true })).findByRole('article', { name: 'Scout' })).getByRole('button', { name: 'Open chat' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'agent-thread', limit: 100 }))
+    const profile = await screen.findByRole('complementary', { name: 'Agent profile' })
+    await fireEvent.click(within(profile).getByRole('button', { name: 'Delete agent' }))
+    await fireEvent.click(within(await screen.findByRole('group', { name: 'Delete agent' })).getByRole('button', { name: 'Confirm delete' }))
+    // The delete's confirmation is gone and the next thread still opens.
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'plain-thread', limit: 100 }))
+    const press = within(document.getElementById('sidebar')).getByRole('button', { name: button, exact: true })
+    expect(press).toBeEnabled()
+    await fireEvent.click(press)
+    expect(await screen.findByRole('region', { name: page, exact: true })).toBeInTheDocument()
+    release()
+    await waitFor(() => expect(localStorage.getItem('muniment.open-thread')).toBe('plain-thread'))
+    await tick()
+    expect(screen.getByRole('region', { name: page, exact: true })).toBeInTheDocument()
+  })
+
+  it('opens the next remaining thread when the newest one fails to open after an agent delete', async () => {
+    const original = invoke.getMockImplementation()
+    let deleted = false
+    const scout = { id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null }
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args) ? agentListAnswer(deleted ? [] : [scout], deleted ? {} : { 'agent-1': 'agent-thread' })
+      : command === 'agent_request' && args?.operation === 'agent.delete' ? (deleted = true, {})
+      : command === 'chat_thread_open' && args?.threadId === 'plain-thread' ? Promise.reject(new Error('The thread was not found.'))
+      : command === 'chat_thread_open' ? []
+      : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
+    threadSummaryResult = [
+      { threadId: 'agent-thread', title: 'Carry out your saved agent instructions', updatedAt: '2026-01-03T00:00:00Z' },
+      { threadId: 'plain-thread', title: 'Pass Ten Start Check', updatedAt: '2026-01-02T00:00:00Z' },
+      { threadId: 'older-thread', title: 'Lease renewal', updatedAt: '2026-01-01T00:00:00Z' },
+    ]
+    render(App)
+    await openSidebarPage('Agents')
+    await fireEvent.click(within(await within(await screen.findByRole('region', { name: 'Agents', exact: true })).findByRole('article', { name: 'Scout' })).getByRole('button', { name: 'Open chat' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'agent-thread', limit: 100 }))
+    const profile = await screen.findByRole('complementary', { name: 'Agent profile' })
+    await fireEvent.click(within(profile).getByRole('button', { name: 'Delete agent' }))
+    await fireEvent.click(within(await screen.findByRole('group', { name: 'Delete agent' })).getByRole('button', { name: 'Confirm delete' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'older-thread', limit: 100 }))
+    await waitFor(() => expect(localStorage.getItem('muniment.open-thread')).toBe('older-thread'))
+    expect(invoke.mock.calls.filter(([command]) => command === 'chat_new_thread')).toHaveLength(0)
+  })
+
+  it('settles an agent card\'s last run on the run\'s failed event, also when a listing that started before it answers after', async () => {
+    const original = invoke.getMockImplementation()
+    const scout = { id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null }
+    const running = { id: 'run-1', agent_id: 'agent-1', status: 'running', thread_id: 'agent-thread', updated_at: '2026-11-01T16:07:50Z', trigger: { kind: 'manual' } }
+    const failed = { ...running, status: 'failed', error: 'The key was refused.', updated_at: '2026-11-01T16:07:57.550Z' }
+    let held = null
+    invoke.mockImplementation(async (command, args) => {
+      if (isAgentList(command, args)) {
+        const answer = { agents: [scout], primary_threads: { 'agent-1': 'agent-thread' }, latest_runs: { 'agent-1': running }, errors: [] }
+        if (!held) return answer
+        return new Promise((resolve) => { held = () => resolve(answer) })
+      }
+      return original(command, args)
+    })
+    threadSummaryResult = [{ threadId: 'agent-thread', title: 'Carry out your saved agent instructions', updatedAt: '2026-01-02T00:00:00Z' }]
+    render(App)
+    await openSidebarPage('Agents')
+    const card = await within(await screen.findByRole('region', { name: 'Agents', exact: true })).findByRole('article', { name: 'Scout' })
+    await waitFor(() => expect(within(card).getByRole('img', { name: 'Running' })).toBeInTheDocument())
+    // A listing starts, the run fails, and the listing answers with the run as it was.
+    held = true
+    document.dispatchEvent(new Event('visibilitychange'))
+    await waitFor(() => expect(typeof held).toBe('function'))
+    for (const [name, handle] of window.__TAURI__.event.listen.mock.calls) if (name === 'agent-run-updated') handle({ payload: { runtimeId: 'local', run: failed } })
+    await waitFor(() => expect(within(card).getByRole('img', { name: 'Failed' })).toBeInTheDocument())
+    held()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(within(card).getByRole('img', { name: 'Failed' })).toBeInTheDocument()
+    expect(within(card).queryByRole('img', { name: 'Running' })).toBeNull()
+  })
+
+  it('lands an agent chat opened from its card at the newest message', async () => {
+    const original = invoke.getMockImplementation()
+    const history = Array.from({ length: 6 }, (_, index) => ({ role: index % 2 ? 'assistant' : 'user', content: `Message ${index}` }))
+    invoke.mockImplementation(async (command, args) => isAgentList(command, args)
+      ? agentListAnswer([{ id: 'agent-1', name: 'Scout', instructions: 'Read sources.', projectId: null, schedule: null }], { 'agent-1': 'agent-thread' })
+      : command === 'chat_thread_summaries' ? { summaries: [{ threadId: 'agent-thread', title: 'Scout chat', updatedAt: '2026-01-01T00:00:00Z' }], nextCursor: null }
+      : command === 'chat_thread_open' && args?.threadId === 'agent-thread' ? history
+      : ['chat_select_thread', 'chat_new_thread'].includes(command) ? undefined : original(command, args))
+    render(App)
+    const thread = await screen.findByRole('region', { name: /Transcript:/ })
+    const box = layoutThread(thread, 1000)
+    await openSidebarPage('Agents')
+    const catalog = await screen.findByRole('region', { name: 'Agents', exact: true })
+    await fireEvent.click(within(await within(catalog).findByRole('article', { name: 'Scout' })).getByRole('button', { name: 'Open chat' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_open', { threadId: 'agent-thread', limit: 100 }))
+    await waitFor(() => expect(document.querySelector('.workspace')).not.toHaveClass('agents-open'))
+    // The thread shows at the newest message once it draws, with no later
+    // message or poll to scroll it there.
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    await new Promise((resolve) => requestAnimationFrame(resolve))
+    expect(thread.scrollTop).toBe(box.bottom())
   })
 
   it('creates the first agent chat once and keeps its project assignment', async () => {
@@ -6268,7 +7740,7 @@ describe('local file selection', () => {
     expect(screen.queryByText('/secret/location/evidence.pdf')).not.toBeInTheDocument()
   })
 
-  it('submits selected paths and clears the draft and selection only after success', async () => {
+  it('submits selected paths and clears the draft and selection as the message shows', async () => {
     let resolveSubmit
     invoke.mockImplementation(async (command, payload) => {
       if (command === 'project_list') return { projects: {}, threads: {} }
@@ -6298,17 +7770,16 @@ describe('local file selection', () => {
         { path: '/private/notes.txt' },
       ],
     })
-    expect(composer).toHaveValue('Review these')
-    expect(screen.getByText('lease.png')).toBeInTheDocument()
-    expect(screen.getByText('notes.txt')).toBeInTheDocument()
+    expect(composer).toHaveValue('')
+    expect(screen.queryByRole('list', { name: 'Selected files' })).not.toBeInTheDocument()
 
     resolveSubmit({ runId: 'run-with-files', attachments: [
       { displayName: 'lease.png', byteLength: 1024, mediaType: 'image/png' },
       { displayName: 'notes.txt', byteLength: 1024 },
     ] })
-    await waitFor(() => expect(composer).toHaveValue(''))
+    const saved = await screen.findByRole('list', { name: 'Saved attachments' })
+    expect(composer).toHaveValue('')
     expect(screen.queryByRole('list', { name: 'Selected files' })).not.toBeInTheDocument()
-    const saved = screen.getByRole('list', { name: 'Saved attachments' })
     const chips = within(saved).getAllByRole('listitem')
     expect(chips[0]).toHaveTextContent('lease.png1.0 KBimage/png')
     expect(chips[1]).toHaveTextContent('notes.txt1.0 KB')
@@ -7136,13 +8607,15 @@ it('does not offer another-model retry in a completed reply', async () => {
       runId: 'run-thinking', phase: 'thinking', text: '', prompt: 'A question',
       receipt: null, toolActivity: [], resumable: false,
     }])
-    const chip = await screen.findByText('Routing')
-    const mark = screen.getByLabelText('Routing')
+    const chip = await screen.findByText('Starting')
+    const mark = screen.getByLabelText('Starting')
     expect(mark.querySelector('path.torso').getAttribute('d')).toMatch(/^M160 0 H274/)
     expect(mark.querySelector('path.accent')).toBeInTheDocument()
+    // No time shows before the runtime names the run's start.
+    expect(chip.closest('.live-receipt').querySelector('[aria-label^="Execution time"]')).toBeNull()
 
     chatListener({ payload: {
-      runId: 'run-thinking', phase: 'streaming', text: 'First token',
+      runId: 'run-thinking', phase: 'streaming', text: 'First token', startedAt: new Date().toISOString(),
       receipt: null, toolActivity: [], pendingPermission: null,
     } })
 
@@ -7167,7 +8640,7 @@ it('does not offer another-model retry in a completed reply', async () => {
       runId: 'run-tool', phase: 'thinking', text: '', prompt: 'A question',
       receipt: null, toolActivity: [], resumable: false,
     }])
-    const chip = await screen.findByText('Routing')
+    const chip = await screen.findByText('Starting')
     chatListener({ payload: {
       runId: 'run-tool', phase: 'thinking', text: '', turnStarted: true,
       receipt: null, toolActivity: [{ effectId: 'e1', displayName: 'grep', status: 'running' }], pendingPermission: null,
@@ -7188,7 +8661,7 @@ it('does not offer another-model retry in a completed reply', async () => {
         runId: 'run-reduced', phase: 'thinking', text: '', prompt: 'A question',
         receipt: null, toolActivity: [], resumable: false,
       }])
-      const chip = await screen.findByText('Routing')
+      const chip = await screen.findByText('Starting')
 
       chatListener({ payload: {
         runId: 'run-reduced', phase: 'complete', text: 'First token',
@@ -7284,6 +8757,42 @@ it('does not offer another-model retry in a completed reply', async () => {
     expect(note).toHaveAttribute('data-tooltip', resumeNotice)
     expect(appRules.get('.resume-notice')).toContain('var(--font-human)')
     expect(await screen.findByText('Finished reply')).toBeInTheDocument()
+  })
+
+  it('selects the restored retry text so the next typed message replaces it and never joins it', async () => {
+    signedIn([{ runId: 'run-failed', phase: 'failed', text: '', prompt: 'Live27 key test four', failureReason: 'No reply arrived within 30 seconds.' }], { runId: 'retry-run', attachments: [] })
+    const error = await screen.findByText('No reply arrived within 30 seconds.')
+    await fireEvent.click(within(error).getByRole('button', { name: 'Try again' }))
+    const composer = screen.getByPlaceholderText('Ask anything')
+    await waitFor(() => expect(composer).toHaveFocus())
+    expect(composer).toHaveValue('Live27 key test four')
+    expect([composer.selectionStart, composer.selectionEnd]).toEqual([0, 'Live27 key test four'.length])
+    // Typing applies to the selection, as a browser does.
+    composer.setRangeText('Live27 key test five', composer.selectionStart, composer.selectionEnd, 'end')
+    await fireEvent.input(composer)
+    expect(composer).toHaveValue('Live27 key test five')
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    expect(invoke).toHaveBeenCalledWith('chat_submit', { prompt: 'Live27 key test five', files: [] })
+  })
+
+  it('ends the retry review for good once the composer text no longer matches the failed prompt', async () => {
+    signedIn([{ runId: 'run-failed', phase: 'failed', text: '', prompt: 'Live27 key test four', failureReason: 'No reply arrived within 30 seconds.', toolActivity: [{ effectId: 'tool-1', displayName: 'read', status: 'done' }] }], { runId: 'retry-run', attachments: [] })
+    const error = await screen.findByText('No reply arrived within 30 seconds.')
+    await fireEvent.click(within(error).getByRole('button', { name: 'Try again' }))
+    const composer = screen.getByPlaceholderText('Ask anything')
+    expect(screen.getByRole('region', { name: 'Review retry' })).toHaveTextContent('Sending may run tools again.')
+    // Trailing space is still the same message.
+    await fireEvent.input(composer, { target: { value: 'Live27 key test four ' } })
+    expect(screen.getByRole('region', { name: 'Review retry' })).toBeInTheDocument()
+    await fireEvent.input(composer, { target: { value: 'Live27 key test five' } })
+    expect(screen.queryByRole('region', { name: 'Review retry' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Sending may run tools again.')).not.toBeInTheDocument()
+    // Typing the failed prompt again does not bring the review back.
+    await fireEvent.input(composer, { target: { value: 'Live27 key test four' } })
+    expect(screen.queryByRole('region', { name: 'Review retry' })).not.toBeInTheDocument()
+    await fireEvent.input(composer, { target: { value: 'Live27 key test five' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    expect(invoke).toHaveBeenCalledWith('chat_submit', { prompt: 'Live27 key test five', files: [] })
   })
 
   it('keeps retry disabled when the failed run has no saved prompt', async () => {
@@ -7905,7 +9414,8 @@ describe('provenance line', () => {
       ]
       if (command === 'agent_request' && args.operation === 'run.changes') {
         asked.push(args.body.run_id)
-        return { run_id: args.body.run_id, available: true, files: args.body.run_id === 'run-bash' ? [{ path: 'dist/app.js', status: 'modified', additions: 1, deletions: 0 }] : [] }
+        const files = { 'run-bash': 'dist/app.js', 'run-edit': 'notes.md' }[args.body.run_id]
+        return { run_id: args.body.run_id, available: true, files: files ? [{ path: files, status: 'modified', additions: 1, deletions: 0 }] : [] }
       }
       if (command === 'auth_entitlement_snapshot') return snapshot()
       if (command === 'auth_devices') return []
@@ -7917,8 +9427,172 @@ describe('provenance line', () => {
     const offers = (text) => !!screen.getByText(text).closest('.response').querySelector('.receipt-line .review-turn')
     await waitFor(() => expect(offers('Ran the build.')).toBe(true))
     expect([offers('Edited the notes.'), offers('Read the notes.'), offers('Pushed.')]).toEqual([true, false, false])
-    // Only a turn that ran a command and counts no edit asks core for its checkpoint.
-    expect(asked.sort()).toEqual(['run-bash', 'run-push'])
+    // A turn that counts an edit or ran a command asks core for its checkpoint.
+    expect(asked.sort()).toEqual(['run-bash', 'run-edit', 'run-push'])
+  })
+
+  // Core saves a turn's last checkpoint after the turn completes. The first
+  // turn's record counts a write that core saved nothing for, and the second
+  // turn's first answer comes before its checkpoint lands.
+  it('offers Review changes on exactly the turns core saved changes for', async () => {
+    const asked = []
+    invoke.mockImplementation(async (command, args) => {
+      if (command === 'project_list') return { projects: {}, threads: {} }
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_thread_open') return [
+        { runId: 'run-first', phase: 'complete', text: 'Wrote the notes.', prompt: 'Write', receipt: { time: '2s' },
+          toolActivity: [{ effectId: 'w1', displayName: 'write', status: 'completed', input: JSON.stringify({ path: 'notes.md', content: 'a' }) }] },
+        { runId: 'run-second', phase: 'complete', text: 'Added a line.', prompt: 'Append', receipt: { time: '2s' },
+          toolActivity: [{ effectId: 'b1', displayName: 'bash', status: 'completed', input: JSON.stringify({ command: 'echo b >> notes.md' }) }] },
+      ]
+      if (command === 'agent_request' && args.operation === 'run.changes') {
+        asked.push(args.body.run_id)
+        if (args.body.run_id === 'run-first') return { run_id: 'run-first', folder: '/work', available: false, unavailable: 'The folder could not be read, so its files were not saved.', files: [], more: 0 }
+        if (asked.filter((id) => id === 'run-second').length === 1) return { run_id: 'run-second', available: false, unavailable: 'This turn is still running or ended before its files were saved.', files: [], more: 0 }
+        return { run_id: 'run-second', folder: '/work', available: true, more: 0, files: [{ path: 'notes.md', status: 'modified', additions: 1, deletions: 0 }] }
+      }
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'chat_select_thread') return undefined
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    expect(await screen.findByText('Added a line.')).toBeInTheDocument()
+    const offers = (text) => !!screen.getByText(text).closest('.response').querySelector('.receipt-line .review-turn')
+    await waitFor(() => expect(offers('Added a line.')).toBe(true), { timeout: 3000 })
+    expect(offers('Wrote the notes.')).toBe(false)
+  })
+
+  // A turn names one file in several path forms, and the thread folder takes
+  // its title between turns. The chip lists the file once from core's saved
+  // turns, with the line counts of the stored diff.
+  it('lists a file the turns created and edited once in the changed-files chip', async () => {
+    const folder = '/home/sessions/Live36-c3fa5c5a'
+    invoke.mockImplementation(async (command, args) => {
+      if (command === 'project_list') return { projects: {}, threads: {} }
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_thread_open') return [
+        { runId: 'run-first', phase: 'complete', text: 'Wrote the file.', prompt: 'Write', receipt: { time: '2s' },
+          toolActivity: [
+            { effectId: 'w1', displayName: 'write', status: 'completed', input: JSON.stringify({ path: '/home/sessions/Untitled-c3fa5c5a/live36.txt', content: 'one\n' }) },
+            { effectId: 'e1', displayName: 'edit', status: 'completed', input: JSON.stringify({ path: 'live36.txt', edits: [{ oldText: 'one', newText: 'one\ntwo' }] }) },
+          ] },
+        { runId: 'run-second', phase: 'complete', text: 'Edited the file.', prompt: 'Edit', receipt: { time: '2s' },
+          toolActivity: [{ effectId: 'e2', displayName: 'edit', status: 'completed', input: JSON.stringify({ path: `${folder}/live36.txt`, edits: [{ oldText: 'two', newText: 'three' }] }) }] },
+      ]
+      if (command === 'agent_request' && args.operation === 'run.changes') return { run_id: args.body.run_id, folder, available: true, more: 0,
+        files: [args.body.run_id === 'run-first' ? { path: 'live36.txt', status: 'added', additions: 2, deletions: 0, binary: false } : { path: 'live36.txt', status: 'modified', additions: 1, deletions: 1, binary: false }] }
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'chat_select_thread') return undefined
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    expect(await screen.findByText('Edited the file.')).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: '1 file changed, 3 lines added, 1 line removed' })).toBeInTheDocument()
+    await fireEvent.pointerEnter(screen.getByRole('group', { name: 'Changed files' }), { pointerType: 'mouse' })
+    expect(screen.getAllByRole('button', { name: `${folder}/live36.txt` })).toHaveLength(1)
+    expect(screen.queryByText('Some line counts are unavailable.')).toBeNull()
+  })
+
+  // Turn one's answer names the folder before it took the thread's title.
+  // The chip lists the file once under the titled folder, and the turn is
+  // asked again so its answer follows the rename.
+  it('lists a file once when turn one was read before the thread folder took its title', async () => {
+    const titled = '/home/sessions/Live38-c3fa5c5a'
+    const asked = []
+    invoke.mockImplementation(async (command, args) => {
+      if (command === 'project_list') return { projects: {}, threads: {} }
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_thread_open') return [
+        { runId: 'run-first', phase: 'complete', text: 'Wrote the file.', prompt: 'Write', receipt: { time: '2s' },
+          toolActivity: [{ effectId: 'w1', displayName: 'write', status: 'completed', input: JSON.stringify({ path: '/home/sessions/New_thread-c3fa5c5a/live38-a.txt', content: 'one\n' }) }] },
+        { runId: 'run-second', phase: 'complete', text: 'Edited the file.', prompt: 'Edit', receipt: { time: '2s' },
+          toolActivity: [{ effectId: 'e2', displayName: 'edit', status: 'completed', input: JSON.stringify({ path: `${titled}/live38-a.txt`, edits: [{ oldText: 'one', newText: 'two\nthree' }] }) }] },
+      ]
+      if (command === 'agent_request' && args.operation === 'run.changes') {
+        const first = args.body.run_id === 'run-first'
+        asked.push(args.body.run_id)
+        const folder = first && asked.filter((id) => id === 'run-first').length === 1 ? '/home/sessions/New_thread-c3fa5c5a' : titled
+        return { run_id: args.body.run_id, folder, available: true, more: 0,
+          files: [first ? { path: 'live38-a.txt', status: 'added', additions: 1, deletions: 0, binary: false } : { path: 'live38-a.txt', status: 'modified', additions: 2, deletions: 1, binary: false }] }
+      }
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'chat_select_thread') return undefined
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    expect(await screen.findByText('Edited the file.')).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: '1 file changed, 3 lines added, 1 line removed' })).toBeInTheDocument()
+    await waitFor(() => expect(asked.filter((id) => id === 'run-first')).toHaveLength(2))
+    await fireEvent.pointerEnter(screen.getByRole('group', { name: 'Changed files' }), { pointerType: 'mouse' })
+    expect(screen.getAllByRole('button', { name: /live38-a\.txt$/ })).toHaveLength(1)
+    expect(screen.getByRole('button', { name: `${titled}/live38-a.txt` })).toBeInTheDocument()
+  })
+
+  // A turn's dialogs sit over the thread. Escape in one closes it alone: the
+  // side panel beside the thread stays open and the thread stays in view.
+  it.each([
+    ['Routing details', 'Routing details', async () => {
+      await fireEvent.click(await screen.findByRole('button', { name: /^Expand receipt:/ }))
+      await fireEvent.click(screen.getByRole('button', { name: 'Routing details · 2 turns' }))
+    }],
+    ['Review changes', 'Review changes', async () => { await fireEvent.click(await screen.findByRole('button', { name: 'Review changes' })) }],
+    // A click on a file in the list leaves focus on the page body, as WebKit does.
+    ['Review changes with a file picked', 'Review changes', async () => {
+      await fireEvent.click(await screen.findByRole('button', { name: 'Review changes' }))
+      const file = await screen.findByRole('button', { name: /notes\.md/ })
+      await fireEvent.click(file)
+      document.activeElement?.blur()
+      return document.body
+    }],
+    ['Rewind', 'Rewind to before this message', async () => { await fireEvent.click(await screen.findByRole('button', { name: 'Rewind to here' })) }],
+    // A click inside these dialogs can leave focus on the page body too.
+    ['Routing details with focus on the page body', 'Routing details', async () => {
+      await fireEvent.click(await screen.findByRole('button', { name: /^Expand receipt:/ }))
+      await fireEvent.click(screen.getByRole('button', { name: 'Routing details · 2 turns' }))
+      await fireEvent.click(await screen.findByRole('dialog', { name: 'Routing details' }))
+      document.activeElement?.blur()
+      return document.body
+    }],
+    ['Rewind with focus on the page body', 'Rewind to before this message', async () => {
+      await fireEvent.click(await screen.findByRole('button', { name: 'Rewind to here' }))
+      await fireEvent.click(await screen.findByRole('dialog', { name: 'Rewind to before this message' }))
+      document.activeElement?.blur()
+      return document.body
+    }],
+  ])('closes only the %s dialog on Escape and leaves the side panel and the thread', async (_name, dialogName, openDialog) => {
+    HTMLDialogElement.prototype.showModal = function () { this.open = true }
+    const edit = { effectId: 'e1', displayName: 'edit', status: 'completed', input: JSON.stringify({ path: 'notes.md', oldText: 'a', newText: 'b' }) }
+    const routing = [{ account: 'First account', selected_model: 'example', decision: 'Selected' }, { account: 'Second account', selected_model: 'fallback', decision: 'Fallback' }]
+    invoke.mockImplementation(async (command, args) => {
+      if (command === 'project_list') return { projects: {}, threads: {} }
+      if (command === 'auth_status') return { signed_in: true, subject: 'token-subject' }
+      if (command === 'chat_thread_open') return [{ runId: 'run-edit', phase: 'complete', text: 'Edited the notes.', prompt: 'Edit the notes', receipt: { model: 'example', turns: 2, routing }, toolActivity: [edit] }]
+      if (command === 'agent_request' && args.operation === 'run.changes') return { run_id: args.body.run_id, available: true, more: 0, files: [{ path: 'notes.md', status: 'modified', additions: 1, deletions: 1, binary: false, state: 'applied', hunks_applied: [true] }], diff: { schemaVersion: 1, id: 'turn', truncated: false, files: [{ oldPath: 'notes.md', newPath: 'notes.md', status: 'modified', binary: false, hunks: [{ oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, header: '@@ -1,1 +1,1 @@', lines: [] }] }] } }
+      if (command === 'agent_request' && args.operation === 'thread.rewind_preview') return { thread_id: args.body.thread_id, run_id: args.body.run_id, available: true, turns: 1, conversation: 'restore', files: { files_available: true, restore: [], remove: [], cannot_restore: [], not_covered: [], token: 'token-1' }, irreversible: [] }
+      if (command === 'auth_entitlement_snapshot') return snapshot()
+      if (command === 'auth_devices') return []
+      if (command === 'chat_select_thread') return undefined
+      throw new Error(`unexpected command: ${command}`)
+    })
+    render(App)
+    expect(await screen.findByText('Edited the notes.')).toBeInTheDocument()
+    const toggle = screen.getByRole('button', { name: 'Artifacts' })
+    const mac = navigator.platform.startsWith('Mac')
+    await fireEvent.keyDown(document, { key: 'j', metaKey: mac, ctrlKey: !mac })
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-expanded', 'true'))
+    let target = await openDialog()
+    const dialog = await screen.findByRole('dialog', { name: dialogName })
+    if (!target) {
+      target = dialog.querySelector('button:not(:disabled)')
+      target.focus()
+    }
+    await fireEvent.keyDown(target, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: dialogName })).not.toBeInTheDocument())
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText('Edited the notes.')).toBeInTheDocument()
   })
 
   it('renders a provenance line when a reply has no receipt', async () => {
@@ -7974,6 +9648,25 @@ describe('active run composer queue', () => {
     await fireEvent.keyDown(composer, { key: 'Enter' })
 
     expectQueuePayload({ runId: 'run-7', delivery: 'steer', message: 'Focus on the risks' })
+  })
+
+  it('shows a steering message inside the reply before the text it changed, with no unanswered turn after it', async () => {
+    const composer = await startRun()
+    chatListener({ payload: { runId: 'run-7', type: 'text-delta', text: 'echo' } })
+    await screen.findByText('echo')
+    await fireEvent.input(composer, { target: { value: 'foxtrot' } })
+    await fireEvent.keyDown(composer, { key: 'Enter' })
+    expectQueuePayload({ runId: 'run-7', delivery: 'steer', message: 'foxtrot' })
+    const steer = await waitFor(() => { const node = document.querySelector('.response .steer-turn'); expect(node).not.toBeNull(); return node })
+    expect(steer).toHaveTextContent('foxtrot')
+    expect(steer).toHaveTextContent('Sent during the reply')
+    expect(composer).toHaveValue('')
+    chatListener({ payload: { runId: 'run-7', type: 'text-delta', text: 'foxtrot' } })
+    const response = steer.closest('.response')
+    const order = () => [...response.querySelectorAll('.steer-turn, p')].map((node) => node.classList.contains('steer-turn') ? 'steer' : node.textContent).filter((text) => ['echo', 'foxtrot', 'steer'].includes(text))
+    await waitFor(() => expect(order()).toEqual(['echo', 'steer', 'foxtrot']))
+    // The last turn in the transcript is the reply, not the steering message.
+    expect([...document.querySelectorAll('.user-turn')].filter((node) => !node.classList.contains('steer-turn')).map((node) => node.textContent)).not.toContainEqual(expect.stringContaining('foxtrot'))
   })
 
   it('keeps focus on the same action control as it turns from send to stop', async () => {
@@ -8488,6 +10181,33 @@ describe('dedicated creation chats', () => {
     expect(invoke.mock.calls.some(([name])=>name==='creation_save')).toBe(false)
   })
 
+  // An unsent chat has no folder yet, so its Files view waits for the first
+  // message and leaves none behind.
+  it('names an unsent agent creation chat\'s Files tab after the chat and reads no folder before the first message', async () => {
+    const original=invoke.getMockImplementation()
+    invoke.mockImplementation((command,payload)=>{
+      if(command==='creation_list') return Promise.resolve([])
+      if(command==='artifact_list') return Promise.resolve([])
+      if(isAgentList(command,payload)) return Promise.resolve(agentListAnswer([]))
+      if(command==='chat_new_thread') return Promise.resolve('01900000-0000-7000-8000-000000000098')
+      if(command==='workspace_folders') return Promise.resolve([{ label: 'Thread workspace', path: '/home/sessions/New_thread-c3fa5c5a' }])
+      if(command==='workspace_list') return Promise.resolve({ path: payload.path, entries: [] })
+      return original(command,payload)
+    })
+    render(App)
+    await findReadyWorkspaceComposer()
+    await fireEvent.click(within(await screen.findByRole('region', { name: 'Start with' })).getByRole('button', { name: 'Set up an agent' }))
+    expect(await screen.findByRole('heading', { level: 1, name: 'New agent' })).toBeInTheDocument()
+    await fireEvent.click(screen.getByRole('button', { name: 'Workspace tools' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Files', exact: true }))
+    const tabs = await screen.findByRole('tablist', { name: 'Open workspace tabs' })
+    expect(within(tabs).getByRole('tab', { name: 'New agent' })).toHaveAttribute('aria-selected', 'true')
+    expect(within(tabs).queryByRole('tab', { name: 'New thread' })).toBeNull()
+    expect(await screen.findByText('Files appear here after the first message.')).toBeInTheDocument()
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(invoke.mock.calls.some(([command]) => command === 'workspace_folders')).toBe(false)
+  })
+
   it('starts a new thread from its starter cards', async () => {
     const original=invoke.getMockImplementation()
     invoke.mockImplementation((command,payload)=>{
@@ -8608,7 +10328,8 @@ describe('agent chat', () => {
     const panel = await screen.findByRole('region', { name: 'Agents' })
     await fireEvent.click(within(await within(panel).findByRole('region', { name: 'Give an agent a job' })).getByRole('button', { name: /^Weekly report/ }))
     const reply = await screen.findByRole('article', { name: 'Draft: Weekly recap' })
-    expect(screen.getByRole('heading', { level: 1, name: 'New agent' })).toBeInTheDocument()
+    // The title bar and the sidebar row name the draft as its card does.
+    await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'Weekly recap' })).toBeInTheDocument())
     // The template's sentence is the chat's first message, with one draft and no chat run.
     expect(draftCalls().filter((body) => !body.draft_id)).toEqual([{ chat_id: CHAT, message: 'Every Friday at 4pm, write a recap of my week from my threads and projects.' }])
     expect(screen.getByText('Every Friday at 4pm, write a recap of my week from my threads and projects.', { selector: '.user-message p' })).toBeInTheDocument()
@@ -8618,8 +10339,9 @@ describe('agent chat', () => {
     expect(screen.getByPlaceholderText('Ask for a change')).toBeInTheDocument()
     // The chat is one row of its own in Projects, the open one.
     const list = screen.getByRole('list', { name: 'Projects list' })
-    await waitFor(() => expect(within(list).getAllByText('New agent', { selector: '.thread-row-title' })).toHaveLength(1))
-    expect(within(list).getByText('New agent', { selector: '.thread-row-title' }).closest('.thread-row')).toHaveAttribute('aria-current', 'true')
+    await waitFor(() => expect(within(list).getAllByText('Weekly recap', { selector: '.thread-row-title' })).toHaveLength(1))
+    expect(within(list).getByText('Weekly recap', { selector: '.thread-row-title' }).closest('.thread-row')).toHaveAttribute('aria-current', 'true')
+    expect(within(list).queryByText('New agent', { selector: '.thread-row-title' })).toBeNull()
     await fireEvent.click(within(reply).getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', expect.objectContaining({ operation: 'agent.save' })))
     const body = invoke.mock.calls.find(([name, args]) => name === 'agent_request' && args?.operation === 'agent.save')[1].body.agent
@@ -8632,6 +10354,87 @@ describe('agent chat', () => {
     await waitFor(() => expect(within(list).getByText('Weekly recap', { selector: '.thread-row-title' }).closest('.thread-row').querySelector('.row-agent')).toHaveTextContent('Weekly recap'))
     expect(within(list).getAllByText('Weekly recap', { selector: '.thread-row-title' })).toHaveLength(1)
     expect(screen.queryByRole('list', { name: 'Weekly recap threads' })).toBeNull()
+  })
+
+  it('opens the title actions of an unsaved agent chat with the actions its sidebar row holds', async () => {
+    chatMock([])
+    render(App)
+    await screen.findByPlaceholderText('Ask anything')
+    await openSidebarPage('Agents')
+    const panel = await screen.findByRole('region', { name: 'Agents' })
+    await fireEvent.click(within(await within(panel).findByRole('region', { name: 'Give an agent a job' })).getByRole('button', { name: /^Weekly report/ }))
+    await screen.findByRole('article', { name: 'Draft: Weekly recap' })
+    const actions = screen.getByRole('button', { name: 'Thread actions' })
+    await waitFor(() => expect(actions).toBeEnabled())
+    await fireEvent.click(actions)
+    const menu = screen.getByRole('menu', { name: 'Weekly recap actions' })
+    // The title names the agent, so Rename lives on the sidebar row alone.
+    expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['Pin', 'Move to project', 'Archive', 'Delete'])
+    await fireEvent.click(within(menu).getByRole('menuitem', { name: /^Delete/ }))
+    expect(await screen.findByRole('dialog', { name: /^Delete / })).toBeInTheDocument()
+  })
+
+  it('clears a stale background error and the sent text once the runtime took the message and a Save succeeds', async () => {
+    const saved = []
+    chatMock(saved)
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, payload) => {
+      // Under load the runtime takes the message, but its answer never reaches the window.
+      if (command === 'agent_request' && payload?.operation === 'agent.draft' && payload.body.message === 'Make it daily') {
+        await original(command, payload)
+        await original(command, { ...payload, body: { draft_id: 'draft-1' } })
+        throw new Error('Muniment cannot reach its background service.')
+      }
+      return original(command, payload)
+    })
+    render(App)
+    await screen.findByPlaceholderText('Ask anything')
+    await openSidebarPage('Agents')
+    const panel = await screen.findByRole('region', { name: 'Agents' })
+    await fireEvent.click(within(await within(panel).findByRole('region', { name: 'Give an agent a job' })).getByRole('button', { name: /^Weekly report/ }))
+    await screen.findByRole('article', { name: 'Draft: Weekly recap' })
+    const composer = screen.getByPlaceholderText('Ask for a change')
+    await fireEvent.input(composer, { target: { value: 'Make it daily' } })
+    await fireEvent.keyDown(composer, { key: 'Enter' })
+    const chat = screen.getByLabelText('New agent chat')
+    expect(await within(chat).findByText('Muniment cannot reach its background service.')).toBeInTheDocument()
+    expect(composer).toHaveValue('Make it daily')
+    const replies = within(chat).getAllByRole('article', { name: 'Draft: Weekly recap' })
+    await fireEvent.click(within(replies.at(-1)).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', expect.objectContaining({ operation: 'agent.save' })))
+    await waitFor(() => expect(within(chat).queryByText('Muniment cannot reach its background service.')).not.toBeInTheDocument())
+    await waitFor(() => expect(within(chat).getAllByText('Make it daily', { selector: '.user-message p' })).toHaveLength(1))
+    expect(screen.getByPlaceholderText('Ask for a change')).toHaveValue('')
+  })
+
+  it('shows one row for a new agent after Open agent starts its empty thread', async () => {
+    const saved = []
+    chatMock(saved)
+    const original = invoke.getMockImplementation()
+    let home = null
+    let listedHome = false
+    invoke.mockImplementation((command, payload) => {
+      if (command === 'chat_new_thread' && payload?.agentId) { home = 'agent-home'; return Promise.resolve(home) }
+      if (isAgentList(command, payload)) { listedHome ||= !!home; return Promise.resolve(agentListAnswer(saved, home ? { 'agent-1': home } : {})) }
+      if (command === 'chat_thread_open' && payload?.threadId === 'agent-home') return Promise.resolve([])
+      return original(command, payload)
+    })
+    render(App)
+    await screen.findByPlaceholderText('Ask anything')
+    await openSidebarPage('Agents')
+    const panel = await screen.findByRole('region', { name: 'Agents' })
+    await fireEvent.click(within(await within(panel).findByRole('region', { name: 'Give an agent a job' })).getByRole('button', { name: /^Weekly report/ }))
+    const reply = await screen.findByRole('article', { name: 'Draft: Weekly recap' })
+    await fireEvent.click(within(reply).getByRole('button', { name: 'Save' }))
+    await fireEvent.click(await within(reply).findByRole('button', { name: 'Open agent' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_new_thread', expect.objectContaining({ agentId: 'agent-1' })))
+    const list = screen.getByRole('list', { name: 'Projects list' })
+    // The agent listing names the home thread, and the rows settle after it.
+    await waitFor(() => expect(listedHome).toBe(true))
+    await screen.findByRole('complementary', { name: 'Agent profile' })
+    for (let turn = 0; turn < 5; turn += 1) await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(document.querySelector('#sidebar .thread-row[data-thread-id="agent-home"]')).toBeNull()
+    expect(within(list).getAllByText('Weekly recap', { selector: '.thread-row-title' })).toHaveLength(1)
   })
 
   it('deletes a saved agent from its card through the profile confirmation, and its creation chat goes with it', async () => {
@@ -8666,6 +10469,81 @@ describe('agent chat', () => {
     const rows = () => screen.getByRole('list', { name: 'Projects list' })
     await waitFor(() => expect(within(rows()).queryByText('Weekly recap', { selector: '.thread-row-title' })).toBeNull())
     expect(within(rows()).queryByText('New agent', { selector: '.thread-row-title' })).toBeNull()
+  })
+
+  it('opens the sidebar actions of a saved agent\'s creation chat for that chat while another thread is open', async () => {
+    threadSummaryResult = [{ threadId: 'thread-x', title: 'Dummy reply', updatedAt: new Date().toISOString() }]
+    chatMock([])
+    const original = invoke.getMockImplementation()
+    invoke.mockImplementation((command, payload) => command === 'chat_delete_thread' ? Promise.resolve(true) : original(command, payload))
+    render(App)
+    await screen.findByPlaceholderText('Ask anything')
+    await openSidebarPage('Agents')
+    const panel = await screen.findByRole('region', { name: 'Agents' })
+    await fireEvent.click(within(await within(panel).findByRole('region', { name: 'Give an agent a job' })).getByRole('button', { name: /^Weekly report/ }))
+    const reply = await screen.findByRole('article', { name: 'Draft: Weekly recap' })
+    await fireEvent.click(within(reply).getByRole('button', { name: 'Save' }))
+    const list = screen.getByRole('list', { name: 'Projects list' })
+    await waitFor(() => expect(within(list).getAllByText('Weekly recap', { selector: '.thread-row-title' })).toHaveLength(1))
+    // Thread X opens, and the creation chat is a row with no listed summary.
+    await fireEvent.click(within(list).getByRole('button', { name: 'Dummy reply' }))
+    await waitFor(() => expect(document.querySelector('#sidebar [data-thread-id="thread-x"]')).toHaveAttribute('aria-current', 'true'))
+    await fireEvent.click(within(list).getByRole('button', { name: 'Actions for Weekly recap' }))
+    const menu = screen.getByRole('menu', { name: 'Weekly recap actions' })
+    expect(within(menu).getByRole('menuitem', { name: 'Delete Weekly recap' })).toBeInTheDocument()
+    await fireEvent.click(within(menu).getByRole('menuitem', { name: 'Rename' }))
+    expect(within(list).getByRole('textbox', { name: 'Thread name' })).toHaveValue('Weekly recap')
+    await fireEvent.click(within(list).getByRole('button', { name: 'Cancel' }))
+    await fireEvent.click(within(list).getByRole('button', { name: 'Actions for Weekly recap' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete Weekly recap' }))
+    const confirm = screen.getByRole('dialog', { name: 'Delete Weekly recap?' })
+    await fireEvent.click(within(confirm).getByRole('button', { name: 'Delete' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_delete_thread', { threadId: CHAT }))
+    expect(invoke).not.toHaveBeenCalledWith('chat_delete_thread', { threadId: 'thread-x' })
+  })
+
+  it('names a deleted agent\'s kept folder in a composer notice that stays past the notice timeout, reveals it and leaves on dismiss', async () => {
+    const saved = []
+    chatMock(saved)
+    const original = invoke.getMockImplementation()
+    let deleted = false
+    const folder = '/Users/me/Muniment/Agents/Weekly recap'
+    invoke.mockImplementation((command, payload) => {
+      // Core keeps the folder that holds the user's files and says so.
+      if (command === 'agent_request' && payload?.operation === 'agent.delete') { deleted = true; saved.splice(0); return Promise.resolve({ folder_kept: folder, message: "The agent's folder holds your files, so it stays." }) }
+      if (command === 'workspace_reveal') return Promise.resolve()
+      if (command === 'creation_list' && deleted) return Promise.resolve([])
+      if (command === 'chat_new_thread' && deleted) return Promise.resolve('01900000-0000-7000-8000-0000000000b3')
+      return original(command, payload)
+    })
+    render(App)
+    await screen.findByPlaceholderText('Ask anything')
+    await openSidebarPage('Agents')
+    const panel = await screen.findByRole('region', { name: 'Agents' })
+    await fireEvent.click(within(await within(panel).findByRole('region', { name: 'Give an agent a job' })).getByRole('button', { name: /^Weekly report/ }))
+    const reply = await screen.findByRole('article', { name: 'Draft: Weekly recap' })
+    await fireEvent.click(within(reply).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(within(screen.getByRole('list', { name: 'Projects list' })).getAllByText('Weekly recap', { selector: '.thread-row-title' })).toHaveLength(1))
+    await openSidebarPage('Agents')
+    const page = await screen.findByRole('region', { name: 'Agents' })
+    await fireEvent.click(await within(page).findByRole('button', { name: 'Actions for Weekly recap' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      await fireEvent.click(within(await screen.findByRole('group', { name: 'Delete agent' })).getByRole('button', { name: 'Confirm delete' }))
+      expect(await screen.findByTestId('agent-folder-kept-notice')).toHaveTextContent(`The agent's folder holds your files, so it stays. ${folder}`)
+      // The path shows nowhere else, so the notice outlasts the composer notice timeout.
+      await vi.advanceTimersByTimeAsync(30000)
+      // The delete returns to the Agents page, and the notice shows there.
+      const notice = screen.getByTestId('agent-folder-kept-notice')
+      expect(notice).toHaveTextContent(`The agent's folder holds your files, so it stays. ${folder}`)
+      expect(notice.closest('[data-page-notice]')).not.toBeNull()
+      await fireEvent.click(within(notice).getByRole('button', { name: /^Reveal in / }))
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith('workspace_reveal', { path: folder }))
+      expect(screen.getByTestId('agent-folder-kept-notice')).toBeInTheDocument()
+      await fireEvent.click(within(notice).getByRole('button', { name: 'Dismiss agent folder notice' }))
+      await waitFor(() => expect(screen.queryByTestId('agent-folder-kept-notice')).not.toBeInTheDocument())
+    } finally { vi.useRealTimers() }
   })
 
   it('revises the draft with the next message in the same chat', async () => {
@@ -8934,7 +10812,7 @@ it('draws the machine, model, thinking level and permission mode menus with one 
   await findReadyWorkspaceComposer()
   const buttons = {
     machine: await screen.findByRole('button', { name: 'Machine: This computer. Choose a machine' }),
-    model: await screen.findByRole('button', { name: 'Model: GPT 5.5' }),
+    model: await screen.findByRole('button', { name: 'Model: GPT-5.5' }),
     thinking: await screen.findByRole('button', { name: 'Thinking level: Medium' }),
     mode: await screen.findByRole('button', { name: 'Permission mode: Bypass permissions' }),
   }
@@ -9101,6 +10979,85 @@ it('renames, archives, restores and deletes a pending artifact through its catal
  await waitFor(()=>expect(within(catalog).queryByRole('button',{name:'Actions for Renamed report'})).not.toBeInTheDocument())
 })
 
+// A deleted draft's folder that holds the user's files stays, and the notice
+// names it as a thread delete does. Another page takes the notice away.
+it('names a deleted agent draft\'s kept folder in a notice on the Agents page until another page opens',async()=>{
+ const original=invoke.getMockImplementation()
+ const folder='/Users/me/Documents/muniment/sessions/New_agent-00000099'
+ let plans=[{threadId:'01900000-0000-7000-8000-000000000099',kind:'agent',goal:'Summarize my inbox',output:'A saved agent',resultId:null}]
+ invoke.mockImplementation((command,payload)=>{
+  if(command==='creation_list') return Promise.resolve(plans)
+  if(command==='creation_delete') {plans=[];return Promise.resolve({folder_kept:folder,thread_kept:false})}
+  if(command==='workspace_reveal') return Promise.resolve()
+  return original(command,payload)
+ })
+ render(App)
+ await fireEvent.click(await screen.findByRole('button',{name:'Agents',exact:true}))
+ const catalog=await screen.findByRole('region',{name:'Agents',exact:true})
+ await fireEvent.click(await within(catalog).findByRole('button',{name:'Actions for Summarize my inbox'}))
+ await fireEvent.click(screen.getByRole('menuitem',{name:'Delete'}))
+ await fireEvent.click(screen.getByRole('button',{name:'Confirm delete'}))
+ const notice=await screen.findByTestId('thread-folder-kept-notice')
+ expect(notice).toHaveTextContent(`The thread's folder holds your files, so it stays. ${folder}`)
+ // The page covers the thread, so the notice shows on the page, once.
+ expect(notice.closest('[data-page-notice]')).not.toBeNull()
+ expect(notice.closest('.thread-panel')).toBeNull()
+ expect(screen.getAllByTestId('thread-folder-kept-notice')).toHaveLength(1)
+ await fireEvent.click(within(notice).getByRole('button',{name:/^Reveal in /}))
+ await waitFor(()=>expect(invoke).toHaveBeenCalledWith('workspace_reveal',{path:folder}))
+ await fireEvent.click(screen.getByRole('button',{name:'Artifacts',exact:true}))
+ await screen.findByRole('region',{name:'Artifacts'})
+ await waitFor(()=>expect(screen.queryByTestId('thread-folder-kept-notice')).not.toBeInTheDocument())
+})
+
+// A draft a reply kept in a thread that holds the user's messages names no
+// agent and has no turns. Its delete removes the draft only: the prompt and
+// the notice say the thread stays, and the thread stays where it was.
+it('keeps a deleted agent draft\'s thread in place when core keeps it',async()=>{
+ const original=invoke.getMockImplementation()
+ const threadId='01900000-0000-7000-8000-000000000098'
+ let plans=[{threadId,kind:'agent',goal:'Report the project status',output:'A saved agent',resultId:null,title:'Muniment Project Status'}]
+ invoke.mockImplementation((command,payload)=>{
+  if(command==='creation_list') return Promise.resolve(plans)
+  if(command==='creation_delete') {plans=[];return Promise.resolve({folder_kept:null,thread_kept:true})}
+  return original(command,payload)
+ })
+ render(App)
+ await fireEvent.click(await screen.findByRole('button',{name:'Agents',exact:true}))
+ const catalog=await screen.findByRole('region',{name:'Agents',exact:true})
+ await fireEvent.click(await within(catalog).findByRole('button',{name:'Actions for Muniment Project Status'}))
+ await fireEvent.click(screen.getByRole('menuitem',{name:'Delete'}))
+ expect(screen.getByText('The draft goes. Its thread and messages stay.')).toBeInTheDocument()
+ await fireEvent.click(screen.getByRole('button',{name:'Confirm delete'}))
+ await waitFor(()=>expect(invoke).toHaveBeenCalledWith('creation_delete',{threadId}))
+ const notice=await screen.findByTestId('draft-thread-kept-notice')
+ expect(notice).toHaveTextContent('The draft goes. Its thread and messages stay.')
+ const organization=JSON.parse(localStorage.getItem('muniment.thread-organization') || '{}')
+ expect(organization[threadId]?.archived).not.toBe(true)
+ await waitFor(()=>expect(within(catalog).queryByRole('button',{name:'Actions for Muniment Project Status'})).not.toBeInTheDocument())
+})
+
+// A draft chat's delete keeps the prompt it had and moves its thread to Archived.
+it('archives a deleted agent draft chat\'s thread when core does not keep it',async()=>{
+ const original=invoke.getMockImplementation()
+ const threadId='01900000-0000-7000-8000-000000000097'
+ let plans=[{threadId,kind:'agent',goal:'Summarize my inbox',output:'A saved agent',resultId:null,title:'Inbox summary',turns:[{message:'Summarize my inbox',at:'2026-08-06T12:00:00Z',reply:{}}]}]
+ invoke.mockImplementation((command,payload)=>{
+  if(command==='creation_list') return Promise.resolve(plans)
+  if(command==='creation_delete') {plans=[];return Promise.resolve({folder_kept:null,thread_kept:false})}
+  return original(command,payload)
+ })
+ render(App)
+ await fireEvent.click(await screen.findByRole('button',{name:'Agents',exact:true}))
+ const catalog=await screen.findByRole('region',{name:'Agents',exact:true})
+ await fireEvent.click(await within(catalog).findByRole('button',{name:'Actions for Inbox summary'}))
+ await fireEvent.click(screen.getByRole('menuitem',{name:'Delete'}))
+ expect(screen.getByText('Its draft chat is deleted. Files you added stay.')).toBeInTheDocument()
+ await fireEvent.click(screen.getByRole('button',{name:'Confirm delete'}))
+ await waitFor(()=>expect(JSON.parse(localStorage.getItem('muniment.thread-organization') || '{}')[threadId]?.archived).toBe(true))
+ expect(screen.queryByTestId('draft-thread-kept-notice')).not.toBeInTheDocument()
+})
+
 it.each(['Browser','Files'])('resizes the shared %s workspace panel with keyboard controls',async(name)=>{
  render(App)
  await fireEvent.click(await screen.findByRole('button',{name:'Workspace tools'}))
@@ -9206,7 +11163,8 @@ it('prepares and routes extensions once across repeated busy refusals', async ()
     ['extend_command', { action: 'route', data: { threadId: 'thread-1', prompt: 'Search for the answer' } }],
   ])
   expect(extensions.submitted).not.toHaveBeenCalled()
-  expect(composer).toHaveValue('Search for the answer')
+  // The composer empties when the message shows, while the runtime still answers busy.
+  expect(composer).toHaveValue('')
   accepted.resolve({ runId: 'extension-turn', attachments: [] })
   await waitFor(() => expect(extensions.submitted).toHaveBeenCalledTimes(1))
   await waitFor(() => expect(composer).toHaveValue(''))
@@ -9378,6 +11336,7 @@ describe('a run on another thread', () => {
     await screen.findByText('Blue light scatters')
     expect(await screen.findByRole('button', { name: 'Stop' })).toBeInTheDocument()
     await waitFor(() => expect(chatListener).toBeTypeOf('function'))
+    await sidebarRows()
     return pages
   }
 
@@ -9452,6 +11411,22 @@ describe('a run on another thread', () => {
     expect(await screen.findByText('Blue light scatters')).toBeInTheDocument()
     expect(await screen.findByRole('button', { name: 'Stop' })).toBeInTheDocument()
     expect(invoke.mock.calls.filter(([command]) => command === 'chat_thread_open').at(-1)).toEqual(['chat_thread_open', { threadId: 'thread-1', limit: 100 }])
+  })
+
+  it('opens Files on a running thread without its title, so its folder keeps its name until the run ends', async () => {
+    await renderRunning()
+    const fallback = invoke.getMockImplementation()
+    invoke.mockImplementation((command, payload) => command === 'workspace_folders' ? Promise.resolve([{ label: 'Thread workspace', path: '/work' }])
+      : command === 'workspace_list' ? Promise.resolve({ path: payload.path, entries: [] })
+        : fallback(command, payload))
+    const folderCalls = () => invoke.mock.calls.filter(([command]) => command === 'workspace_folders').map(([, args]) => args)
+    await fireEvent.click(screen.getByRole('button', { name: 'Workspace tools' }))
+    await fireEvent.click(screen.getByRole('menuitem', { name: 'Files', exact: true }))
+    await waitFor(() => expect(folderCalls().some((args) => args.threadId === 'thread-1')).toBe(true))
+    expect(folderCalls().filter((args) => args.threadId === 'thread-1').every((args) => args.threadTitle === undefined)).toBe(true)
+    // A settled thread's Files names its folder after the thread.
+    await leaveForOtherThread()
+    await waitFor(() => expect(folderCalls()).toContainEqual(expect.objectContaining({ threadId: 'thread-2', threadTitle: 'Other thread' })))
   })
 
   it('rejoins the live run from its row without duplicating the transcript', async () => {
@@ -9543,6 +11518,44 @@ it('names the Usage or Notifications page in the title bar and clears the thread
   await waitFor(() => expect(document.querySelector('.active-thread')).toHaveTextContent('Until Midnight'))
 })
 
+it('names a run whose thread was deleted in its Notifications row instead of opening nothing', async () => {
+  onTestFinished(forgetDeletedThreads)
+  const fallback = invoke.getMockImplementation()
+  const local = { id: 'local', name: 'This computer' }
+  const run = (id) => ({ id, agent_id: 'scout', thread_id: `thread-${id}`, trigger: { kind: 'cron' }, status: 'failed', created_at: new Date().toISOString(), updated_at: new Date().toISOString(), result_summary: null, silent: false, error: 'The log was missing.' })
+  const entry = (id) => ({ status: 'failed', machine: local, agent_name: 'Tauri Morning', run: run(id), unread: false })
+  const page = { needs_you: [], running: [], days: [{ day: 'today', entries: [entry('gone'), entry('listed')] }], upcoming: [], counts: { needs_you: 0, running: 0, failed: 2, unread: 0 }, machines: [local], agents: [] }
+  invoke.mockImplementation((command, args) => {
+    if (command === 'notifications_list') return Promise.resolve(page)
+    if (command === 'chat_select_thread' && args.threadId === 'thread-gone') return Promise.reject('Muniment cannot find this thread. Open another thread.')
+    return fallback(command, args)
+  })
+  // The local runtime's thread list names the threads deleted here.
+  const shell = window.__TAURI__.core.invoke
+  window.__TAURI__.core.invoke = (command, ...args) => command === 'chat_thread_summaries'
+    ? shell(command, ...args).then((answer) => ({ ...answer, deletedThreadIds: ['thread-listed'] }))
+    : shell(command, ...args)
+  render(App)
+  await findReadyWorkspaceComposer()
+  await fireEvent.click(within(screen.getByRole('toolbar', { name: 'Settings, usage and notifications' })).getByRole('button', { name: 'Notifications' }))
+  const today = await screen.findByRole('region', { name: 'Today' })
+  // A thread the runtime's list names as deleted is off from the start.
+  const listed = within(today).getByRole('button', { name: /^Tauri Morning, Failed: .*This run's thread was deleted\.$/ })
+  expect(listed).toBeDisabled()
+  expect(listed).toHaveTextContent("This run's thread was deleted.")
+  // A thread the runtime no longer finds turns its row off once clicked.
+  const gone = within(today).getAllByRole('button', { name: /^Tauri Morning, Failed/ }).find((button) => !button.disabled)
+  await fireEvent.click(gone)
+  await waitFor(() => expect(gone).toBeDisabled())
+  expect(gone).toHaveTextContent("This run's thread was deleted.")
+  expect(document.querySelector('.catalog-title')).toHaveTextContent('Notifications')
+  expect(screen.queryByRole('button', { name: 'Restore history' })).toBeNull()
+  // Core reads both runs as read from now on, so neither waits in Needs you or the badge.
+  const asked = () => invoke.mock.calls.filter(([command]) => command === 'notifications_list').map(([, args]) => args.filter)
+  await waitFor(() => expect(asked().filter((filter) => filter.view === 'needs_you').at(-1)?.deleted).toEqual(['thread-gone', 'thread-listed']))
+  expect(asked().at(-1).deleted).toEqual(['thread-gone', 'thread-listed'])
+})
+
 it('keeps the foot row on the Settings side, where Settings is the current page', async () => {
   const fallback = invoke.getMockImplementation()
   const page = { needs_you: [], running: [], days: [], upcoming: [], counts: { needs_you: 0, running: 0, failed: 0, unread: 0 }, machines: [], agents: [] }
@@ -9562,7 +11575,106 @@ it('keeps the foot row on the Settings side, where Settings is the current page'
     await fireEvent.click(within(foot()).getByRole('button', { name }))
     await waitFor(() => expect(document.querySelector('.catalog-title')).toHaveTextContent(name))
     expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument()
+    expect(within(foot()).getByRole('button', { name })).toHaveAttribute('aria-pressed', 'true')
+    // Settings over the page marks Settings alone, and the page's own press shows it again.
+    await openSettings()
+    expect(within(foot()).getByRole('button', { name })).toHaveAttribute('aria-pressed', 'false')
+    for (const other of ['Usage', 'Notifications']) expect(within(foot()).getByRole('button', { name: other })).toHaveAttribute('aria-pressed', 'false')
+    await fireEvent.click(within(foot()).getByRole('button', { name }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument())
+    expect(document.querySelector('.catalog-title')).toHaveTextContent(name)
+    expect(within(foot()).getByRole('button', { name })).toHaveAttribute('aria-pressed', 'true')
   }
+})
+
+it('returns to the thread view from Settings opened over Notifications, by Back to threads or Escape', async () => {
+  const fallback = invoke.getMockImplementation()
+  const page = { needs_you: [], running: [], days: [], upcoming: [], counts: { needs_you: 0, running: 0, failed: 0, unread: 0 }, machines: [], agents: [] }
+  invoke.mockImplementation((command, args) => command === 'notifications_list' ? Promise.resolve(page) : fallback(command, args))
+  render(App)
+  await findReadyWorkspaceComposer()
+  const foot = () => screen.getByRole('toolbar', { name: 'Settings, usage and notifications' })
+  for (const leave of [() => fireEvent.click(screen.getByRole('button', { name: 'Back to threads' })), () => fireEvent.keyDown(document, { key: 'Escape' })]) {
+    await fireEvent.click(within(foot()).getByRole('button', { name: 'Notifications' }))
+    await waitFor(() => expect(document.querySelector('.catalog-title')).toHaveTextContent('Notifications'))
+    await openSettings()
+    await leave()
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument())
+    expect(document.querySelector('.workspace')).not.toHaveClass('agents-open')
+    expect(document.querySelector('.catalog-title')?.textContent ?? '').not.toContain('Notifications')
+    expect(within(foot()).getByRole('button', { name: 'Notifications' })).toHaveAttribute('aria-pressed', 'false')
+  }
+})
+
+it('swaps Settings > General for the thread in one frame on Back to threads or Escape', async () => {
+  render(App)
+  await findReadyWorkspaceComposer()
+  const workspace = document.querySelector('.workspace')
+  for (const leave of [() => fireEvent.click(screen.getByRole('button', { name: 'Back to threads' })), () => fireEvent.keyDown(document, { key: 'Escape' })]) {
+    const dialog = await openSettings('General')
+    // The thinking indicator preview on General is a run mark, whose settle fade must not hold the page.
+    expect(within(dialog).getByLabelText('Thinking indicator preview').querySelector('.thinking')).not.toBeNull()
+    // Each frame after the press holds Settings or the thread, never the thread's title over the Settings pane.
+    const frames = []
+    const observer = new MutationObserver(() => frames.push({ settings: !!document.querySelector('[data-panel="settings"]'), threadShown: !workspace.classList.contains('settings-open') }))
+    observer.observe(document.body, { subtree: true, childList: true, attributes: true })
+    await leave()
+    await tick()
+    expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument()
+    await new Promise((resolve) => setTimeout(resolve, 250))
+    observer.disconnect()
+    expect(frames.filter((frame) => frame.settings && frame.threadShown)).toEqual([])
+    expect(workspace).not.toHaveClass('settings-open')
+  }
+})
+
+// A transcript box whose scroll obeys layout: a hidden thread (the catalog
+// pages hide it with display none) ignores a scroll, as a real one does.
+// The agent profile beside the thread narrows it, so its content grows taller.
+function layoutThread(thread, height) {
+  let scrollHeight = height
+  Object.defineProperties(thread, {
+    scrollHeight: { configurable: true, get: () => scrollHeight + (document.querySelector('.workspace.agent-profile-open') ? 117 : 0) },
+    clientHeight: { configurable: true, value: 400 },
+  })
+  thread.scrollTo = ({ top }) => {
+    if (document.querySelector('.workspace.agents-open')) return
+    thread.scrollTop = Math.max(0, Math.min(top, thread.scrollHeight - 400))
+  }
+  return { grow: (by) => { scrollHeight += by }, bottom: () => thread.scrollHeight - 400 }
+}
+
+it('lands Back to threads at the newest message after the thread reflowed under Settings', async () => {
+  render(App)
+  await findReadyWorkspaceComposer()
+  const thread = await screen.findByRole('region', { name: /Transcript:/ })
+  const box = layoutThread(thread, 1000)
+  thread.scrollTop = box.bottom()
+  await fireEvent.scroll(thread)
+  await openSettings()
+  // The thread's width changed while Settings showed, so its last reply now
+  // sits under the composer.
+  box.grow(117)
+  await fireEvent.click(screen.getByRole('button', { name: 'Back to threads' }))
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument())
+  await waitFor(() => expect(thread.scrollTop).toBe(box.bottom()))
+})
+
+it('keeps the place a reader scrolled to when Back to threads returns to the same thread', async () => {
+  render(App)
+  await findReadyWorkspaceComposer()
+  const thread = await screen.findByRole('region', { name: /Transcript:/ })
+  const box = layoutThread(thread, 1000)
+  thread.scrollTop = box.bottom()
+  await fireEvent.scroll(thread)
+  thread.scrollTop = 120
+  await fireEvent.scroll(thread)
+  await openSettings()
+  thread.scrollTop = 0
+  box.grow(117)
+  await fireEvent.click(screen.getByRole('button', { name: 'Back to threads' }))
+  await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument())
+  await waitFor(() => expect(thread.scrollTop).toBe(120))
 })
 
 describe('runtimes', () => {
@@ -9595,7 +11707,7 @@ describe('runtimes', () => {
     expect(remoteMeta.querySelector('[data-icon=container]')).not.toBeNull()
     expect(remoteMeta.querySelector('.machine-dot, .machine-badge')).toBeNull()
     expect(remoteMeta.closest('.thread-row-body')).not.toHaveAttribute('data-layout')
-    expect(screen.getByText('Local work').closest('.thread-row').querySelector('.thread-row-meta')).toHaveTextContent('This computer')
+    expect(screen.getByText('Local work', { selector: '.thread-row-title' }).closest('.thread-row').querySelector('.thread-row-meta')).toHaveTextContent('This computer')
 
     // The newest thread opens first, and New thread waits for it.
     await waitFor(async () => {
@@ -9900,6 +12012,30 @@ describe('the swarm', () => {
     expect(within(list).queryByRole('button', { name: 'Deny' })).toBeNull()
   })
 
+  it('answers an agent run question in its thread through the approval core routes', async () => {
+    HTMLDialogElement.prototype.showModal = function () { this.open = true }
+    HTMLDialogElement.prototype.close = function () { this.open = false }
+    const prefill = JSON.stringify({ questions: [{ id: 'tone', question: 'Which tone?', options: [{ label: 'Formal' }, { label: 'Casual' }] }] })
+    const gate = { gate_id: 'g1', kind: 'editor', title: 'muniment:ask_user_question', prefill }
+    const approval = { approval_id: 'r1:g1', agent_id: 'a1', agent_name: 'Lead scout', runtime_id: 'core-laptop', run_id: 'r1', gate_id: 'g1', thread_id: 'agent-thread', state: 'pending', created_at: new Date().toISOString(), request: gate }
+    threadSummaryResult = [{ threadId: 'agent-thread', title: 'Lead scout run', updatedAt: '', runtimeId: 'local' }]
+    swarmMachine({ approvals: [approval], answers: { 'agent.approval_answer': () => ({ status: 'answered', approval: { ...approval, state: 'answered' } }), 'agent.runs': () => ({ runs: [] }) } })
+    const swarmed = invoke.getMockImplementation()
+    invoke.mockImplementation((command, args) => command === 'chat_current_thread' ? Promise.resolve('agent-thread')
+      : command === 'chat_thread_open' ? Promise.resolve([{ runId: 'r1', phase: 'pending-permission', text: '', prompt: 'Draft the update.', receipt: null, toolActivity: [], pendingPermission: { gateId: 'g1', kind: 'editor', title: 'muniment:ask_user_question', prefill } }])
+        : swarmed(command, args))
+    render(App)
+    const dialog = await screen.findByRole('dialog', { name: 'A few details' })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', expect.objectContaining({ operation: 'agent.approvals' })))
+    expect(screen.queryByText('This request needs its conversation.')).toBeNull()
+    expect(screen.queryByRole('article', { name: 'Approval for Lead scout' })).toBeNull()
+    await fireEvent.click(within(dialog).getByRole('radio', { name: 'Casual' }))
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Submit answers' }))
+    const value = JSON.stringify({ answers: [{ id: 'tone', question: 'Which tone?', selected: ['Casual'], text: '' }] })
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: 'local', operation: 'agent.approval_answer', body: { approval_id: 'r1:g1', answer: { type: 'editor', value } } }))
+    expect(invoke).not.toHaveBeenCalledWith('chat_answer_permission', expect.anything())
+  })
+
   it('posts a follow-up in a thread another machine runs to that machine through core', async () => {
     threadSummaryResult = [{ threadId: 'box-thread', title: 'Hostname', updatedAt: '', runtimeId: 'local', owner_runtime: 'core-box', replica: true }]
     swarmMachine({ answers: { 'thread.post': () => ({ message_id: 'm9', forwarded: true, op_id: 'op1', state: 'sent' }) } })
@@ -10043,6 +12179,23 @@ describe('permission modes', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_submit', { prompt: 'Plan the export.', files: [], permissionMode: 'plan' }))
     expect(invoke).not.toHaveBeenCalledWith('agent_request', expect.objectContaining({ operation: 'thread.permission_mode_set' }))
+  })
+
+  it('keeps the thread mode chip when its read again as a reply starts fails', async () => {
+    modesRuntime({ mode: 'plan' })
+    await screen.findByRole('button', { name: 'Permission mode: Plan first' })
+    const withMode = invoke.getMockImplementation()
+    invoke.mockImplementation(async (command, payload) => {
+      if (command === 'agent_request' && payload.operation === 'thread.permission_mode') throw 'Muniment is busy with another request. Try again.'
+      return withMode(command, payload)
+    })
+    const composer = await findReadyWorkspaceComposer()
+    await fireEvent.input(composer, { target: { value: 'Clean the exports.' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_submit', expect.objectContaining({ prompt: 'Clean the exports.' })))
+    await waitFor(() => expect(invoke.mock.calls.filter(([command, payload]) => command === 'agent_request' && payload.operation === 'thread.permission_mode').length).toBeGreaterThan(1))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(screen.getByRole('button', { name: 'Permission mode: Plan first' })).toBeInTheDocument()
   })
 
   it('cycles the available modes with Shift+Tab in the composer and skips bypass while it is off', async () => {
@@ -10195,13 +12348,13 @@ describe('command palette', () => {
 
 describe('per-thread model', () => {
   const twoModels = { providers: [{ id: 'ollama', name: 'Ollama', source: 'local', base_url: 'http://localhost:11434/v1', models: [{ id: 'llama3.2:3b', context: '128K', thinking: false }, { id: 'qwen3:8b', context: '40K', thinking: false }] }], default_provider: 'ollama', default_model: 'llama3.2:3b', hidden: [] }
-  function modelRuntime(settings) {
+  function modelRuntime(settings, inventory = twoModels) {
     localModeStatus = true
     let current = settings
     const original = invoke.getMockImplementation()
     invoke.mockImplementation(async (command, args) => {
       if (command === 'auth_status') return { signed_in: false, subject: null }
-      if (command === 'local_mode_provider_inventory') return twoModels
+      if (command === 'local_mode_provider_inventory') return inventory
       if (command === 'project_list') return { projects: { 'p-homelab': 'Homelab' }, threads: { 'thread-1': 'p-homelab' }, settings: { 'p-homelab': { model: { provider: 'ollama', model: 'llama3.2:3b' } } } }
       if (command === 'thread_settings') return current
       if (command === 'thread_settings_set') {
@@ -10232,6 +12385,60 @@ describe('per-thread model', () => {
     await fireEvent.click(within(again).getByRole('button', { name: 'Use the project model' }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('thread_settings_set', { threadId: 'thread-1', reset: true }))
     expect(invoke).not.toHaveBeenCalledWith('local_mode_set_default_model', expect.anything())
+  })
+
+  it("follows its agent's model when the agent changes, and keeps a model picked in the thread", async () => {
+    // Core answers the thread's model from its own pick, else its agent's.
+    let agentModel = { provider: 'ollama', id: 'llama3.2:3b' }
+    let picked = null
+    const original = invoke.getMockImplementation()
+    localModeStatus = true
+    invoke.mockImplementation(async (command, args) => {
+      if (command === 'auth_status') return { signed_in: false, subject: null }
+      if (command === 'local_mode_provider_inventory') return twoModels
+      if (isAgentList(command, args)) return agentListAnswer([{ id: 'agent-1', name: 'Morning', instructions: '', projectId: null, schedule: null, routines: [], model: agentModel }], { 'agent-1': 'thread-1' })
+      if (command === 'thread_settings') return picked ? { thread_id: 'thread-1', model: picked, layer: 'thread' } : { thread_id: 'thread-1', model: { provider: agentModel.provider, model: agentModel.id }, layer: 'agent' }
+      if (command === 'thread_settings_set') { picked = args.model; return { thread_id: 'thread-1', model: picked, layer: 'thread' } }
+      return original(command, args)
+    })
+    // The composer's chip, not the agent profile's Model row.
+    const chip = async (name) => (await screen.findAllByRole('button', { name })).find((button) => !button.closest('[data-profile-menu]'))
+    render(App)
+    await findReadyWorkspaceComposer()
+    expect(await chip('Model: llama3.2:3b')).toBeTruthy()
+    const agentsChanged = () => { for (const [name, handle] of window.__TAURI__.event.listen.mock.calls) if (name === 'swarm-changed') handle({ payload: { runtimeId: 'local', change: { kind: 'agents' } } }) }
+    // A save in the agent's profile, here or on another machine, moves the chip with no reopen.
+    agentModel = { provider: 'ollama', id: 'qwen3:8b' }
+    agentsChanged()
+    await waitFor(async () => expect(await chip('Model: qwen3:8b')).toBeTruthy())
+    // A model the user picks in the thread stays through later agent changes.
+    await waitFor(() => expect(invoke.mock.calls.filter(([command, args]) => isAgentList(command, args)).length).toBeGreaterThan(1))
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    await fireEvent.click(await chip('Model: qwen3:8b'))
+    const picker = await screen.findByRole('dialog', { name: 'Model' })
+    await fireEvent.click(within(picker).getByRole('button', { name: 'llama3.2:3b' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('thread_settings_set', { threadId: 'thread-1', model: { provider: 'ollama', model: 'llama3.2:3b' } }))
+    agentModel = { provider: 'ollama', id: 'gemma3:1b' }
+    agentsChanged()
+    await waitFor(() => expect(invoke.mock.calls.filter(([command]) => command === 'thread_settings').length).toBeGreaterThan(2))
+    await fireEvent.click(await chip('Model: llama3.2:3b'))
+    expect(within(await screen.findByRole('dialog', { name: 'Model' })).getByRole('button', { name: 'Use the agent model' })).toBeTruthy()
+  })
+
+  it('names the model the open thread runs on in the chip, even one the picker hides', async () => {
+    modelRuntime({ thread_id: 'thread-1', model: { provider: 'ollama', model: 'qwen3:8b' }, layer: 'thread' }, { ...twoModels, hidden: ['ollama/qwen3:8b'] })
+    render(App)
+    await findReadyWorkspaceComposer()
+    expect(await screen.findByRole('button', { name: 'Model: qwen3:8b' })).toHaveTextContent('qwen3:8b')
+    expect(screen.queryByRole('button', { name: 'Model: llama3.2:3b' })).toBeNull()
+  })
+
+  it("marks the open thread's model unavailable when no provider lists it, and names no other model", async () => {
+    modelRuntime({ thread_id: 'thread-1', model: { provider: 'ollama', model: 'gone:1b' }, layer: 'thread' })
+    render(App)
+    await findReadyWorkspaceComposer()
+    expect(await screen.findByRole('button', { name: 'Model: gone:1b (unavailable)' })).toHaveTextContent('gone:1b (unavailable)')
+    expect(screen.queryByRole('button', { name: 'Model: llama3.2:3b' })).toBeNull()
   })
 
   it('carries a model picked before any thread exists on the first message', async () => {

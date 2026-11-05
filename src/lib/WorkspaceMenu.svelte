@@ -28,7 +28,7 @@
         // The page measures CSS pixels, and the interface zoom scales them to window pixels.
         const zoom = currentZoom()
         await popupWindow.setPosition(new PhysicalPosition(Math.round(origin.x + Math.max(0, rect.right * zoom - 232) * scale), Math.round(origin.y + (rect.bottom * zoom - 2) * scale)))
-        await popupWindow.emit('workspace-menu-open', {selected, pointer: pointerLeads()})
+        await popupWindow.emit('workspace-menu-open', {selected, label, pointer: pointerLeads()})
         return
       } catch { /* Browser previews use the HTML menu. */ }
       finally { opening = false }

@@ -5,6 +5,8 @@
 import { LOCAL_RUNTIME_ID, machineName as listedMachineName } from './runtimes.js'
 import { memberMachine } from '../agents/swarm.js'
 import { formatClock, formatDateTime } from '../lib/time-format.svelte.js'
+import { providerName } from '../lib/provider-catalog.js'
+import { modelLabel } from '../lib/model-label.js'
 
 // The clock time as the Time setting shows times.
 export function clockTime(value) {
@@ -27,11 +29,13 @@ export function coreRuntime(swarm, runtimeId) {
 // The machine that owns a thread summary, when another fleet member owns it:
 // its name, shape and whether it answers. Null for a thread this machine
 // owns or one the swarm does not share.
+// A holder whose fleet id the swarm answer has not named yet still names
+// the owner of its synced copy, so the label never falls back to the holder.
 export function threadOwner(summary, swarm, runtimeList = null) {
   const owner = summary?.owner_runtime
   if (!owner) return null
   const holder = coreRuntime(swarm, summary.runtimeId)
-  if (!holder || owner === holder) return null
+  if (holder ? owner === holder : !summary.replica) return null
   return memberMachine(swarm, owner, runtimeList)
 }
 
@@ -112,6 +116,7 @@ const CLASS_NAMES = {
   memory: 'Memory',
   artifact: 'Artifacts',
   extension: 'Skills',
+  mcp: 'MCP servers',
   account: 'Model accounts',
   route: 'Routing',
   'decision-model': 'Decision models',
@@ -192,18 +197,73 @@ function machineName(swarm, runtimeId) {
 
 const RUNTIME_ID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g
 
+// What a sealed secret holds, by the class its id starts with. Core names
+// each `<class>:<owner>`, a vault token or lease `<class>:<owner>:<member>`
+// and a handover `handover:<owner>:<account>`.
+const SECRET_CLASSES = {
+  models: 'Model connections',
+  mcp: 'MCP connections',
+  keys: 'Keys',
+  swarm: 'Fleet connections',
+  vault: 'Vault token',
+  lease: 'Sign-in lease',
+  handover: 'Sign-in handover',
+}
+
+function secretName(id, swarm, accounts) {
+  const [kind, owner, ...rest] = String(id).split(':')
+  const label = SECRET_CLASSES[kind]
+  if (!label || !owner) return id
+  const tail = rest.join(':')
+  if (kind === 'handover' && tail) return `${label} of ${connectionName(tail, accounts)} from ${machineName(swarm, owner)}`
+  if (tail) return `${label} of ${machineName(swarm, owner)} for ${machineName(swarm, tail)}`
+  return `${label} of ${machineName(swarm, owner)}`
+}
+
+// A connection's name for the log: a sign-in by its provider, a router
+// account by its label from core's `fleet.credentials` accounts, a decision
+// model by its name from `decisionModels`, a search key by its provider, or
+// in words when no list names it. Core names each `pi:<provider>`,
+// `router:<id>`, `endpoint:<provider>`, `mcp:<server>`, `mcp-oauth:<server>`,
+// `decision:<id>` or `search:<provider>`.
+const HARNESS_SIGN_IN = /^pi:(.+)$/
+const RAW_ID = /^[a-z_-]+:[0-9a-f]{8}-?[0-9a-f-]*$/i
+function connectionName(name, accounts, decisionModels = null) {
+  const text = String(name ?? '')
+  const shared = /^shared:swarm:[^:]+:(.+)$/.exec(text)
+  if (shared) return connectionName(`router:${shared[1]}`, accounts, decisionModels)
+  const account = (accounts ?? []).find((entry) => entry.name === text)
+  const harness = HARNESS_SIGN_IN.exec(text)
+  if (harness) return providerName(account?.provider || harness[1])
+  if (text.startsWith('router:')) return account?.label || 'a model account'
+  const endpoint = /^endpoint:(.+)$/.exec(text)
+  if (endpoint) return account?.label || providerName(endpoint[1])
+  const mcp = /^mcp(?:-oauth)?:(.+)$/.exec(text)
+  if (mcp) return mcp[1]
+  const decision = /^decision:(.+)$/.exec(text)
+  // A connection named by its model's id reads by the model's display name.
+  const model = decision && (decisionModels ?? []).find((entry) => entry?.id === decision[1])
+  if (decision) return (model?.name && model.name === model.connection?.model ? modelLabel(model.name) : model?.name) || 'a decision model'
+  const search = /^search:(.+)$/.exec(text)
+  if (search) return `${search[1].charAt(0).toUpperCase()}${search[1].slice(1)} search key`
+  if (account?.label) return account.label
+  return RAW_ID.test(text) ? 'a connection' : text
+}
+
 // One `fleet.audit` entry as a log row: when, what, the machines it moved
 // between in the direction it went, and the record's detail. Core keys each
-// entry `<writer>:<uuidv7>`, and `actor_runtime` is the writer.
-export function auditRow(entry, swarm) {
+// entry `<writer>:<uuidv7>`, and `actor_runtime` is the writer. `accounts`
+// from `fleet.credentials` and `decisionModels`, the router settings'
+// `classifier_connections`, name the connections a secret carries.
+export function auditRow(entry, swarm, accounts = null, decisionModels = null) {
   const record = entry?.record ?? {}
   const rows = Number.isInteger(record.rows) ? `${record.rows} ${record.rows === 1 ? 'row' : 'rows'}` : ''
   const detail = [
     record.operation,
-    record.secret_id,
-    record.account,
+    record.secret_id ? secretName(record.secret_id, swarm, accounts) : '',
+    record.account ? connectionName(record.account, accounts, decisionModels) : '',
     record.from && record.to ? `${record.from} to ${record.to}` : '',
-    Array.isArray(record.keys) ? record.keys.join(', ') : '',
+    Array.isArray(record.keys) ? record.keys.map((key) => connectionName(key, accounts, decisionModels)).join(', ') : '',
     Array.isArray(record.recipients) ? `${record.recipients.length} ${record.recipients.length === 1 ? 'recipient' : 'recipients'}` : '',
     rows,
     record.result,
@@ -232,26 +292,35 @@ function auditTime(value) {
 
 // The fleet members a new thread can start on, beyond the machines this app
 // reaches directly: each with its core id, name, shape and whether it
-// answers. Containers count like any member.
+// answers. Containers count like any member. A paired machine lists once,
+// as its paired row, even while it is offline: its pairing id is its core id.
 export function offloadTargets(swarm, runtimeList) {
-  const reached = new Set(Object.values(swarm?.self ?? {}))
+  const reached = new Set([...Object.values(swarm?.self ?? {}), ...(runtimeList?.runtimes ?? []).map((runtime) => runtime.id)])
   return (swarm?.members ?? [])
     .filter((member) => !reached.has(member.runtime_id) && !member.fleet?.removed)
     .map((member) => ({ ...memberMachine(swarm, member.runtime_id, runtimeList), coreId: member.runtime_id }))
     .sort((a, b) => String(a.name).localeCompare(String(b.name)))
 }
 
-// One summary per thread. A thread the app sees both on its owner and as a
-// replica on another machine it reaches lists once, from its owner.
+// One summary per thread, the same one whichever machine lists first: the
+// owner's copy, then this computer's, then the copy of the machine with the
+// lowest id. A copy of a thread this computer owns that only another
+// machine listed, such as while this computer's runtime was busy, lists as
+// this computer's, so its row and its requests stay here.
 export function dedupeThreads(summaries, swarm) {
+  // A runtime that lists a thread it runs marks it no replica, even before
+  // the app knows that runtime's fleet id.
+  const owns = (entry) => !!entry.owner_runtime && (entry.owner_runtime === coreRuntime(swarm, entry.runtimeId) || !entry.replica)
+  const rank = (entry) => (owns(entry) ? 2 : 0) + ((entry.runtimeId ?? LOCAL_RUNTIME_ID) === LOCAL_RUNTIME_ID ? 1 : 0)
   const kept = new Map()
   for (const summary of summaries ?? []) {
     const known = kept.get(summary.threadId)
-    if (!known) { kept.set(summary.threadId, summary); continue }
-    // A runtime that lists a thread it runs marks it no replica, even
-    // before the app knows that runtime's fleet id.
-    const owns = (entry) => !!entry.owner_runtime && (entry.owner_runtime === coreRuntime(swarm, entry.runtimeId) || !entry.replica)
-    if (!owns(known) && owns(summary)) kept.set(summary.threadId, summary)
+    const better = !known || rank(summary) > rank(known)
+      || (rank(summary) === rank(known) && String(summary.runtimeId ?? '') < String(known.runtimeId ?? ''))
+    if (better) kept.set(summary.threadId, summary)
   }
-  return [...kept.values()]
+  const here = coreRuntime(swarm, LOCAL_RUNTIME_ID)
+  return [...kept.values()].map((entry) => here && entry.replica && entry.owner_runtime === here
+    ? { ...entry, runtimeId: LOCAL_RUNTIME_ID, replica: false }
+    : entry)
 }

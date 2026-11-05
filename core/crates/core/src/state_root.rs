@@ -51,15 +51,52 @@ pub fn home_directory_value() -> Option<OsString> {
     }
 }
 
+/// The state directory: the one `MUNIMENT_STATE_DIR` names, else
+/// `~/.muniment`. A test run that would reach the owner's real directory
+/// gets a temporary directory per process instead.
 pub fn state_directory() -> Option<PathBuf> {
-    state_directory_from(
-        std::env::var_os(STATE_DIRECTORY_OVERRIDE).as_deref(),
-        home_directory_value().as_deref(),
-    )
+    let override_value = std::env::var_os(STATE_DIRECTORY_OVERRIDE);
+    let state = state_directory_from(override_value.as_deref(), home_directory_value().as_deref());
+    // A test run that names no state directory and keeps the owner's home
+    // gets a temporary one. A test that sets a temporary home keeps its own.
+    let state = match state {
+        Some(state)
+            if is_test_run()
+                && absolute(override_value.as_deref()).is_none()
+                && is_owner_data(&state) =>
+        {
+            Some(test_state_directory())
+        }
+        state => state,
+    };
+    if let Some(state) = &state {
+        guard_owner_data(state, "the state directory");
+    }
+    state
 }
 
 pub fn agent_directory(state: &Path) -> PathBuf {
     state.join(AGENT_DIRECTORY_NAME)
+}
+
+/// The folder under the state root where the runtime answers endpoint keys
+/// on its socket and keeps its stale-key marks.
+pub const ENDPOINT_KEYS_DIRECTORY_NAME: &str = "endpoint-keys";
+
+/// The folder of stale-key marks under `state`: one empty mark per endpoint
+/// whose stored key is stale, because the keychain refused the key that
+/// replaced it.
+pub fn stale_endpoint_keys(state: &Path) -> PathBuf {
+    state.join(ENDPOINT_KEYS_DIRECTORY_NAME).join("stale")
+}
+
+/// Whether the stored key of the endpoint `provider` is stale under `state`.
+pub fn endpoint_key_stale(state: &Path, provider: &str) -> bool {
+    !provider.is_empty()
+        && provider
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        && stale_endpoint_keys(state).join(provider).is_file()
 }
 
 /// The roots an install before this layout wrote: the runtime's data root, the
@@ -466,6 +503,19 @@ pub fn is_test_run() -> bool {
         })
 }
 
+/// Whether Cargo built this binary for a test: the `test-build` feature,
+/// which every crate that tests against the core turns on through its
+/// dev-dependencies, is compiled in. It holds however the binary starts:
+/// by Cargo, by hand, as a copy outside `deps`, or as a runtime binary a
+/// test builds and starts.
+pub const TEST_BUILD: bool = cfg!(feature = "test-build");
+
+/// Whether this process may never write the owner's runtime logs: a test
+/// run, or any binary built for a test.
+pub fn is_test_build() -> bool {
+    TEST_BUILD || is_test_run()
+}
+
 static KEYCHAIN_MOCKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Notes that a test replaced the system keyring with an in-memory one, so
@@ -474,13 +524,36 @@ pub fn note_keychain_mocked() {
     KEYCHAIN_MOCKED.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
-/// Whether this process may open the platform keychain: any process but a
-/// test run, a test run whose keyring is in memory, and a test run marked
-/// as a keychain test.
+/// Whether this process may open the platform keychain. A test run, any
+/// binary built for a test however it starts, and a process whose state
+/// directory lies in a test root never may, so a copy of a test runtime that
+/// runs with the owner's home keeps its secrets in files and never raises the
+/// keychain's prompt. A test whose keyring is in memory, and a test marked as
+/// a keychain test, may.
 pub fn keychain_allowed() -> bool {
-    !is_test_run()
+    !(is_test_build() || state_directory_is_test_root())
         || KEYCHAIN_MOCKED.load(std::sync::atomic::Ordering::SeqCst)
         || std::env::var_os(KEYCHAIN_TESTS_VARIABLE).is_some_and(|value| value == "1")
+}
+
+/// Whether the state directory this process names lies in a test process's
+/// temporary root.
+pub fn state_directory_is_test_root() -> bool {
+    state_directory_from(
+        std::env::var_os(STATE_DIRECTORY_OVERRIDE).as_deref(),
+        home_directory_value().as_deref(),
+    )
+    .is_some_and(|state| in_test_root(&state))
+}
+
+/// Whether `path` lies in a test process's temporary root.
+fn in_test_root(path: &Path) -> bool {
+    path.ancestors().any(|ancestor| {
+        ancestor
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(crate::atomic_file::test_root::TEST_ROOT_PREFIX))
+    })
 }
 
 /// Stops a test run before it opens the owner's real keychain. A test that
@@ -494,10 +567,76 @@ pub fn guard_keychain(what: &str) {
     }
 }
 
-/// The credential directory a test run uses in place of the keychain: one
-/// temporary directory per process.
+/// The temporary directory one test process keeps its state, credentials,
+/// Documents, logs and test fixtures in. See
+/// [`muniment_atomic_file::test_root`].
+pub fn test_root() -> PathBuf {
+    crate::atomic_file::test_root::test_root()
+}
+
+/// The credential directory a test run uses in place of the keychain, under
+/// the process's test root.
 pub fn test_credentials_directory() -> PathBuf {
-    std::env::temp_dir().join(format!("muniment-test-credentials-{}", std::process::id()))
+    test_root().join("credentials")
+}
+
+/// The state directory a test run uses when `MUNIMENT_STATE_DIR` names none,
+/// under the process's test root.
+pub fn test_state_directory() -> PathBuf {
+    test_root().join("state").join(STATE_DIRECTORY_NAME)
+}
+
+/// The Documents folder a test run uses in place of the owner's, under the
+/// process's test root, created on first use.
+pub fn test_documents_directory() -> PathBuf {
+    let directory = test_root().join("Documents");
+    let _ = fs::create_dir_all(&directory);
+    directory
+}
+
+/// The root of the owner's real data that holds `path`: the state directory
+/// or the default Home under Documents of the user the operating system
+/// names, whatever `HOME` says. The file system on macOS ignores case, so
+/// the match does too.
+fn owner_data_root(path: &Path) -> Option<PathBuf> {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        let home = crate::user_diagnostics::effective_user_home().ok()?;
+        let lower = |path: &Path| PathBuf::from(path.to_string_lossy().to_lowercase());
+        let target = lower(path);
+        [
+            home.join(STATE_DIRECTORY_NAME),
+            home.join("Documents").join("muniment"),
+        ]
+        .into_iter()
+        .find(|root| target.starts_with(lower(root)))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = path;
+        None
+    }
+}
+
+/// Whether `path` lies in the owner's real state directory or default Home.
+pub fn is_owner_data(path: &Path) -> bool {
+    owner_data_root(path).is_some()
+}
+
+/// Stops a test run before it writes the owner's real state directory or the
+/// default Home under `~/Documents/muniment`.
+pub fn guard_owner_data(path: &Path, what: &str) {
+    if !is_test_run() {
+        return;
+    }
+    if let Some(root) = owner_data_root(path) {
+        panic!(
+            "A test tried to write {what} in {}, under the owner's {}. Tests set \
+             {STATE_DIRECTORY_OVERRIDE} or a temporary home.",
+            path.display(),
+            root.display()
+        );
+    }
 }
 
 /// The variable that names the directory the runtime logs go to in place of
@@ -506,25 +645,27 @@ pub fn test_credentials_directory() -> PathBuf {
 pub const LOG_DIRECTORY_VARIABLE: &str = "MUNIMENT_LOG_DIR";
 
 /// The log directory that replaces the platform's: the one
-/// `MUNIMENT_LOG_DIR` names, else, in a test run, a temporary directory per
-/// process, so no test writes the owner's real runtime logs.
+/// `MUNIMENT_LOG_DIR` names, else, in a test run or a binary built for a
+/// test, a temporary directory per process, so no test writes the owner's
+/// real runtime logs.
 pub fn log_directory_override() -> Option<PathBuf> {
     match std::env::var_os(LOG_DIRECTORY_VARIABLE) {
         Some(directory) if !directory.is_empty() => Some(PathBuf::from(directory)),
-        _ => is_test_run().then(test_log_directory),
+        _ => is_test_build().then(test_log_directory),
     }
 }
 
-/// The log directory a test run uses: one temporary directory per process.
+/// The log directory a test run uses, under the process's test root.
 pub fn test_log_directory() -> PathBuf {
-    std::env::temp_dir().join(format!("muniment-test-logs-{}", std::process::id()))
+    test_root().join("logs")
 }
 
-/// Stops a test run before it appends to a log under the owner's real log
-/// directory, `~/Library/Logs/Muniment` on macOS.
+/// Stops a test run, or any binary built for a test, before it appends to a
+/// log under the owner's real log directory, `~/Library/Logs/Muniment` on
+/// macOS.
 pub fn guard_log_directory(directory: &Path) {
     #[cfg(target_os = "macos")]
-    if is_test_run() {
+    if is_test_build() {
         let real = crate::user_diagnostics::effective_user_home()
             .map(|home| home.join("Library/Logs/Muniment"))
             .ok();
@@ -538,6 +679,23 @@ pub fn guard_log_directory(directory: &Path) {
     }
     #[cfg(not(target_os = "macos"))]
     let _ = directory;
+}
+
+#[cfg(test)]
+mod test_root_tests {
+    #[test]
+    fn every_test_directory_sits_in_the_process_root() {
+        let root = super::test_root();
+        assert!(root.starts_with(std::env::temp_dir()));
+        for directory in [
+            super::test_state_directory(),
+            super::test_credentials_directory(),
+            super::test_documents_directory(),
+            super::test_log_directory(),
+        ] {
+            assert!(directory.starts_with(&root), "{}", directory.display());
+        }
+    }
 }
 
 #[cfg(test)]
@@ -565,7 +723,53 @@ mod log_guard_tests {
 }
 
 #[cfg(test)]
+mod owner_data_guard_tests {
+    #[test]
+    fn a_test_run_keeps_state_and_home_in_temporary_directories() {
+        assert!(super::is_test_run());
+        let state = super::state_directory().unwrap();
+        assert!(!super::is_owner_data(&state), "{}", state.display());
+        assert!(super::test_state_directory().starts_with(std::env::temp_dir()));
+        assert!(super::test_documents_directory().is_dir());
+        super::guard_owner_data(&super::test_state_directory(), "a test");
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        {
+            let home = crate::user_diagnostics::effective_user_home().unwrap();
+            for owned in [
+                home.join(".muniment/agent/settings.json"),
+                home.join("Documents/muniment/sessions/Untitled-0000000a"),
+                home.join("Documents/Muniment"),
+            ] {
+                let refused =
+                    std::panic::catch_unwind(|| super::guard_owner_data(&owned, "a test"));
+                assert!(refused.is_err(), "{}", owned.display());
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 mod keychain_guard_tests {
+    #[test]
+    fn a_state_directory_in_a_test_root_is_a_test_root() {
+        use std::path::Path;
+        assert!(super::in_test_root(Path::new(
+            "/tmp/muniment-test-4242-0000abcd-1234abcd/state/.muniment"
+        )));
+        assert!(super::in_test_root(&super::test_state_directory()));
+        assert!(!super::in_test_root(Path::new("/Users/owner/.muniment")));
+        assert!(!super::in_test_root(Path::new("/tmp/claude-502/mo/state")));
+    }
+
+    #[test]
+    fn a_test_build_never_reaches_the_keychain() {
+        // Every crate that tests against the core builds it with `test-build`,
+        // so a runtime binary a test builds refuses the keychain however it
+        // starts, as a copy outside `deps` with the owner's home does.
+        const { assert!(super::TEST_BUILD) };
+        assert!(super::is_test_build());
+    }
+
     #[test]
     fn a_test_run_never_reaches_the_keychain() {
         assert!(super::is_test_run());

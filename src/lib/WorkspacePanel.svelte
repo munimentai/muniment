@@ -3,7 +3,6 @@
   import { getCurrentWindow } from '@tauri-apps/api/window'
   import { confirm } from '@tauri-apps/plugin-dialog'
   import LucideIcon from './LucideIcon.svelte'
-  import OverflowText from './OverflowText.svelte'
   import { workspaceLabel, browserLabel } from './workspace-labels.js'
   import { overflowFade } from './overflow-fade.js'
   import BrowserWorkspace from './BrowserWorkspace.svelte'
@@ -14,7 +13,7 @@
   import WorkspaceFile from '../files/WorkspaceFile.svelte'
   import FileIcon from '../files/FileIcon.svelte'
   import ConfirmDialog from './ConfirmDialog.svelte'
-  let { context = null, tauri, selected = null, onselect, threadId = null, projectId = null, suspended = false, requestedFile = null, requestedArtifact = null, navigation = null, onnavigationhandled, onfolder, ondirty } = $props()
+  let { context = null, tauri, selected = null, onselect, threadId = null, projectId = null, suspended = false, requestedFile = null, requestedArtifact = null, navigation = null, onnavigationhandled, onfolder, ondirty, gone = null } = $props()
   let tabs = $state([])
   let browserUrl = $state('')
   let artifactName = $state('')
@@ -23,8 +22,11 @@
   let tabList
   function tabName(tab) {
     if (tab.id === 'browser' && browserUrl) return browserLabel(browserUrl)
-    if (tab.id === 'files') return workspaceLabel(folderPaths[contextKey], context || {threadId}) || tab.name
-    if (tab.id === 'terminal') return workspaceLabel(terminalPaths[contextKey], context || {threadId}) || tab.name
+    // A context with a label, such as a creation chat, names its tabs with it.
+    // A thread's Files tab whose view has not read its folder yet, such as one
+    // behind an open file's tab, takes the thread's title.
+    if (tab.id === 'files') return context?.label || workspaceLabel(folderPaths[contextKey], context || {threadId}) || context?.threadTitle || tab.name
+    if (tab.id === 'terminal') return context?.label || workspaceLabel(terminalPaths[contextKey], context || {threadId}) || tab.name
     if (tab.id === 'artifacts' && artifactName) return artifactName
     return tab.name
   }
@@ -32,7 +34,7 @@
   $effect(() => { ondirty?.(dirtyFiles.size > 0) })
   let closing = $state(null)
   function markDirty(id, dirty) { const next = new Set(dirtyFiles); if (dirty) next.add(id); else next.delete(id); dirtyFiles = next }
-  const contextKey = $derived(JSON.stringify(context ? Object.fromEntries(Object.entries(context).filter(([key]) => key !== 'threadTitle')) : {threadId, projectId}))
+  const contextKey = $derived(JSON.stringify(context ? Object.fromEntries(Object.entries(context).filter(([key]) => key !== 'threadTitle' && key !== 'label' && key !== 'unsent')) : {threadId, projectId}))
   let terminalSessions = $state([])
   $effect(() => {
     const key = contextKey
@@ -61,45 +63,79 @@
     if (!['rename','trash'].includes(action)) return
     for (const tab of [...tabs]) if (paths.some(path => tab.file?.path === path || tab.file?.path.startsWith(path + '/') || tab.file?.path.startsWith(path + '\\'))) close(tab.id)
   }
+  // A file tab belongs to the thread, draft or agent whose view opened it,
+  // and the strip shows only the open view's file tabs beside the shared
+  // tools. A view with no such owner, such as a catalog, owns its own tabs.
+  // When `gone` names that owner, deleted with its folder, the tab closes,
+  // unless it holds unsaved edits.
+  const owner = $derived(context?.threadId || context?.agentId || context?.artifactId || (context ? null : threadId) || contextKey)
+  const viewTabs = $derived(tabs.filter(t => !t.file || t.owner === owner))
   function openFile(file) {
     const id = `file:${file.path}`
-    if (!tabs.some(t => t.id === id)) tabs = [...tabs,{id,name:file.name,file}]
+    const open = tabs.find(t => t.id === id)
+    // A file another view holds open with unsaved edits stays in that view.
+    if (open && open.owner !== owner && !dirtyFiles.has(id)) tabs = tabs.map(t => t === open ? {...t, owner, threadId} : t)
+    else if (!open) tabs = [...tabs,{id,name:file.name,file,owner,threadId}]
     onselect(id)
   }
+  $effect(() => {
+    const ids = gone?.ids
+    if (ids?.length) untrack(() => { for (const tab of [...tabs]) if (tab.file && ids.includes(tab.owner) && !dirtyFiles.has(tab.id)) close(tab.id) })
+  })
   function close(id, discard = false) {
     if (dirtyFiles.has(id) && !discard) { closing = id; return }
     if (id === 'terminal') terminalSessions = []
     if (id === 'browser' || id === 'artifacts') void tauri.invoke('browser_command', {request:{view:id === 'artifacts' ? 'artifact' : 'browser',action:'close',value:''}}).catch(() => {})
     markDirty(id, false)
-    const index = tabs.findIndex(t => t.id === id)
+    const index = viewTabs.findIndex(t => t.id === id)
     tabs = tabs.filter(t => t.id !== id)
-    if (selected === id) onselect(tabs[Math.min(index,tabs.length-1)]?.id ?? null)
+    if (selected === id) onselect(viewTabs[Math.min(index,viewTabs.length-1)]?.id ?? null)
   }
   async function keys(e) {
     if (!['ArrowLeft','ArrowRight','Home','End','Delete'].includes(e.key)) return
     e.preventDefault()
     if (e.key === 'Delete') { close(selected); return }
-    const index = tabs.findIndex(t => t.id === selected)
-    const next = e.key === 'Home' ? 0 : e.key === 'End' ? tabs.length-1 : (index+(e.key === 'ArrowRight'?1:-1)+tabs.length)%tabs.length
-    onselect(tabs[next].id)
+    const index = viewTabs.findIndex(t => t.id === selected)
+    const next = e.key === 'Home' ? 0 : e.key === 'End' ? viewTabs.length-1 : (index+(e.key === 'ArrowRight'?1:-1)+viewTabs.length)%viewTabs.length
+    onselect(viewTabs[next].id)
     const list = e.currentTarget
     await tick()
     list?.querySelector('[aria-selected="true"]')?.focus()
   }
   $effect(() => { if (selected && tools[selected] && !tabs.some(t => t.id === selected)) tabs = [...tabs,{id:selected,...tools[selected]}] })
+  // Each view keeps its active tab. A view the person returns to selects
+  // its own tab again. A selected file tab the view does not show, one that
+  // belongs to another view or closed while the panel was put aside, gives
+  // way to the Files tab, or the first tab, or a thread's Files.
+  const activeTabs = {}
+  let activeOwner = null
+  $effect(() => {
+    const key = owner, id = selected, back = key !== activeOwner ? activeTabs[key] : null
+    activeOwner = key
+    void tabs.length
+    if (requestedFile && requestedFile !== openedRequest) return
+    untrack(() => {
+      const shown = tabId => viewTabs.some(t => t.id === tabId)
+      if (id && back && back !== id && shown(back)) onselect(back)
+      else if (id?.startsWith('file:') && !shown(id)) onselect(viewTabs.find(t => t.id === 'files')?.id ?? viewTabs[0]?.id ?? (threadId ? 'files' : null))
+      else if (id && shown(id)) activeTabs[key] = id
+    })
+  })
   $effect(() => {
     selected; tabs.length
     void tick().then(() => tabList?.querySelector('[aria-selected="true"]')?.closest('.tab')?.scrollIntoView?.({block: 'nearest', inline: 'nearest'}))
   })
-  $effect(() => { const file = requestedFile; if (file) untrack(() => openFile(file)) })
+  // The requested file this panel opened, so a request still on its way holds its selection.
+  let openedRequest = null
+  $effect(() => { const file = requestedFile; if (file) untrack(() => { openFile(file); openedRequest = file }) })
 </script>
 <aside data-panel="workspace" class="workspace-panel" class:hidden={!selected} class:maximized aria-label="Workspace panel">
   <header data-panel-header class="tabs-header">
     <div class="tabs fade-viewport" bind:this={tabList} use:overflowFade role="tablist" tabindex="-1" aria-label="Open workspace tabs" onkeydown={keys}>
-      {#each tabs as tab (tab.id)}
+      {#each viewTabs as tab (tab.id)}
         <div class="tab" class:active={selected === tab.id}>
           <button type="button" role="tab" title={tab.file?.path || (tab.id === 'files' ? folderPaths[contextKey] : tab.id === 'terminal' ? terminalPaths[contextKey] : tabName(tab))} aria-selected={selected === tab.id} tabindex={selected === tab.id ? 0 : -1} onclick={() => onselect(tab.id)}>
-            {#if tab.file}<FileIcon name={tab.name} />{:else}<LucideIcon name={tab.icon} />{/if}{#if tab.id === 'files' || tab.id === 'terminal'}<OverflowText text={tabName(tab)} side="left" scroll={false} />{:else}<span class="tab-label">{tabName(tab)}</span>{/if}{#if dirtyFiles.has(tab.id)}<span class="dirty" aria-label="Unsaved changes">•</span>{/if}
+            {#if tab.file}<FileIcon name={tab.name} />{:else}<LucideIcon name={tab.icon} />{/if}<span class="tab-label">{tabName(tab)}</span>{#if dirtyFiles.has(tab.id)}<span class="dirty" aria-label="Unsaved changes">•</span>{/if}
           </button>
           <button class="tab-close" type="button" aria-label={`Close ${tab.name} tab`} onclick={() => close(tab.id)}><LucideIcon name="x" size={12} /></button>
         </div>
@@ -114,11 +150,16 @@
   {#if tabs.some(t => t.id === 'files')}{#key contextKey}<FilesWorkspace {context} onwillchange={canChange} onchanged={filesChanged} hidden={selected !== 'files'} {tauri} {threadId} {projectId} initialPath="" onfolder={path => { folderPaths = {...folderPaths, [contextKey]: path}; onfolder?.(path) }} onfile={openFile} />{/key}{/if}
   {#each terminalSessions as session (session.key)}{#await loadTerminal() then module}{@const TerminalWorkspace = module.default}<TerminalWorkspace oncwd={path => terminalPaths = {...terminalPaths, [session.key]: path}} {tauri} context={session.context} hidden={selected !== 'terminal' || session.key !== contextKey} />{/await}{/each}
   {#each tabs.filter(t => t.file) as tab (tab.id)}
-    <div class="file-view" class:hidden={selected !== tab.id}><WorkspaceFile {tauri} file={tab.file} {threadId} ondirty={dirty => markDirty(tab.id, dirty)} /></div>
+    <div class="file-view" class:hidden={selected !== tab.id}><WorkspaceFile {tauri} file={tab.file} threadId={tab.threadId} ondirty={dirty => markDirty(tab.id, dirty)} /></div>
   {/each}
 </aside>
-{#if closing}<ConfirmDialog title="Discard unsaved changes?" cancelLabel="Cancel" confirmLabel="Discard" onDecision={yes => { if (yes) close(closing, true); closing = null }}><p>Your edits to {tabs.find(t => t.id === closing)?.name} have not been saved.</p></ConfirmDialog>{/if}
+{#if closing}<ConfirmDialog title="Discard unsaved changes?" cancelLabel="Cancel" confirmLabel="Discard" destructive onDecision={yes => { if (yes) close(closing, true); closing = null }}><p>Your edits to {tabs.find(t => t.id === closing)?.name} have not been saved.</p></ConfirmDialog>{/if}
 <style>
+  /* The tab strip fades the side its tabs clip past and hides its scrollbar. */
+  .fade-viewport { scrollbar-width:none; --fade-left:0px; --fade-right:0px; mask-image:linear-gradient(to right, transparent, #000 var(--fade-left), #000 calc(100% - var(--fade-right)), transparent); }
+  .fade-viewport::-webkit-scrollbar { display:none; }
+  .fade-viewport:global([data-fade-left="true"]) { --fade-left:28px; }
+  .fade-viewport:global([data-fade-right="true"]) { --fade-right:28px; }
   .file-view { display:flex; flex:1; min-height:0; min-width:0; } .file-view.hidden { display:none; }
   .workspace-panel { grid-area:rail; display:flex; flex-direction:column;   overflow:hidden;    }
   .workspace-panel.hidden { display:none; }
@@ -130,7 +171,7 @@
   button { display:flex; align-items:center; gap:6px; min-width:0; padding:5px 6px; border:0; border-radius:var(--radius-control); background:transparent; color:var(--muted); font:var(--text-12) var(--font-human); cursor:pointer; }
   .active button { color:var(--ink); } button:hover { background:var(--faint); }
   .tab button[role="tab"] { flex:1; overflow:hidden; }
-  /* A folder path keeps its end in view. A name keeps its start and ends in an ellipsis. */
+  /* A tab name keeps its start and ends in an ellipsis only when it does not fit. The tooltip holds the full path. */
   .tab-label { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:left; }
   .tab :global(svg), .dirty { flex:none; }
   .tab-close { flex:none; padding:4px; } .panel-control { flex:none; width:28px; height:28px; justify-content:center; }

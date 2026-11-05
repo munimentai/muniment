@@ -1,0 +1,81 @@
+import { afterEach, expect, it } from 'vitest'
+import { pressedElsewhere, recordPress } from './press-target.js'
+
+const rows = () => {
+  document.body.innerHTML = '<ul><li id="a"><button id="a-title">A</button></li><li id="b"><button>B</button></li></ul>'
+  return { a: document.getElementById('a'), b: document.getElementById('b'), title: document.getElementById('a-title') }
+}
+const press = (target, init) => target.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, ...init }))
+const menuOn = (row, init = { clientX: 10, clientY: 10 }) => {
+  let elsewhere = null
+  row.addEventListener('contextmenu', (event) => { elsewhere = pressedElsewhere(event) }, { once: true })
+  row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, ...init }))
+  return elsewhere
+}
+afterEach(() => { document.body.innerHTML = ''; recordPress({ button: 0 }) })
+
+it('names a context menu that follows a right or Control press on another row', () => {
+  const { a, b, title } = rows()
+  press(title, { button: 2 })
+  expect(menuOn(b)).toBe(true)
+  press(b, { button: 0, ctrlKey: true })
+  expect(menuOn(a)).toBe(true)
+})
+
+it('passes a context menu on the row the press began on, from the keyboard, or with no press', () => {
+  const { a, title } = rows()
+  press(title, { button: 2 })
+  expect(menuOn(a)).toBe(false)
+  press(title, { button: 2 })
+  expect(menuOn(document.getElementById('b'), { clientX: 0, clientY: 0 })).toBe(false)
+  expect(menuOn(a)).toBe(false)
+  // A primary press without Control opens no menu, so it names no row.
+  press(title, { button: 0 })
+  expect(menuOn(document.getElementById('b'))).toBe(false)
+})
+
+it('keeps the default off a secondary press on a sidebar row, so no word is selected and the list keeps its scroll', () => {
+  document.body.innerHTML = '<aside data-panel="sidebar"><button id="row"><span id="title">Plan the week</span></button><input id="field"></aside><main><p id="text">Reply</p></main>'
+  const down = (id, init) => {
+    const event = new MouseEvent('mousedown', { bubbles: true, cancelable: true, ...init })
+    document.getElementById(id).dispatchEvent(event)
+    return event.defaultPrevented
+  }
+  expect(down('title', { button: 2 })).toBe(true)
+  expect(down('row', { button: 0, ctrlKey: true })).toBe(true)
+  // A primary press, a text field and the rest of the window keep their defaults.
+  expect(down('title', { button: 0 })).toBe(false)
+  expect(down('field', { button: 2 })).toBe(false)
+  expect(down('text', { button: 2 })).toBe(false)
+})
+
+it('keeps the default off a secondary press on a model picker, menu, list or tree row, and not on its text field', () => {
+  document.body.innerHTML = '<div data-panel="model-picker"><input id="search"><button id="model"><span id="label">Astra</span></button></div>'
+    + '<div role="menu"><button role="menuitem" id="item">Rename</button></div><ul role="listbox"><li role="option" id="option">Scout</li></ul>'
+    + '<div role="tree"><div role="treeitem" id="file">notes.md</div></div><main><p id="text">Reply</p></main>'
+  const down = (id, init) => {
+    const event = new MouseEvent('mousedown', { bubbles: true, cancelable: true, ...init })
+    document.getElementById(id).dispatchEvent(event)
+    return event.defaultPrevented
+  }
+  for (const id of ['label', 'model', 'item', 'option', 'file']) expect(down(id, { button: 2 })).toBe(true)
+  expect(down('label', { button: 0, ctrlKey: true })).toBe(true)
+  expect(down('label', { button: 0 })).toBe(false)
+  expect(down('search', { button: 2 })).toBe(false)
+  expect(down('text', { button: 2 })).toBe(false)
+})
+
+it('keeps the browser menu off a right-click on a model picker row, while a row menu still opens and a text field keeps its own', () => {
+  document.body.innerHTML = '<div data-panel="model-picker"><input id="search"><button id="model"><span id="label">Astra</span></button></div>'
+    + '<div data-panel="sidebar"><button id="row">Thread</button></div><main><p id="text">Reply</p><textarea id="composer"></textarea></main>'
+  let rowMenu = 0
+  document.getElementById('row').addEventListener('contextmenu', () => { rowMenu += 1 })
+  const menu = (id) => {
+    const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 })
+    document.getElementById(id).dispatchEvent(event)
+    return event.defaultPrevented
+  }
+  for (const id of ['label', 'model', 'row']) expect(menu(id)).toBe(true)
+  expect(rowMenu).toBe(1)
+  for (const id of ['search', 'text', 'composer']) expect(menu(id)).toBe(false)
+})

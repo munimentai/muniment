@@ -479,6 +479,8 @@ mod tests {
                     proposed: false,
                     last_poll: None,
                     next_fire_at: None,
+                    cut_short: false,
+                    default_time: false,
                 }],
                 ..Default::default()
             },

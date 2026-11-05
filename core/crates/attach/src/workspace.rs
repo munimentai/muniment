@@ -1,6 +1,14 @@
 use std::{fs, io, path::Path};
 
+const WORKSPACE_MEMORY_README: &[u8] = b"# Memory\n\nDurable context for this workspace.\n";
 const WORKSPACE_REPORT: &[u8] = b"# Muniment workspace onboarding report\n\nThis opened directory is the workspace memory location. User-level Home remains lazy until cross-project context is needed. Repository instructions are loaded from the nearest `AGENTS.md`.\n";
+
+/// The files the onboarding writes in a workspace's `memory` folder, by name,
+/// with the bytes it writes. A file with other bytes is the user's.
+pub const WORKSPACE_MEMORY_SCAFFOLD: [(&str, &[u8]); 2] = [
+    ("README.md", WORKSPACE_MEMORY_README),
+    ("ONBOARDING.md", WORKSPACE_REPORT),
+];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkspaceOnboardRequest {
@@ -72,11 +80,9 @@ pub fn onboard_companion_workspace(
     }
     let memory = memory_root.join("memory");
     ensure_scaffold_directory(&memory)?;
-    write_scaffold_file_if_missing(
-        &memory.join("README.md"),
-        b"# Memory\n\nDurable context for this workspace.\n",
-    )?;
-    write_scaffold_file_if_missing(&memory.join("ONBOARDING.md"), WORKSPACE_REPORT)?;
+    for (name, contents) in WORKSPACE_MEMORY_SCAFFOLD {
+        write_scaffold_file_if_missing(&memory.join(name), contents)?;
+    }
     let agents = opened
         .ancestors()
         .map(|path| path.join("AGENTS.md"))

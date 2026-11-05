@@ -103,7 +103,7 @@
         </form>
       {:else if confirming === company.id}
         <Row title="Delete {company.name} and its records?">
-          <Button disabled={busy} onclick={() => remove(company.id)}>Delete</Button>
+          <Button variant="danger" disabled={busy} onclick={() => remove(company.id)}>Delete</Button>
           <button type="button" class="quiet" onclick={() => { confirming = null }}>Keep</button>
         </Row>
       {:else}

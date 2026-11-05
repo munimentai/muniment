@@ -1,6 +1,7 @@
 <script>
   import { panelScroll } from './panel-scroll.js'
-  import { onMount, tick, untrack } from 'svelte'
+  import { focusLikeKeys } from './focus-source.js'
+  import { tick, untrack } from 'svelte'
   import LucideIcon from './LucideIcon.svelte'
   import AgentAvatar from './AgentAvatar.svelte'
   import MemorySection from './MemorySection.svelte'
@@ -14,9 +15,10 @@
   import { agentColor, newAvatar } from './agent-avatar.js'
   import { runActive, templateNote, whenLabel } from './agent-labels.js'
   import { modelThinking, thinkingLabel } from './thinking-level.js'
+  import { modelDisplayName } from './provider-catalog.js'
   import { agentMachine, agentRequest } from '../agents/agent-runtime.js'
   import { emptyCatalog, missingSkills } from '../agents/agent-tools.js'
-  import { findMode, loadModes, modeIcon } from '../agents/permission-modes.js'
+  import { findMode, modeIcon, MODE_RETRY_DELAYS, readModes } from '../agents/permission-modes.js'
   import { activityLabel, activityState } from '../agents/activity.js'
   import { memberMachine } from '../agents/swarm.js'
   import { kindIcon } from '../runtimes/runtimes.js'
@@ -35,15 +37,19 @@
   // its profile, its primary machine and a move, since its settings live on
   // a machine this device does not reach.
   // `catalog` is core's `agent.tool_catalog` from the agent's own machine:
-  // the tools, skills and MCP servers it can offer this agent.
-  let { agent, tauri, projects = [], run, runs = [], threads = [], agents = [], runtimeList = null, swarm = null, inventory = null, catalog = emptyCatalog(), activity = undefined, webhooks = true,
+  // the tools, skills and MCP servers it can offer this agent. `connected`
+  // is false while this computer's runtime connection is down.
+  let { agent, tauri, projects = [], run, runs = [], threads = [], agents = [], runtimeList = null, swarm = null, inventory = null, catalog = emptyCatalog(), activity = undefined, webhooks = true, connected = true,
     deleteAsked = 0, onclose, onchange = async () => {}, ondelete, onopen, onopenrun = null, onopenfolder = null, onrun = () => {}, onmanagemodels = () => {}, onvisibility = () => {} } = $props()
   let editing = $state(null)
   let value = $state('')
   let busy = $state(false)
   let error = $state('')
+  // The field whose Save refused, so its error shows beside that Save.
+  let errorAt = $state(null)
   let deleting = $state(false)
   let removeMemory = $state(false)
+  let removeThreads = $state(false)
   let memoryOpen = $state(false)
   // The memory dialog shows the list, or the Add memory form in its place.
   let memoryAdding = $state(false)
@@ -59,11 +65,13 @@
   // Core's `permission.modes` from the agent's machine: undefined while it
   // loads, null when the machine lists none. An agent saves a mode only
   // once one is chosen, and follows the machine's default until then.
+  // A busy or starting runtime is asked again, and a listing that did not
+  // come reads again once this computer's runtime connection returns.
   let modes = $state(undefined)
-  onMount(() => {
-    if (agent.replica) return
+  $effect(() => {
+    if (agent.replica || !connected || untrack(() => modes)) return
     let alive = true
-    void loadModes(tauri, agent.runtimeId).then((value) => { if (alive) modes = value })
+    void readModes(tauri, agent.runtimeId, MODE_RETRY_DELAYS).then((value) => { if (alive && value !== undefined) modes = value })
     return () => { alive = false }
   })
   const shownMode = $derived(findMode(modes, permissions.mode ?? modes?.default_agent_mode))
@@ -76,6 +84,8 @@
     return { value: member.runtime_id, label: machine.name, icon: kindIcon(machine), tag: member.online ? '' : 'Offline' }
   }))
   const projectName = $derived(projects.find(([id]) => id === agent.projectId)?.[1] ?? '')
+  // The agent's model by the name the composer and the picker give it.
+  const modelText = $derived(agent.model ? modelDisplayName(inventory, agent.model.provider, agent.model.id) : 'Default model')
   const thinking = $derived(agent.model ? modelThinking(inventory, { provider: agent.model.provider, model: agent.model.id }) : null)
   const thinkingLevel = $derived(thinking ? (thinking.levels.includes(agent.model.thinking) ? agent.model.thinking : thinking.level) : null)
   // The conversations the history does not reach, such as a chat with the agent.
@@ -84,12 +94,98 @@
     return threads.filter((thread) => !thread.primary && !reached.has(thread.thread_id))
   })
   let instructionsOpen = $state(false)
-  // A card's Delete opens the profile at this confirmation.
+  // Whether the state line's three lines hide part of it at the profile's
+  // width. Measured while it is clamped, and again on each resize.
+  let stateOpen = $state(false)
+  let stateClamped = $state(false)
+  function measureClamp(node) {
+    const measure = () => { if (!node.classList.contains('open')) stateClamped = node.scrollHeight > node.clientHeight + 1 }
+    const sizes = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : null
+    sizes?.observe(node)
+    measure()
+    return { update: measure, destroy: () => sizes?.disconnect() }
+  }
+  // A card's Delete opens the profile at this confirmation, and the
+  // profile's own Delete agent shows it in its place. The confirmation
+  // scrolls into view and its safe choice takes focus once it shows. History,
+  // Memory and other sections draw after the ask and push it down, so for
+  // SETTLE_MS each change of the body's content scrolls it back into view,
+  // and focus that code moved off it returns to Cancel. A pointer, key or
+  // wheel in the profile ends the window, so the user's own moves stand.
+  const SETTLE_MS = 2000
+  let confirmBox = $state()
+  let body
+  let revealDelete = $state(0)
+  let stopSettle = null
+  let askAnswered = 0
+  // Whether the confirmation on screen is the one a card asked for, which
+  // `ondelete` reports as `asked`, so the delete returns to the card's page.
+  let askedDelete = false
   $effect(() => {
-    if (!deleteAsked) return
-    untrack(() => { deleting = true })
-    void tick().then(() => panel?.querySelector('[aria-label="Delete agent"]')?.scrollIntoView?.({ block: 'nearest' }))
+    if (!deleteAsked || deleteAsked === askAnswered) return
+    untrack(() => { askAnswered = deleteAsked; deleting = true; askedDelete = true; revealDelete = deleteAsked })
   })
+  $effect(() => {
+    if (!confirmBox || !revealDelete) return
+    const box = confirmBox
+    untrack(() => { revealDelete = 0; stopSettle?.(); stopSettle = settleDelete(box) })
+  })
+  $effect(() => () => stopSettle?.())
+  // Cancel or Escape puts Delete agent back in the confirmation's place, and
+  // focus returns to it, with the ring when the keys lead. A card's Delete
+  // closed the card's page, so the profile's own button is the opener on that
+  // path too.
+  let deleteRow = $state()
+  async function cancelDelete() {
+    stopSettle?.(); stopSettle = null
+    deleting = false; askedDelete = false; removeMemory = false; removeThreads = false
+    await tick()
+    focusLikeKeys(deleteRow?.querySelector('button:not(:disabled)'))
+  }
+  // While the confirmation shows, Escape anywhere in the profile answers
+  // Cancel, and Tab and Shift+Tab loop through its controls, so focus never
+  // leaves it for a spot that draws no ring.
+  function confirmKeydown(event) {
+    if (!deleting || busy || event.defaultPrevented) return
+    if (event.key === 'Escape') {
+      event.preventDefault(); event.stopPropagation()
+      void cancelDelete()
+      return
+    }
+    if (event.key !== 'Tab' || !confirmBox?.contains(event.target)) return
+    const stops = [...confirmBox.querySelectorAll('button:not(:disabled), input:not(:disabled)')]
+    const edge = event.shiftKey ? stops[0] : stops.at(-1)
+    if (event.target !== edge) return
+    event.preventDefault()
+    focusLikeKeys(event.shiftKey ? stops.at(-1) : stops[0])
+  }
+  function settleDelete(box) {
+    const reveal = () => {
+      if (!box.isConnected) return stop()
+      box.scrollIntoView?.({ block: 'center' })
+      if (!box.contains(document.activeElement)) focusLikeKeys(box.querySelector('[data-safe]'), { preventScroll: true })
+    }
+    let frame = 0
+    const later = () => { if (!frame) frame = requestAnimationFrame(() => { frame = 0; reveal() }) }
+    const sizes = typeof ResizeObserver === 'function' ? new ResizeObserver(later) : null
+    const watch = () => { for (const child of body?.children ?? []) sizes?.observe(child) }
+    const mutations = typeof MutationObserver === 'function' && body ? new MutationObserver(() => { watch(); later() }) : null
+    mutations?.observe(body, { childList: true, subtree: true, characterData: true })
+    watch()
+    const timer = setTimeout(() => stop(), SETTLE_MS)
+    const events = ['pointerdown', 'keydown', 'wheel']
+    for (const name of events) panel?.addEventListener(name, stop, true)
+    function stop() {
+      clearTimeout(timer)
+      if (frame) cancelAnimationFrame(frame)
+      mutations?.disconnect()
+      sizes?.disconnect()
+      for (const name of events) panel?.removeEventListener(name, stop, true)
+      if (stopSettle === stop) stopSettle = null
+    }
+    reveal()
+    return stop
+  }
   const fieldLabel = (field) => field === 'label' ? 'job title' : field
 
   // A click outside the open menu's row closes it.
@@ -117,12 +213,13 @@
   }
   async function endEdit() {
     const field = editing
+    if (errorAt === field) { error = ''; errorAt = null }
     editing = null
     await tick()
     panel?.querySelector(`[aria-label="Edit ${fieldLabel(field)}"]`)?.focus()
   }
-  async function action(work) {
-    busy = true; error = ''
+  async function action(work, at = null) {
+    busy = true; error = ''; errorAt = at
     try { await work() } catch (e) { error = String(e?.message ?? e) }
     finally { busy = false }
   }
@@ -141,7 +238,7 @@
       await saveAgent({ [editing]: value.trim() })
       busy = false
       await endEdit()
-    })
+    }, editing)
   }
   function chooseProject(id) {
     void closeMenu()
@@ -182,25 +279,28 @@
     void closeMenu()
     void action(() => exportAgent(tauri, agent, format))
   }
+  // A run opens through `onopenrun` when the host gives one, which names a
+  // deleted thread, else by its thread id.
   function openRun(entry) {
-    if (entry.thread_id && onopen) return action(() => onopen(entry.thread_id))
     if (onopenrun) return action(() => onopenrun(entry))
+    if (entry.thread_id && onopen) return action(() => onopen(entry.thread_id))
   }
 </script>
-<aside data-panel="agent" class="profile" aria-label="Agent profile" bind:this={panel}>
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+<aside data-panel="agent" class="profile" aria-label="Agent profile" bind:this={panel} onkeydown={confirmKeydown}>
   <!-- The header carries the accent edge in the agent's color, as the title pill does. -->
   <header data-panel-header data-accent-edge="top" style:--edge-color={agentColor(agent)}><h2>Agent profile</h2><button data-panel-control class="quiet" aria-label="Collapse agent profile" onclick={onclose}><LucideIcon name="panel-right-close" size={16} /></button></header>
-  <div class="body" use:panelScroll>
+  <div class="body" use:panelScroll bind:this={body}>
     {#if agent.replica}
       <div class="avatar"><AgentAvatar {agent} {activity} size={92} /></div>
-      {#if activity !== undefined}<p class="state record" data-state={activityState(activity)}>{activityLabel(activity)}</p>{/if}
+      {@render stateLine()}
       <section class="field"><div class="field-heading"><h3>Name</h3></div><p class="name">{agent.name}</p></section>
       {#if agent.label}<section class="field"><div class="field-heading"><h3>Job title</h3></div><p>{agent.label}</p></section>{/if}
       <div class="settings">{@render primaryMachine()}</div>
       <p class="muted">Its instructions, tools, routines and memory live on {primary.name}. Pair this device with that machine to change them.</p>
     {:else}
     <div class="avatar"><AgentAvatar {agent} {activity} size={92} /><button class="edit quiet" aria-label="Generate another avatar" disabled={busy} onclick={() => change({ avatar: newAvatar() })}><LucideIcon name="refresh-cw" size={14} /></button></div>
-    {#if activity !== undefined}<p class="state record" data-state={activityState(activity)}>{activityLabel(activity)}</p>{/if}
+    {@render stateLine()}
     {#each [['name', 'Name'], ['label', 'Job title'], ['instructions', 'Instructions']] as [field, label]}
       <section class="field">
         <div class="field-heading"><h3>{label}</h3>{#if editing !== field}<button class="edit quiet" disabled={busy} aria-label={`Edit ${fieldLabel(field)}`} onclick={() => edit(field)}><LucideIcon name="pencil" size={14} /></button>{/if}</div>
@@ -208,8 +308,9 @@
           <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
           <form aria-label={`Edit ${label}`} onsubmit={event => { event.preventDefault(); void save() }} onkeydown={event => { if (event.key === 'Escape' && !busy) { event.stopPropagation(); void endEdit() } }}>
             {#if field === 'instructions'}<textarea aria-label="Instructions" rows="12" bind:value required disabled={busy}></textarea><small>Saving can propose routines from schedules in the instructions.</small>
-            {:else}<input aria-label={label} bind:value maxlength={field === 'name' ? 100 : 120} required={field === 'name'} disabled={busy} />{/if}
+            {:else}<input aria-label={label} bind:value maxlength={field === 'name' ? 100 : 120} required={field === 'name'} spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" disabled={busy} />{/if}
             <div class="actions"><button type="submit" data-variant="primary" disabled={busy || (['name','instructions'].includes(field) && !value.trim())}>Save</button><button type="button" disabled={busy} onclick={endEdit}>Cancel</button></div>
+            {#if error && errorAt === field}<p role="alert">{error}</p>{/if}
           </form>
         {:else}
           {#if field === 'instructions' && (agent.instructions || '').length > 400}<p class:clamped={!instructionsOpen}>{agent.instructions}</p><button class="more" aria-expanded={instructionsOpen} onclick={() => { instructionsOpen = !instructionsOpen }}>{instructionsOpen ? 'Show less' : 'Show all'}</button>
@@ -229,7 +330,7 @@
       <section class="setting" aria-label="Model" data-profile-menu={menu === 'thinking' ? 'thinking' : 'model'}>
         <h3>Model</h3>
         <span class="control">
-          <ComposerMenuButton menu="agent-model" open={menu === 'model'} chevrons haspopup="dialog" label={`Model: ${agent.model ? agent.model.id : 'Default model'}`} text={agent.model ? agent.model.id : 'Default model'} disabled={busy} onclick={() => toggleMenu('model')}>{#snippet icon()}{#if agent.model}<ProviderLogo provider={agent.model.provider} size={14} />{:else}<LucideIcon name="cpu" size={14} />{/if}{/snippet}</ComposerMenuButton>
+          <ComposerMenuButton menu="agent-model" open={menu === 'model'} chevrons haspopup="dialog" label={`Model: ${modelText}`} text={modelText} disabled={busy} onclick={() => toggleMenu('model')}>{#snippet icon()}{#if agent.model}<ProviderLogo provider={agent.model.provider} size={14} />{:else}<LucideIcon name="cpu" size={14} />{/if}{/snippet}</ComposerMenuButton>
           {#if thinking}<ComposerMenuButton menu="agent-thinking" open={menu === 'thinking'} label={`Thinking level: ${thinkingLabel(thinkingLevel)}`} text={thinkingLabel(thinkingLevel)} disabled={busy} onclick={() => toggleMenu('thinking')}>{#snippet icon()}<LucideIcon name="brain" size={14} />{/snippet}</ComposerMenuButton>{/if}
         </span>
         {#if menu === 'model'}<ModelPicker {inventory} current={agent.model ? { provider: agent.model.provider, model: agent.model.id } : null} source="this agent" actions={agent.model ? [{ id: 'default', label: 'Use the default model' }] : []} onaction={() => { void closeMenu(); void change({ model: null }) }} onchoose={chooseModel} {onvisibility} onmanage={() => { menu = null; onmanagemodels() }} onrouting={() => { menu = null; onmanagemodels() }} onclose={closeMenu} />{/if}
@@ -272,7 +373,7 @@
 
     <RoutinesPanel {agent} {tauri} {catalog} {webhooks} disabled={busy} {onchange} />
 
-    <RunHistory {tauri} {agent} {runs} disabled={busy} {onrun} onopen={onopen || onopenrun ? openRun : null} />
+    <RunHistory {tauri} {agent} {runs} {connected} disabled={busy} {onrun} onopen={onopen || onopenrun ? openRun : null} />
 
     {#if chats.length}
       <section class="field" aria-label="Conversations">
@@ -294,19 +395,31 @@
         {#if menu === 'export'}<ChoiceMenu label="Export agent" options={[{ value: 'muniment', label: 'Muniment agent file', icon: 'download' }, { value: 'grok_bot', label: 'Grok Bot notes', icon: 'file-text' }]} onchoose={chooseExport} onclose={closeMenu} />{/if}
       </div>
       {#if deleting}
-        <div class="confirm" role="group" aria-label="Delete agent">
+        <div class="confirm" role="group" aria-label="Delete agent" bind:this={confirmBox}>
+          <p class="muted" aria-live="polite">{removeThreads ? 'Its threads will be deleted.' : 'Its threads move to Archived.'}</p>
           <label class="check"><input type="checkbox" bind:checked={removeMemory} disabled={busy} />Also delete its memory</label>
-          <div class="actions"><Button variant="danger" disabled={busy} onclick={() => action(async () => { await agentRequest(tauri, agent.runtimeId, 'agent.delete', { id: agent.id, remove_memory: removeMemory }); ondelete() })}>Confirm delete</Button><Button disabled={busy} onclick={() => { deleting = false; removeMemory = false }}>Cancel</Button></div>
+          <label class="check"><input type="checkbox" bind:checked={removeThreads} disabled={busy} />Also delete its threads</label>
+          <div class="actions"><Button variant="danger" disabled={busy} onclick={() => action(async () => { const answer = await agentRequest(tauri, agent.runtimeId, 'agent.delete', { id: agent.id, remove_memory: removeMemory }); ondelete(answer, { removeThreads, asked: askedDelete }) })}>Confirm delete</Button><Button data-safe disabled={busy} onclick={cancelDelete}>Cancel</Button></div>
         </div>
-      {:else}<div class="delete-row"><Button variant="danger" icon="trash-2" disabled={busy || runActive(run?.status)} onclick={() => { deleting = true }}>Delete agent</Button></div>{/if}
+      {:else}<div class="delete-row" bind:this={deleteRow}><Button variant="danger" icon="trash-2" disabled={busy || runActive(run?.status)} onclick={() => { deleting = true; askedDelete = false; revealDelete = -1 }}>Delete agent</Button></div>{/if}
     </div>
     {/if}
     {#if notice}<p class="muted" role="status">{notice}</p>{/if}
-    {#if error}<p role="alert">{error}</p>{/if}
+    {#if error && !(errorAt && errorAt === editing)}<p role="alert">{error}</p>{/if}
   </div>
 </aside>
 
 <!-- The primary machine shows once the fleet has another machine to move to. A pick there starts the move. -->
+<!-- The state line wraps to three lines. A reason those lines clip shows
+     whole behind Show all, so no reason ends unread in an ellipsis. A state
+     reads in the UI face, whose ellipsis a mono cell would shrink to a dot. -->
+{#snippet stateLine()}
+  {#if activity !== undefined}
+    {@const label = activityLabel(activity)}
+    <p class="state" class:open={stateOpen} data-state={activityState(activity)} use:measureClamp={[label, stateOpen]}>{label}</p>
+    {#if stateOpen || stateClamped}<button class="more state-more" aria-expanded={stateOpen} onclick={() => { stateOpen = !stateOpen }}>{stateOpen ? 'Show less' : 'Show all'}</button>{/if}
+  {/if}
+{/snippet}
 {#snippet primaryMachine()}
   {#if movable || agent.replica}
     <section class="setting" aria-label="Primary machine" data-profile-menu="machine">
@@ -342,7 +455,8 @@
   .field-heading { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-height: 24px; }
   h3 { flex: none; margin: 0; color: var(--muted); font-size: var(--text-12); font-weight: 500; }
   /* One heading and its select per row, as the composer draws its menus. Each menu opens under its row. */
-  .settings { display: grid; gap: 2px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+  /* The column holds the profile's width, so a long name ends in its ellipsis, never past the edge. */
+  .settings { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; padding: 8px 0; border-bottom: 1px solid var(--border); }
   .setting { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 28px; }
   .control { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px; min-width: 0; }
   .control > :global(button) { flex: 0 1 auto; min-width: 0; }
@@ -377,7 +491,9 @@
   .link { line-height: 1.4; padding: 2px 4px; }
   .record { font-family: var(--font-mono); font-size: var(--text-12); }
   .muted { color: var(--muted); font-size: var(--text-12); }
-  .state { display: -webkit-box; margin: 0 0 4px; overflow: hidden; color: var(--muted); text-align: center; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+  .state { display: -webkit-box; margin: 0 0 4px; overflow: hidden; color: var(--muted); font: var(--text-12) / 1.5 var(--font-human); text-align: center; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+  .state.open { display: block; }
+  .state-more { display: block; margin: 0 auto 4px; }
   .state[data-state="waiting"] { color: var(--warning); }
   .state[data-state="error"] { color: var(--danger); }
   .skill span { display: grid; gap: 2px; }

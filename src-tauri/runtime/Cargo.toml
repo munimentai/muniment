@@ -8,3 +8,7 @@ muniment-attach = { path = "../../core/crates/attach", features = ["client"] }
 muniment-core = { path = "../../core/crates/core", features = ["keyring", "tls"] }
 muniment-desktop-integration = { path = "../integration", features = ["keyring"] }
 muniment-runtime-core = { path = "../../core/crates/runtime" }
+
+[dev-dependencies]
+# Marks the core as a test build, so no test writes the owner's runtime logs.
+muniment-core = { path = "../../core/crates/core", features = ["keyring", "tls", "test-build"] }

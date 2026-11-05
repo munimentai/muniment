@@ -5,6 +5,7 @@
 // picks the runtime a request goes to.
 import { LOCAL_RUNTIME_ID, machineName } from '../runtimes/runtimes.js'
 import { agentRequest, agentRuntimes } from './agent-runtime.js'
+import { elapsedSince } from '../lib/relative-time.js'
 
 export function emptySwarm() {
   return {
@@ -90,6 +91,18 @@ export async function listSwarm(tauri, runtimeList) {
   return withLocalSelf(mergeSwarm(answers), runtimeList)
 }
 
+// What the keychain refused this computer, from its own `swarm.members`
+// answer to `{ keychain: true }`, which core gives with remote access off
+// too: the fleet key and the other secrets core holds back, or null when
+// the keychain refused nothing. `declined` is true when the person turned
+// the keychain's prompt down, which only Try again or a restart asks again.
+export function keychainRefusal(view) {
+  const items = [...(view?.fleet_key?.state ? [{ label: 'fleet key', state: view.fleet_key.state }] : []), ...(Array.isArray(view?.keychain) ? view.keychain : [])]
+  const labels = [...new Set(items.map((item) => String(item.label ?? '')).filter(Boolean))]
+  if (!labels.length) return null
+  return { declined: items.some((item) => item.state === 'declined'), labels }
+}
+
 // This computer's fleet id when its own `swarm.members` did not answer this
 // time, such as while it was busy: the one member that no reached machine
 // is and that carries this computer's name. So this computer never lists as
@@ -137,9 +150,13 @@ export function memberMachine(swarm, coreId, runtimeList = null) {
 // Every agent the window lists: each agent a machine answered for, then each
 // agent only the swarm directory names. Each carries its primary machine,
 // whether that machine answers, and `replica` when the app sees it only
-// through a member's synced copy.
+// through a member's synced copy. An agent whose primary machine this
+// window reaches waits for that machine's own listing, so its synced copy
+// never stands in for it while that machine has not answered yet.
 export function swarmRoster(listing, swarm, runtimeList = null) {
   const listed = new Set()
+  const waiting = (entry) => Array.isArray(listing?.answered) && Object.entries(swarm?.self ?? {})
+    .some(([runtimeId, coreId]) => coreId === entry.primary_runtime && !listing.answered.includes(runtimeId))
   const roster = (listing?.agents ?? []).map((agent) => {
     listed.add(agent.id)
     const entry = swarm?.agents?.find((item) => item.agent_id === agent.id)
@@ -147,7 +164,7 @@ export function swarmRoster(listing, swarm, runtimeList = null) {
     return { ...agent, primaryRuntime: primary, primaryThread: entry?.primary_thread ?? null, replica: false }
   })
   for (const entry of swarm?.agents ?? []) {
-    if (listed.has(entry.agent_id)) continue
+    if (listed.has(entry.agent_id) || waiting(entry)) continue
     roster.push({
       id: entry.agent_id,
       name: entry.name,
@@ -243,8 +260,8 @@ export function applyApproval(approvals, update) {
 export function linkLabel(link, now = Date.now()) {
   if (!link) return 'Through another machine'
   const seen = Date.parse(link.last_seen_at ?? '')
-  const minutes = Number.isFinite(seen) ? Math.max(0, Math.round((now - seen) / 60_000)) : null
-  const ago = minutes === null ? '' : minutes < 1 ? ' · now' : minutes < 60 ? ` · ${minutes}m ago` : ` · ${Math.round(minutes / 60)}h ago`
+  const since = Number.isFinite(seen) ? elapsedSince(seen, now) : null
+  const ago = !since ? '' : since.unit === 'now' ? ' · now' : ` · ${since.count}${since.unit} ago`
   if (link.state === 'connected') return `Connected${ago}`
   if (link.state === 'revoked') return 'Access revoked. Join the machines again.'
   return `Retrying${link.last_error ? `: ${link.last_error}` : ''}`

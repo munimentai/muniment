@@ -8,19 +8,19 @@
   import Button from './ui/Button.svelte'
   import SegmentedField from './ui/SegmentedField.svelte'
   import LucideIcon from './LucideIcon.svelte'
-  import AgentAvatar from './AgentAvatar.svelte'
   import PopupClose from './PopupClose.svelte'
   import { dialogDismiss } from './dialog-dismiss.js'
   import MemoryImports from './MemoryImports.svelte'
   import { RECALL_DEFAULTS, loadRecall, saveRecall } from './memory-recall.js'
   import { formatDateTime } from './time-format.svelte.js'
+  import { factThread, openThread, sourceLabel, threadTitles } from './memory-source.js'
   // `part` shows one Settings page: profile, memory, or both for an agent.
-  // `agent` is the agent whose memory shows from its profile: a new fact's
-  // source names it, and its avatar marks that source. `addInPlace` shows
+  // `agent` is the agent whose memory shows from its profile. A fact the
+  // person adds there reads Added by you, as its trust does. `addInPlace` shows
   // the Add memory form in place of the list, for a host that is already a
   // dialog, and `onadding` tells the host when the form shows.
   let { tauri, agentId = null, agent = null, part = 'all', addInPlace = false, onadding = () => {} } = $props()
-  const newSource = $derived(agent ? `Added by ${agent.name} agent` : 'Added in settings')
+  const newSource = $derived(agent ? 'Added by you' : 'Added in settings')
   const showProfile = $derived(!agentId && part !== 'memory')
   const showMemory = $derived(part !== 'profile')
   // New chats read these choices from the profile.
@@ -45,6 +45,20 @@
     ['ask', 'Ask before saving', 'New memories, edits and deletes wait for your approval, in the chat or under Saved memories.'],
     ['use', 'Use memories in replies', 'Each chat starts with your most recalled facts and searches for the rest.'],
   ]
+  // Whether no model can save facts: the inventory names no signed-in
+  // provider and routing names no enabled account. Null until both answer.
+  let noModel = $state(null)
+  async function loadModelReach() {
+    try {
+      const [inventory, routing] = await Promise.all([
+        tauri.invoke('local_mode_provider_inventory', { cached: true }),
+        tauri.invoke('model_router_settings'),
+      ])
+      const providers = inventory?.providers?.length ?? 0
+      const accounts = (routing?.accounts ?? []).filter((account) => account.enabled !== false).length
+      noModel = providers === 0 && accounts === 0
+    } catch (_) { noModel = null }
+  }
   const TRUST = {
     user: 'Added by you',
     conversation: 'Saved from a chat',
@@ -63,6 +77,9 @@
   }
   const memory = { invoke: (action, args = {}) => agentId ? tauri.invoke("agent_memory", { id: agentId, action, fact: args.fact, factId: args.id }) : tauri.invoke(action, args) }
   let profile = $state(parseProfile())
+  // Save profile waits for a change from the saved profile.
+  let savedProfile = $state(serializeProfile(parseProfile()))
+  const profileChanged = $derived(serializeProfile(profile) !== savedProfile)
   let facts = $state([])
   let filter = $state('')
   let showDeleted = $state(false)
@@ -124,6 +141,14 @@
   const OP = { add: 'Add', update: 'Update', delete: 'Delete' }
   const when = { format: formatDateTime }
   let pending = $state([])
+  // A source names the thread a fact came from by its title, read once per set of threads.
+  let titles = $state(new Map())
+  const threadIds = $derived([...new Set([...facts, ...pending].map(factThread).filter(Boolean))].sort().join(' '))
+  $effect(() => {
+    const ids = threadIds
+    if (!ids) return
+    void threadTitles(tauri, ids.split(' ')).then((found) => { titles = found }).catch(() => {})
+  })
   let reviewing = $state(false)
   // A failed apply keeps its row and error until the user closes it, even
   // after the reload drops the proposal.
@@ -180,10 +205,12 @@
     void loadPending()
     if (part === 'memory' && !agentId) {
       loadRecall(tauri).then((value) => { recall = value; recallLoaded = true }).catch((e) => { status = String(e) })
+      void loadModelReach()
     }
     try {
       const [text, rows] = await Promise.all([agentId ? Promise.resolve('') : memory.invoke('memory_profile_read'), memory.invoke('memory_facts')])
       profile = parseProfile(text)
+      savedProfile = serializeProfile(profile)
       facts = rows
       loaded = true
     } catch (e) { status = String(e) }
@@ -191,7 +218,8 @@
   })
   async function saveProfile() {
     busy = true
-    try { await memory.invoke('memory_profile_save', { content: serializeProfile(profile) }); status = 'Profile saved. New replies use these preferences.' }
+    const content = serializeProfile(profile)
+    try { await memory.invoke('memory_profile_save', { content }); savedProfile = content; status = 'Profile saved. New replies use these preferences.' }
     catch (e) { status = String(e) }
     finally { busy = false }
   }
@@ -271,7 +299,7 @@
     <PageHead intro={part === 'profile' ? 'Your profile guides replies.' : 'Your profile and saved facts guide replies.'}>
       {#snippet actions()}
         <label class="import">Load Markdown<input type="file" accept=".md,.txt,text/plain,text/markdown" disabled={!loaded || busy} onchange={importProfile} /></label>
-        <Button variant="primary" disabled={!loaded || busy} onclick={saveProfile}>Save profile</Button>
+        <Button variant="primary" disabled={!loaded || busy || !profileChanged} onclick={saveProfile}>Save profile</Button>
       {/snippet}
     </PageHead>
     <Group heading="About you" info="Saved in memory/profile.md.">
@@ -295,7 +323,10 @@
     {#if part === 'memory'}
       <Group heading="Recall">
         {#each RECALL as [key, label, help] (key)}
-          <Row title={label} info={help}><Toggle checked={recall[key]} {label} disabled={!recallLoaded || recallSaving || (key === 'ask' && !recall.learn)} onchange={(on) => changeRecall(key, on)} /></Row>
+          <Row title={label} info={help}>
+            {#snippet detail()}{#if key === 'learn' && recall.learn && noModel}<p class="recall-notice" role="status">No model can save facts. Connect one in Models.</p>{/if}{/snippet}
+            <Toggle checked={recall[key]} {label} disabled={!recallLoaded || recallSaving || (key === 'ask' && !recall.learn)} onchange={(on) => changeRecall(key, on)} />
+          </Row>
         {/each}
       </Group>
       <MemoryImports {tauri} />
@@ -320,7 +351,7 @@
       {/if}
       {#if facts.length}
         <div class="toolbar">
-          <input class="search" type="search" autocomplete="off" aria-label="Search memories" placeholder="Search memories" bind:value={filter} oninput={() => { limit = PAGE }} />
+          <input class="search" type="search" spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" aria-label="Search memories" placeholder="Search memories" bind:value={filter} oninput={() => { limit = PAGE }} />
           {#if unconfirmed || trustFilter !== 'all'}
             <SegmentedField hideLabel label="Show memories" value={trustFilter} options={[{ value: 'all', label: 'All' }, { value: 'external', label: `Unconfirmed (${unconfirmed})` }]} onchange={(value) => { trustFilter = value; limit = PAGE }} />
           {/if}
@@ -383,13 +414,13 @@
         {:else}
           <p class="fact-content">{fact.content}</p>
           <dl class="fact-meta">
-            <dt>Source</dt><dd class="record">{fact.source}</dd>
+            <dt>Source</dt>{@render source(fact)}
             {#if TRUST[fact.trust]}<dt>Trust</dt><dd>{TRUST[fact.trust]}</dd>{/if}
           </dl>
           <div class="fact-actions">
             {#if list === 'deleted'}<Button disabled={busy} aria-label={`Restore ${fact.title}`} onclick={() => restoreFact(fact.id)}>Restore</Button>
             {:else if deleting === fact.id}
-              <Button disabled={busy} onclick={() => removeFact(fact.id)}>Confirm delete</Button>
+              <Button variant="danger" disabled={busy} onclick={() => removeFact(fact.id)}>Confirm delete</Button>
               <Button onclick={() => { deleting = '' }}>Cancel</Button>
             {:else if fact.trust !== 'external'}
               <Button disabled={busy} onclick={() => editFact(fact)}>Edit</Button>
@@ -400,6 +431,11 @@
       </div>
     {/if}
   </li>
+{/snippet}
+{#snippet source(entry)}
+  {@const thread = factThread(entry)}
+  {@const title = titles.get(thread)}
+  <dd>{sourceLabel(entry)}{#if title}{' · '}<button type="button" class="thread-link" aria-label={`Open ${title}`} onclick={() => openThread(thread)}>{title}</button>{/if}</dd>
 {/snippet}
 {#snippet proposalRow(proposal)}
   {@const key = `pending:${proposal.id}`}
@@ -430,7 +466,7 @@
           </div>
         {/if}
         <dl class="fact-meta">
-          <dt>Source</dt><dd class="record">{proposal.source}</dd>
+          <dt>Source</dt>{@render source(proposal)}
           <dt>Suggested</dt><dd>{suggested(proposal.created)}</dd>
         </dl>
         {#if error}<p class="error" role="alert">{error}</p>{/if}
@@ -446,7 +482,7 @@
   <form class="fact-form" onsubmit={saveFact}>
     <label class="field">Title<input bind:this={titleInput} bind:value={draft.title} maxlength="200" required disabled={!loaded || busy} /></label>
     <label class="field">Fact<textarea bind:value={draft.content} rows="3" required disabled={!loaded || busy}></textarea></label>
-    <label class="field">Source<span class="source-value">{#if agent && draft.source === newSource}<AgentAvatar {agent} size={16} />{/if}<input bind:value={draft.source} required disabled={!loaded || busy} /></span></label>
+    <label class="field">Source<span class="source-value"><input bind:value={draft.source} required disabled={!loaded || busy} /></span></label>
     <div class="field-actions">
       <Button onclick={cancel}>{cancelLabel}</Button>
       <Button type="submit" disabled={!loaded || busy}>Save memory</Button>
@@ -457,6 +493,7 @@
   /* Profile and Memory build from PageHead, Group and Row like every Settings
      page. Form fields sit in their Group card, one per row. */
   .memory { display: grid; gap: var(--page-gap, 28px); }
+  .recall-notice { margin: 0; color: var(--warning); font-size: var(--text-13); }
   p { margin: 0; color: var(--muted); font-size: var(--text-13); }
   .field { display: grid; gap: 6px; padding: 12px 0; color: var(--muted); font-size: var(--text-13); }
   .field-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 10px 0; }
@@ -508,7 +545,7 @@
   .fact-meta { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 0; font-size: var(--text-12); }
   .fact-meta dt { color: var(--muted); }
   .fact-meta dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
-  .record { font-family: var(--font-mono); }
+  .thread-link { padding: 0; border: 0; background: none; color: var(--ink); font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
   .fact-actions { display: flex; flex-wrap: wrap; gap: 8px; }
   .fact-actions:empty { display: none; }
   .fact-form { display: grid; gap: 12px; }

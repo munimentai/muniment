@@ -10,7 +10,7 @@
   import RoutineRow from './RoutineRow.svelte'
   import { agentRequest } from './agent-runtime.js'
   import { conditionLabel } from './condition.js'
-  import { isProposal, routineWhen } from './routine-labels.js'
+  import { DEFAULT_TIME_NOTE, hasPickedTime, isProposal, routineWhen } from './routine-labels.js'
 
   let { agent, tauri, catalog = null, webhooks = true, disabled = false, onchange = async () => {} } = $props()
   let editing = $state(null)
@@ -68,6 +68,7 @@
       <p class="kicker">{routine.id?.startsWith('import-') ? 'Proposed from the imported template' : 'Proposed from instructions'}</p>
       <strong>{routine.name}</strong>
       <p class="when">{routineWhen(routine)}</p>
+      {#if hasPickedTime(routine)}<p class="picked" role="note">{DEFAULT_TIME_NOTE}</p>{/if}
       {#if routine.trigger?.kind === 'mcp' && routine.trigger.condition}<p class="record">When {conditionLabel(routine.trigger.condition)}</p>{/if}
       {#if routine.prompt}<p class="prompt">{routine.prompt}</p>{/if}
       <div class="actions">
@@ -100,6 +101,7 @@
   .prompt { margin: 0; font-size: var(--text-12); line-height: 1.5; overflow-wrap: anywhere; }
   .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
   .when { margin: 0; color: var(--muted); font: var(--text-12) var(--font-human); }
+  .picked { margin: 0; color: var(--warning); font: var(--text-12) var(--font-human); }
   .record { margin: 0; color: var(--muted); font: var(--text-12) var(--font-mono); overflow-wrap: anywhere; }
   .empty, .note { margin: 0; color: var(--muted); font-size: var(--text-12); }
   [role="alert"] { margin: 0; color: var(--danger); font-size: var(--text-12); }

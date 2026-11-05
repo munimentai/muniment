@@ -67,6 +67,21 @@ it('places actions between the text that precedes and follows them', () => {
   ])
 })
 
+it('places a message sent during the reply at the text it preceded, after the actions there', () => {
+  const action = { effectId: 'search', textOffset: 4 }
+  expect(responseParts({ text: 'echofoxtrot', toolActivity: [action], steers: [{ text: 'foxtrot', textOffset: 4 }] })).toEqual([
+    { type: 'text', text: 'echo' },
+    { type: 'actions', activities: [action] },
+    { type: 'steer', text: 'foxtrot' },
+    { type: 'text', text: 'foxtrot' },
+  ])
+  // A message the reply has not reached yet sits at its end.
+  expect(responseParts({ text: 'echo', steers: [{ text: 'next', textOffset: 9 }] })).toEqual([
+    { type: 'text', text: 'echo' },
+    { type: 'steer', text: 'next' },
+  ])
+})
+
 // The drive's answer as core sends it: two scripts of one web search each.
 // Core gives each script its call's kind and marks it uncounted.
 const script = (effectId, kind = 'web') => ({ effectId, displayName: 'codemode', status: 'completed', uncounted: true, input: JSON.stringify({ code: 'const r = await tools.web_search({}); text(r);' }), output: 'done', presentation: { category: 'code', kind, icon: 'file-code', headline: 'Run a script that uses Web search', progress: 'Running a script', result: 'Script completed', details: [{ label: 'Script', value: '1 line' }] } })

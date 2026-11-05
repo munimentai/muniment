@@ -19,6 +19,31 @@ pub struct Creation {
     /// it with, oldest first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub turns: Vec<DraftTurn>,
+    /// The chat's last known short name, so a creation keeps its heading
+    /// when the thread list no longer holds the chat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// When the record was first saved, RFC 3339. A save keeps the first
+    /// time, and a record saved before it kept one holds none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+}
+impl Creation {
+    /// When the chat became a creation chat: the record's first save, or the
+    /// first turn of a record saved before it kept that time.
+    pub fn started_at(&self) -> Option<String> {
+        self.created_at
+            .clone()
+            .or_else(|| self.turns.first().map(|turn| turn.at.clone()))
+    }
+}
+/// A creation chat an agent delete may take with the agent, with the time
+/// it became one. The delete keeps a thread that held a message before then.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CreationChat {
+    pub thread_id: String,
+    /// RFC 3339. None for a thread no record names.
+    pub started_at: Option<String>,
 }
 /// One message of an agent's creation chat and the draft `agent.draft`
 /// answered it with.
@@ -64,10 +89,27 @@ pub fn save(profile: &Path, mut item: Creation) -> Result<Creation, String> {
     }
     item.goal = item.goal.trim().into();
     item.output = item.output.trim().into();
-    // A save that carries no turns keeps the chat's turns.
-    if item.turns.is_empty() {
-        if let Some(saved) = read(profile, &item.thread_id)? {
-            item.turns = saved.turns;
+    item.title = item
+        .title
+        .map(|title| title.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|title| !title.is_empty() && title.chars().count() <= 80);
+    // A save that carries no turns keeps the chat's turns, and a save that
+    // carries no title keeps the chat's title.
+    match read(profile, &item.thread_id)? {
+        Some(saved) => {
+            if item.turns.is_empty() {
+                item.turns = saved.turns;
+            }
+            if item.title.is_none() {
+                item.title = saved.title;
+            }
+            // A record keeps the time it was first saved.
+            item.created_at = saved.created_at;
+        }
+        None => {
+            if item.created_at.is_none() {
+                item.created_at = Some(chrono::Utc::now().to_rfc3339());
+            }
         }
     }
     let path = record_path(profile, &item.thread_id)?;
@@ -198,6 +240,8 @@ pub fn publish(
         output: "An interactive HTML artifact".into(),
         result_id: None,
         turns: Vec::new(),
+        title: None,
+        created_at: None,
     });
     if plan.kind == "artifact" {
         plan.result_id = Some(item.id.clone());
@@ -213,6 +257,48 @@ pub fn remove(profile: &Path, thread: &str) -> Result<(), String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e.to_string()),
     }
+}
+
+/// What a draft delete left in place.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct DraftDeleted {
+    /// The draft's folder, kept because it holds the user's files.
+    pub folder_kept: Option<PathBuf>,
+    /// Whether the draft's thread stays where it is, because it held the
+    /// user's messages before the draft.
+    pub thread_kept: bool,
+}
+
+/// Deletes a creation chat's record. A draft that saved no agent or artifact
+/// also loses its session folder when that holds only Muniment's own files,
+/// as a thread delete does. An agent draft with no turns is a plan a reply
+/// kept in a thread that holds the user's messages, so only its record goes
+/// and the thread stays with its folder, which the answer says. A draft
+/// chat keeps its messages as turns.
+pub fn delete_draft(profile: &Path, thread: &str) -> Result<DraftDeleted, String> {
+    let (draft, thread_kept) = match read(profile, thread).ok().flatten() {
+        Some(item) if item.result_id.is_none() => {
+            let users = item.kind == "agent" && item.turns.is_empty();
+            (!users, users)
+        }
+        _ => (false, false),
+    };
+    remove(profile, thread)?;
+    let folder_kept = if draft {
+        crate::projects::remove_thread_folder(profile, thread)?
+    } else {
+        None
+    };
+    Ok(DraftDeleted {
+        folder_kept,
+        thread_kept,
+    })
+}
+
+/// Deletes a creation chat's record as [`delete_draft`] does. Answers the
+/// folder when it stays because it holds the user's files.
+pub fn delete(profile: &Path, thread: &str) -> Result<Option<PathBuf>, String> {
+    delete_draft(profile, thread).map(|deleted| deleted.folder_kept)
 }
 
 pub fn artifact_folder(profile: &Path, id: &str) -> Result<PathBuf, String> {
@@ -270,6 +356,29 @@ pub fn edit_artifact(profile: &Path, id: &str, name: Option<&str>) -> Result<(),
 mod tests {
     use super::*;
     #[test]
+    fn a_save_without_a_title_keeps_the_chat_title() {
+        let profile = std::env::temp_dir().join(format!("creation-{}", uuid::Uuid::new_v4()));
+        let thread = uuid::Uuid::new_v4().to_string();
+        let record = |title: Option<&str>| Creation {
+            thread_id: thread.clone(),
+            kind: "agent".into(),
+            goal: "Report the project status every morning to the owner".into(),
+            output: "A saved agent".into(),
+            result_id: None,
+            turns: Vec::new(),
+            title: title.map(Into::into),
+            created_at: None,
+        };
+        save(&profile, record(Some("  Muniment   Project Status "))).unwrap();
+        save(&profile, record(None)).unwrap();
+        let kept = read(&profile, &thread).unwrap().unwrap();
+        assert_eq!(kept.title.as_deref(), Some("Muniment Project Status"));
+        save(&profile, record(Some(&"x".repeat(81)))).unwrap();
+        let kept = read(&profile, &thread).unwrap().unwrap();
+        assert_eq!(kept.title.as_deref(), Some("Muniment Project Status"));
+        let _ = fs::remove_dir_all(profile);
+    }
+    #[test]
     fn publication_updates_one_output_and_preserves_its_name() {
         let root = std::env::temp_dir().join(format!("creation-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
@@ -306,6 +415,79 @@ mod tests {
         assert!(list(&profile).unwrap().is_empty());
         remove(&profile, &thread).unwrap();
         assert!(remove(&profile, "../outside").is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn deleting_a_draft_removes_its_folder_unless_it_holds_the_users_files() {
+        let root = std::env::temp_dir().join(format!("creation-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let profile = root.join("profile");
+        let home = root.join("home");
+        crate::home::confirm_home(&profile, &home).unwrap();
+        let sessions = home.join("sessions");
+        // A draft chat keeps each message it sent as a turn.
+        let draft = |thread: &str| Creation {
+            thread_id: thread.into(),
+            kind: "agent".into(),
+            goal: "Summarize my inbox every morning".into(),
+            output: "A saved agent".into(),
+            result_id: None,
+            turns: vec![DraftTurn {
+                message: "Summarize my inbox every morning".into(),
+                at: "2026-08-06T12:00:00Z".into(),
+                ..Default::default()
+            }],
+            title: None,
+            created_at: None,
+        };
+        // The Files view of a draft chat names its folder after the chat.
+        let folder_of = |thread: &str| {
+            crate::workspace_names::resolve(&profile, &sessions, thread, Some("New agent"), None)
+                .unwrap()
+        };
+
+        let empty = uuid::Uuid::new_v4().to_string();
+        save(&profile, draft(&empty)).unwrap();
+        let folder = folder_of(&empty);
+        assert!(folder.ends_with(crate::workspace_names::basename("New agent", &empty)));
+        fs::write(folder.join(".DS_Store"), "").unwrap();
+        // A draft chat's thread goes with its draft.
+        assert_eq!(
+            delete_draft(&profile, &empty).unwrap(),
+            DraftDeleted {
+                folder_kept: None,
+                thread_kept: false,
+            }
+        );
+        assert!(!folder.exists());
+        assert!(read(&profile, &empty).unwrap().is_none());
+        assert_eq!(
+            crate::workspace_names::recorded(&profile, &sessions, &empty).unwrap(),
+            None
+        );
+
+        let kept = uuid::Uuid::new_v4().to_string();
+        save(&profile, draft(&kept)).unwrap();
+        let folder = folder_of(&kept);
+        fs::write(folder.join("notes.md"), "mine").unwrap();
+        assert_eq!(delete(&profile, &kept).unwrap(), Some(folder.clone()));
+        assert_eq!(fs::read_to_string(folder.join("notes.md")).unwrap(), "mine");
+        assert!(read(&profile, &kept).unwrap().is_none());
+
+        // A chat that saved its agent leaves its folder to the agent delete.
+        let saved = uuid::Uuid::new_v4().to_string();
+        save(
+            &profile,
+            Creation {
+                result_id: Some("agent-1".into()),
+                ..draft(&saved)
+            },
+        )
+        .unwrap();
+        let folder = folder_of(&saved);
+        assert_eq!(delete(&profile, &saved).unwrap(), None);
+        assert!(folder.exists());
+        assert!(read(&profile, &saved).unwrap().is_none());
         fs::remove_dir_all(root).unwrap();
     }
 }

@@ -250,18 +250,25 @@ pub(crate) async fn local_mode_set_model_hidden(
     .map(drop)
 }
 
+/// Disconnects a provider. Answers the sentence that says where its
+/// endpoint key stays and how to remove it when the keychain kept the key.
 #[tauri::command]
 pub(crate) async fn local_mode_disconnect_provider(
     app: tauri::AppHandle,
     provider: String,
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
     model_service::request(
         &app,
         ModelAction::DisconnectProvider,
         data([("provider", json!(provider))]),
     )
     .await
-    .map(drop)
+    .map(|answer| {
+        answer
+            .get("key_kept")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    })
 }
 
 #[tauri::command]
@@ -272,6 +279,7 @@ pub(crate) async fn local_mode_store_endpoint(
     base_url: String,
     key: String,
     models: Vec<String>,
+    tools_off: Option<bool>,
 ) -> Result<String, String> {
     let provider = model_service::request(
         &app,
@@ -282,6 +290,7 @@ pub(crate) async fn local_mode_store_endpoint(
             ("base_url", json!(base_url)),
             ("key", json!(key)),
             ("models", json!(models)),
+            ("tools_off", json!(tools_off)),
         ]),
     )
     .await?;
@@ -294,8 +303,8 @@ mod tests {
     use super::*;
 
     fn temporary_directory() -> std::path::PathBuf {
-        let path =
-            std::env::temp_dir().join(format!("muniment-local-mode-{}", uuid::Uuid::new_v4()));
+        let path = muniment_core::state_root::test_root()
+            .join(format!("muniment-local-mode-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&path).unwrap();
         path
     }

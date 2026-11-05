@@ -6,6 +6,7 @@
 // shapes the form and builds the `agent.save` body. Core owns the draft, the
 // trigger reading and every check on save.
 import { agentRequest } from './agent-runtime.js'
+import { runFailureText } from '../lib/run-failure.js'
 
 // How often the builder asks after a draft, and how long it waits in all.
 export const DRAFT_POLL_MS = 250
@@ -56,9 +57,27 @@ export function formProblem(form) {
 
 // The `agent.save` body for the form. `saved` is the agent an earlier save
 // answered, so a second save keeps its id and avatar. A test save keeps every
-// routine off, so the agent starts itself only after Save.
+// drafted routine off, so the agent starts itself only after Save.
 // A new agent with `projectId` works in that project, so the project gains its triggers.
-export function draftAgent(form, { saved = null, test = false, projectId = null } = {}) {
+// `earlier` holds the routines of the chat's earlier drafts. The saved
+// agent keeps each routine the draft does not name: the ones core proposed,
+// the ones the user or the agent added. A routine an earlier draft drafted,
+// which keeps that draft's id once saved, and the newest one drops is the
+// chat's own change, and it goes. A routine core proposed or the user
+// accepted at an earlier draft's time has its own id, and it stays.
+// A drafted routine keeps its id while its trigger and prompt stay, so a
+// saved routine with that id is the drafted one as the person left it in the
+// profile: on or off, renamed or edited. The saved one goes in its place,
+// unless the newest draft changed it from the earlier draft that named it.
+// A test save sends every drafted routine off.
+export function draftAgent(form, { saved = null, test = false, projectId = null, earlier = [] } = {}) {
+  const before = (routine) => earlier.findLast((other) => other.id === routine.id)
+  const redrafted = (routine) => !!before(routine) && draftShape(before(routine)) !== draftShape(routine)
+  const own = (routine) => !test && !!routine.id && !redrafted(routine) ? (saved?.routines ?? []).find((other) => other.id === routine.id && !other.proposed) : null
+  const drafted = form.routines.map((routine) => own(routine) ?? { ...routine, enabled: test ? false : routine.enabled, proposed: false })
+  const named = (routine, list) => list.some((other) => (!!routine.id && other.id === routine.id) || sameTrigger(other.trigger, routine.trigger))
+  const drafts = (routine) => !!routine.id && earlier.some((other) => other.id === routine.id)
+  const kept = (saved?.routines ?? []).filter((routine) => !named(routine, drafted) && (routine.proposed || !drafts(routine)))
   const agent = {
     ...(saved ?? { id: '', projectId }),
     name: form.name.trim(),
@@ -66,10 +85,42 @@ export function draftAgent(form, { saved = null, test = false, projectId = null 
     instructions: form.instructions.trim(),
     schedule: null,
     skills: [...form.skills],
-    routines: form.routines.map((routine) => ({ ...routine, enabled: test ? false : routine.enabled, proposed: false })),
+    routines: [...drafted, ...kept],
   }
   if (form.mode) agent.permissions = { mode: form.mode }
   return agent
+}
+
+// Whether `next`, an `agent.save` body, saves `saved` unchanged: the same
+// name, label, instructions, skills, permission mode and routines. `next`
+// holds every routine a Save sends: the draft's and the saved ones it keeps.
+// Each routine compares by its name, prompt, trigger, on or off and whether
+// it is a proposal, in any order. What core adds or keeps on a save is no
+// change a person made: routine ids, the picked-time mark, fire times and
+// results, a webhook's id, secret and default sender, and an MCP trigger's
+// empty arguments.
+const routineShape = (routine) => JSON.stringify([routine.name ?? '', routine.prompt ?? '', canonical(triggerShape(routine.trigger ?? null)), routine.enabled !== false, !!routine.proposed && routine.enabled === false])
+const draftShape = (routine) => JSON.stringify([routine.name ?? '', routine.prompt ?? '', canonical(triggerShape(routine.trigger ?? null))])
+const sameTrigger = (left, right) => !!left && !!right && JSON.stringify(canonical(triggerShape(left))) === JSON.stringify(canonical(triggerShape(right)))
+function triggerShape(trigger) {
+  if (trigger?.kind === 'webhook') {
+    const { hook_id: _id, secret_sha256: _secret, ...rest } = trigger
+    return { ...rest, preset: trigger.preset ?? 'generic' }
+  }
+  if (trigger?.kind === 'mcp') return { ...trigger, args: trigger.args ?? {} }
+  return trigger
+}
+function canonical(value) {
+  if (Array.isArray(value)) return value.map(canonical)
+  if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().filter((key) => value[key] !== undefined && value[key] !== null).map((key) => [key, canonical(value[key])]))
+  return value
+}
+const agentShape = (agent) => JSON.stringify([
+  (agent?.name ?? '').trim(), (agent?.label ?? '').trim(), (agent?.instructions ?? '').trim(),
+  [...(agent?.skills ?? [])].sort(), agent?.permissions?.mode ?? '', (agent?.routines ?? []).map(routineShape).sort(),
+])
+export function sameAgent(next, saved) {
+  return !!next && !!saved && agentShape(next) === agentShape(saved)
 }
 
 // The line a test run shows while it runs and after: `{ text, done, failed }`.
@@ -77,7 +128,10 @@ export function draftAgent(form, { saved = null, test = false, projectId = null 
 export function testRunLine(run) {
   const status = run?.status ?? 'queued'
   if (status === 'completed') return { text: run.silent ? 'Test run finished with nothing to post.' : 'Test run finished.', done: true, failed: false }
-  if (status === 'failed' || status === 'interrupted') return { text: run.error ? `Test run failed. ${run.error}` : 'Test run failed.', done: true, failed: true }
+  if (status === 'failed' || status === 'interrupted') {
+    const reason = runFailureText(run.error)
+    return { text: reason ? `Test run failed. ${reason}` : 'Test run failed.', done: true, failed: true }
+  }
   if (status === 'cancelled') return { text: 'Test run cancelled.', done: true, failed: false }
   if (status === 'waiting_input') return { text: 'Test run waits for your answer.', done: false, failed: false }
   if (status === 'running') return { text: 'Test run running. Its triggers stay off until you save.', done: false, failed: false }

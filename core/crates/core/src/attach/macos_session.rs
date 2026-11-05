@@ -19,6 +19,8 @@ use super::{
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MacosAttachSessionError {
+    /// The peer closed before it sent a byte, as a readiness probe does.
+    ClosedBeforeHello,
     Read,
     ApprovalPresenterUnavailable,
     DesktopClientAdmission(DesktopClientAdmissionError),
@@ -114,7 +116,8 @@ impl AdmissionDiagnostic {
         let route = name_macos_attach_connection_route(reader, expected);
         let peer_pid = match route {
             MacosAttachConnectionRoute::DesktopClient { peer_pid }
-            | MacosAttachConnectionRoute::Companion { peer_pid } => peer_pid,
+            | MacosAttachConnectionRoute::Companion { peer_pid }
+            | MacosAttachConnectionRoute::BundledCompanion { peer_pid } => peer_pid,
             MacosAttachConnectionRoute::ApprovalPresenter => 0,
         };
         Self {
@@ -212,10 +215,37 @@ impl AdmissionDiagnostic {
     }
 
     fn record(&self, phase: &str, error: Option<&str>, closed_by: &str) {
+        // The desktop connects every minute or so. A usual admission writes
+        // nothing, so the log keeps failures, slow admissions and routes the
+        // code check did not match.
+        if error.is_none() && self.usual() {
+            return;
+        }
         self.record_envelope(self.envelope(phase, error, closed_by));
     }
 
+    /// A desktop client or its approval presenter whose code check matched
+    /// and whose admission took less than half its bound, with a code check
+    /// under a second.
+    fn usual(&self) -> bool {
+        let admission = self.admission_started.elapsed();
+        matches!(
+            self.route,
+            MacosAttachConnectionRoute::DesktopClient { .. }
+                | MacosAttachConnectionRoute::ApprovalPresenter
+        ) && self.code_check["matched"] == serde_json::json!(true)
+            && admission * 2 < self.bound
+            && self.code_check["elapsed_ms"]
+                .as_u64()
+                .is_none_or(|elapsed| elapsed < 1000)
+            && self.io_failure.borrow().is_none()
+    }
+
     fn record_envelope(&self, envelope: serde_json::Value) {
+        // A unit test reads the envelopes in memory. The shared per-process
+        // log locks and syncs each record, and parallel tests would wait on
+        // that lock inside the admission bound under test.
+        #[cfg(not(test))]
         crate::runtime_eprintln!("muniment-runtime: {envelope}");
         #[cfg(test)]
         self.records.borrow_mut().push(envelope);
@@ -347,16 +377,24 @@ where
             MacosAttachSessionError::Read
         })?;
     let mut prefix = [0_u8; 4];
-    read_exact_before(&mut diagnostic.stream(&mut stream), &mut prefix, deadline).map_err(
-        |error| {
-            diagnostic.record(
-                "hello-prefix",
-                Some(&format!("{error:?}")),
-                io_closed_by(&error),
-            );
-            MacosAttachSessionError::Read
-        },
-    )?;
+    // A readiness probe connects and closes without a byte. Its close is
+    // quiet, since nothing failed.
+    let (first, rest) = prefix.split_at_mut(1);
+    match read_exact_before(&mut diagnostic.stream(&mut stream), first, deadline) {
+        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
+            return Err(MacosAttachSessionError::ClosedBeforeHello);
+        }
+        result => result
+            .and_then(|()| read_exact_before(&mut diagnostic.stream(&mut stream), rest, deadline)),
+    }
+    .map_err(|error| {
+        diagnostic.record(
+            "hello-prefix",
+            Some(&format!("{error:?}")),
+            io_closed_by(&error),
+        );
+        MacosAttachSessionError::Read
+    })?;
     let frame = read_first_frame(&mut diagnostic.stream(&mut stream), prefix, deadline)
         .inspect_err(|error| {
             diagnostic.failure("hello-frame", error);
@@ -407,8 +445,10 @@ where
             diagnostic.record("desktop-handshake", None, "none");
             serve_desktop_client(&mut stream, admitted, (peer_uid, peer_pid), service)
         }
-        MacosAttachConnectionRoute::Companion { peer_pid } => {
+        MacosAttachConnectionRoute::Companion { peer_pid }
+        | MacosAttachConnectionRoute::BundledCompanion { peer_pid } => {
             diagnostic.record("companion-route", None, "none");
+            let bundled = matches!(route, MacosAttachConnectionRoute::BundledCompanion { .. });
             let mut random = |bytes: &mut [u8]| getrandom::fill(bytes).map_err(|_| ());
             let companion_identity = format!("{peer_uid}:{peer_pid}");
             pairing_identity_observer(&companion_identity);
@@ -418,6 +458,11 @@ where
                  kind: &str,
                  version: &str,
                  remaining: Duration| {
+                    if let Some(decision) =
+                        bundled_cli_decision(bundled, approval.as_ref(), kind, remaining)
+                    {
+                        return decision;
+                    }
                     let started = Instant::now();
                     let decision = approvals.wait(challenge, kind, version, remaining);
                     // A zero bound drains repeat actions after approval. It is not a pairing attempt.
@@ -450,6 +495,7 @@ where
                     first_frame: Some(&frame),
                     registry,
                     handoff_nonce: None,
+                    ephemeral_credential: bundled,
                 },
                 desktop_version,
                 deadline.saturating_duration_since(Instant::now()),
@@ -467,6 +513,26 @@ where
             Ok(MacosAttachSessionOutcome::Companion)
         }
     }
+}
+
+/// The answer for the CLI this bundle ships when this runtime ran it: the
+/// owner's approval of the workspace, with no prompt. `None` leaves the
+/// decision to the user, as for every other companion. A zero bound drains
+/// repeat answers after an approval, so it answers nothing.
+#[cfg(unix)]
+fn bundled_cli_decision(
+    bundled: bool,
+    approval: Option<&Approval>,
+    claimed_kind: &str,
+    remaining: Duration,
+) -> Option<Option<super::ApprovalDecision>> {
+    if !bundled || claimed_kind != "cli" {
+        return None;
+    }
+    if remaining.is_zero() {
+        return Some(None);
+    }
+    approval.map(|approval| Some(super::ApprovalDecision::Approve(approval.clone())))
 }
 
 fn read_first_frame<S: DeadlineStream>(
@@ -530,6 +596,32 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn only_the_bundled_cli_takes_the_owner_approval_without_a_prompt() {
+        let owner = Approval {
+            profile: "desktop-owner".into(),
+            workspace: "workspace-a".into(),
+            scopes: ["thread.read".to_owned(), "run.write".to_owned()].into(),
+            lifetime: Duration::from_secs(3600),
+        };
+        let bound = Duration::from_secs(120);
+        assert!(matches!(
+            bundled_cli_decision(true, Some(&owner), "cli", bound),
+            Some(Some(super::super::ApprovalDecision::Approve(approval))) if approval == owner
+        ));
+        // A drain after the approval answers nothing.
+        assert!(matches!(
+            bundled_cli_decision(true, Some(&owner), "cli", Duration::ZERO),
+            Some(None)
+        ));
+        // Every other case asks the user: another companion, another claimed
+        // kind on the bundled route, or no owner approval to give.
+        assert!(bundled_cli_decision(false, Some(&owner), "cli", bound).is_none());
+        assert!(bundled_cli_decision(true, Some(&owner), "claude-code", bound).is_none());
+        assert!(bundled_cli_decision(true, None, "cli", bound).is_none());
+    }
 
     struct Reader(bool);
     impl MacosAttachRouteReader for Reader {
@@ -657,6 +749,163 @@ mod tests {
             }
             assert!(responses.is_empty());
         }
+    }
+
+    const CLIENT_ID: &str = "018f0000-0000-7000-8000-000000000099";
+
+    /// A companion store that holds one credential the user approved.
+    struct CredentialService {
+        approved: String,
+        authorized: Vec<(Option<String>, String)>,
+        bound: Vec<String>,
+    }
+
+    impl ThreadListService for CredentialService {
+        fn list_threads(
+            &mut self,
+            _: &str,
+            _: super::super::thread_service::ThreadListRequest,
+        ) -> Result<super::super::thread_service::ThreadListPage, ProtocolError> {
+            Ok(super::super::thread_service::ThreadListPage {
+                threads: vec![],
+                next_cursor: None,
+            })
+        }
+
+        fn bind_authorized_client(&mut self, client_identity: &str) {
+            self.bound.push(client_identity.to_owned());
+        }
+
+        fn reconnect_approval(&self) -> Option<Approval> {
+            Some(owner_approval())
+        }
+
+        fn authorize_client(
+            &mut self,
+            _: &str,
+            presented: Option<&str>,
+            issued: &str,
+            _: &str,
+            _: &str,
+        ) -> Result<String, ProtocolError> {
+            self.authorized
+                .push((presented.map(str::to_owned), issued.to_owned()));
+            if presented == Some(self.approved.as_str()) {
+                Ok(self.approved.clone())
+            } else {
+                Err(ProtocolError::unauthorized())
+            }
+        }
+    }
+
+    fn owner_approval() -> Approval {
+        Approval {
+            profile: "desktop-owner".into(),
+            workspace: "workspace-a".into(),
+            scopes: ["thread.read".to_owned(), "run.write".to_owned()].into(),
+            lifetime: Duration::from_secs(3600),
+        }
+    }
+
+    fn read_value(stream: &mut UnixStream) -> Option<serde_json::Value> {
+        use std::io::Read;
+        let mut prefix = [0_u8; 4];
+        stream.read_exact(&mut prefix).ok()?;
+        let mut frame = prefix.to_vec();
+        frame.resize(4 + u32::from_be_bytes(prefix) as usize, 0);
+        stream.read_exact(&mut frame[4..]).ok()?;
+        super::super::decode_frame::<serde_json::Value>(&frame)
+            .ok()?
+            .map(|(value, _)| value)
+    }
+
+    /// Pairs one `cli` hello that presents `credential` on `route`, and
+    /// answers the Authorized frame, whether the user was asked, and the
+    /// service.
+    fn pair_cli(
+        route: MacosAttachConnectionRoute,
+        credential: &str,
+    ) -> (Option<serde_json::Value>, bool, CredentialService) {
+        use std::io::Write;
+        let (mut peer, server) = UnixStream::pair().unwrap();
+        peer.write_all(
+            &super::super::encode_frame(&serde_json::json!({
+                "protocol": "muniment.attach/1", "client": {"kind": "cli", "version": "0.4.2"},
+                "supported": {"min": 1, "max": 1}, "client_nonce": "nonce",
+                "authorized_client_id": CLIENT_ID, "authorized_client_credential": credential,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let served = std::thread::spawn(move || {
+            let mut diagnostic = AdmissionDiagnostic::route(
+                &Reader(false),
+                &std::env::current_exe().unwrap(),
+                Duration::from_secs(5),
+            );
+            diagnostic.route = route;
+            let mut service = CredentialService {
+                approved: "ab".repeat(32),
+                authorized: vec![],
+                bound: vec![],
+            };
+            let prompted = std::cell::Cell::new(false);
+            let _ = serve_macos_attach_route_with_state(
+                server,
+                &mut diagnostic,
+                501,
+                "1.0.0",
+                &mut service,
+                Some(owner_approval()),
+                ApprovalCoordinator::default(),
+                |_: &super::super::PairingChallenge, _: Duration| {
+                    prompted.set(true);
+                    None
+                },
+                &LiveConnectionRegistry::default(),
+                |_| {},
+            );
+            (prompted.get(), service)
+        });
+        let welcome = read_value(&mut peer).unwrap();
+        assert_eq!(welcome["selected"], 1);
+        let authorized = read_value(&mut peer);
+        drop(peer);
+        let (prompted, service) = served.join().unwrap();
+        (authorized, prompted, service)
+    }
+
+    #[test]
+    fn the_bundled_cli_pairs_without_a_prompt_and_its_credential_is_stored_nowhere() {
+        let approved = "ab".repeat(32);
+        let (authorized, prompted, service) = pair_cli(
+            MacosAttachConnectionRoute::BundledCompanion { peer_pid: 42 },
+            &approved,
+        );
+        let authorized = authorized.unwrap();
+        assert!(!prompted);
+        assert_eq!(authorized["credential_ephemeral"], true);
+        let ephemeral = authorized["authorized_client_credential"].as_str().unwrap();
+        assert_eq!(ephemeral.len(), 64);
+        // The credential the user approved is neither reused nor replaced.
+        assert_ne!(ephemeral, approved);
+        assert!(service.authorized.is_empty());
+        assert_eq!(service.approved, approved);
+        assert_eq!(service.bound, [CLIENT_ID]);
+
+        // A process outside the runtime that presents the ephemeral
+        // credential reconnects to nothing and waits on the user.
+        let (authorized, prompted, service) = pair_cli(
+            MacosAttachConnectionRoute::Companion { peer_pid: 42 },
+            ephemeral,
+        );
+        assert!(prompted);
+        assert!(authorized.is_none());
+        assert_eq!(
+            service.authorized,
+            [(Some(ephemeral.to_owned()), String::new())]
+        );
+        assert_eq!(service.approved, approved);
     }
 
     #[test]
@@ -805,6 +1054,61 @@ mod tests {
                 assert!(envelope[field].is_number());
             }
         }
+    }
+
+    #[test]
+    fn a_usual_desktop_admission_writes_no_record_and_an_unusual_one_does() {
+        let usual = AdmissionDiagnostic::route(
+            &Reader(true),
+            &std::env::current_exe().unwrap(),
+            Duration::from_secs(5),
+        );
+        usual.record("desktop-handshake", None, "none");
+        assert!(usual.records.borrow().is_empty());
+        usual.record("desktop-handshake", Some("Timeout"), "runtime");
+        assert_eq!(usual.records.borrow().len(), 1);
+
+        let unmatched = AdmissionDiagnostic::route(
+            &Reader(false),
+            &std::env::current_exe().unwrap(),
+            Duration::from_secs(5),
+        );
+        unmatched.record("companion-route", None, "none");
+        assert_eq!(unmatched.records.borrow()[0]["phase"], "companion-route");
+
+        let slow = AdmissionDiagnostic::route(
+            &Reader(true),
+            &std::env::current_exe().unwrap(),
+            Duration::ZERO,
+        );
+        slow.record("desktop-handshake", None, "none");
+        assert_eq!(slow.records.borrow()[0]["phase"], "desktop-handshake");
+    }
+
+    #[test]
+    fn a_usual_presenter_admission_writes_no_record_and_an_unusual_one_does() {
+        let presenter = |matched: bool, bound: Duration| {
+            let mut diagnostic = AdmissionDiagnostic::route(
+                &Reader(matched),
+                &std::env::current_exe().unwrap(),
+                bound,
+            );
+            diagnostic.route = MacosAttachConnectionRoute::ApprovalPresenter;
+            diagnostic
+        };
+        let usual = presenter(true, Duration::from_secs(5));
+        usual.record("presenter-handshake", None, "none");
+        assert!(usual.records.borrow().is_empty());
+        usual.record("presenter-handshake", Some("Timeout"), "runtime");
+        assert_eq!(usual.records.borrow().len(), 1);
+
+        let unmatched = presenter(false, Duration::from_secs(5));
+        unmatched.record("presenter-handshake", None, "none");
+        assert_eq!(unmatched.records.borrow()[0]["route"], "ApprovalPresenter");
+
+        let slow = presenter(true, Duration::ZERO);
+        slow.record("presenter-handshake", None, "none");
+        assert_eq!(slow.records.borrow()[0]["phase"], "presenter-handshake");
     }
 
     #[test]

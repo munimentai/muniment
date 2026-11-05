@@ -26,6 +26,26 @@ it('keeps MCP switches local to one turn and resets after submission', async () 
   expect(invoke).toHaveBeenCalledWith('extend_command',{action:'turn',data:{threadId:'chat',selected:[],disabled:[],automatic:true}})
   expect(invoke).toHaveBeenLastCalledWith('extend_command',{action:'route',data:{threadId:'chat',prompt:'Next turn'}})
 })
+it('reads the extensions and the current thread at once before a send', async () => {
+  const state={items:[{id:'docs',kind:'mcp',name:'Docs',enabled:true}]}
+  let answerRead, sending=false
+  const invoke=vi.fn(async (command,args)=>{
+    if (command==='chat_current_thread') return 'chat'
+    if (args?.action==='read' && sending) return new Promise(resolve=>{ answerRead=()=>resolve(state) })
+    return state
+  })
+  const {component}=render(ComposerExtensions,{tauri:{invoke},threadId:'chat',onmanage:vi.fn()})
+  await waitFor(()=>expect(invoke).toHaveBeenCalledWith('extend_command',{action:'read',data:{}}))
+  await new Promise(resolve=>setTimeout(resolve,0))
+  sending=true
+  const prepared=component.prepare('Read docs')
+  await waitFor(()=>expect(answerRead).toBeTypeOf('function'))
+  // The thread read starts while the extension read still waits.
+  expect(invoke.mock.calls.filter(([command])=>command==='chat_current_thread')).toHaveLength(1)
+  answerRead()
+  await prepared
+  expect(invoke).toHaveBeenLastCalledWith('extend_command',{action:'turn',data:{threadId:'chat',selected:[],disabled:[],automatic:false}})
+})
 it('inserts a slash command into the draft without chips or persisted selection', async () => {
   const invoke=vi.fn(async command=>command==='chat_current_thread'?'chat':({items:[{id:'review',kind:'skill',skills:[{name:'review',description:'Review code',path:'SKILL.md'}]}]}))
   const {component}=render(ComposerExtensions,{tauri:{invoke},threadId:'chat',draft:'\\review',onmanage:vi.fn()})

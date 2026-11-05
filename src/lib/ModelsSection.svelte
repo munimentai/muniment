@@ -7,6 +7,7 @@
   import PageHead from './ui/PageHead.svelte'
   import Group from './ui/Group.svelte'
   import Row from './ui/Row.svelte'
+  import Toggle from './Toggle.svelte'
   // Settings → Models, one screen: the Roles that route and assist at the top,
   // then every connection as a named account under its provider, key or
   // subscription, the provider's models once, and the connector that adds a
@@ -16,6 +17,7 @@
   import LucideIcon from './LucideIcon.svelte'
   import ModelAccounts from './ModelAccounts.svelte'
   import HoldSignIn from './HoldSignIn.svelte'
+  import ConfirmDialog from './ConfirmDialog.svelte'
   import { otherSignIns, piHold, readFleetAccounts } from './fleet-accounts.js'
   import ModelRouterSection from './ModelRouterSection.svelte'
   import ClassifierConnection from './ClassifierConnection.svelte'
@@ -64,6 +66,9 @@
   let baseUrl = $state('')
   let endpointName = $state('')
   let endpointModels = $state('')
+  // Whether chats on the endpoint send tools. A server without tool calling
+  // refuses every request that carries them.
+  let endpointTools = $state(true)
   let pending = $state(false)
   let formError = $state('')
   let login = $state(null)
@@ -74,6 +79,15 @@
   // The subscriptions the provider's family already holds on this machine. Its
   // connect page lists each with Disconnect, and its sign-in adds another.
   const signedIn = $derived((router?.accounts ?? []).filter((account) => account.source !== 'key' && account.family === providerFamily(providerId)))
+  // Every Disconnect asks once in the app's dialog: its title, one line on
+  // what goes, and the action that runs on yes.
+  let confirming = $state(null)
+  function askDisconnect(name, line, action, opener = null) { confirming = { name, line, action, opener } }
+  async function decideDisconnect(approve) {
+    const asked = confirming
+    confirming = null
+    if (approve && asked) await asked.action()
+  }
   async function removeAccount(account) {
     try {
       onRouterSettings(await tauri.invoke('model_router_remove_account', { id: account.id }))
@@ -87,7 +101,7 @@
     if (!inventory) return []
     const needle = query.trim().toLowerCase()
     return inventory.providers
-      .filter((entry) => entry.source !== 'router')
+      .filter((entry) => entry.source !== 'router' && !disconnected.includes(entry.id))
       .map((entry) => ({
         ...entry,
         family: providerFamily(entry.id),
@@ -163,13 +177,31 @@
     } finally { discovering = false }
   }
 
-  async function disconnect(entry) {
+  async function disconnectClassifier(connection) {
     try {
-      await tauri.invoke('local_mode_disconnect_provider', { provider: entry.id })
-      status = entry.source === 'claude-code' ? 'The Claude Code connection is disconnected.' : `${entry.name} is disconnected.`
+      const assisted = router.assist?.enabled
+      router = await tauri.invoke('model_router_disconnect_classifier', { id: connection.id })
+      if (assisted && !router.assist?.enabled) status = 'Assistance is off because its decision model was disconnected. Choose another under Roles.'
+    } catch (error) { status = String(error?.message ?? error) }
+  }
+
+  // A row reads Disconnecting… until the runtime answers. The row then leaves
+  // the list at once, before the status names the disconnect, and the list
+  // rereads behind it.
+  let disconnecting = $state([])
+  let disconnected = $state([])
+  async function disconnect(entry) {
+    disconnecting = [...disconnecting, entry.id]
+    try {
+      const keyKept = await tauri.invoke('local_mode_disconnect_provider', { provider: entry.id })
+      disconnected = [...disconnected, entry.id]
+      status = entry.source === 'claude-code' ? 'The Claude Code connection is disconnected.' : `${entry.name} is disconnected.${keyKept ? ` ${keyKept}` : ''}`
       await load()
+      disconnected = disconnected.filter((id) => id !== entry.id)
     } catch (error) {
       status = String(error?.message ?? error)
+    } finally {
+      disconnecting = disconnecting.filter((id) => id !== entry.id)
     }
   }
 
@@ -223,24 +255,52 @@
 
   // The connected endpoint whose form is open for an edit, empty for a new connection.
   let editingEndpoint = $state('')
+  // Whether the endpoint open for an edit holds a stale key, which a blank
+  // key field cannot keep.
+  let editingStale = $state(false)
+  const keptKeyHint = (fallback) => editingEndpoint
+    ? editingStale ? 'The saved key is out of date. Enter the key again.' : 'Leave blank to keep the saved key'
+    : fallback
 
   // An endpoint provider edits through its own connect form, filled with what
   // it holds. The key field stays blank, and a blank key keeps the saved one.
+  // The models field lists every saved model, not the ones a search shows.
   function editProvider(entry) {
     chooseProvider(entry.id.startsWith('custom-') ? 'custom' : entry.id)
     editingEndpoint = entry.id
     baseUrl = entry.base_url ?? baseUrl
     if (entry.id.startsWith('custom-')) endpointName = entry.name
+    const saved = inventory?.providers?.find((other) => other.id === entry.id) ?? entry
+    editingStale = (saved.key_state ?? entry.key_state) === 'stale'
+    endpointModels = (saved.models ?? []).map((model) => model.id).join('\n')
+    endpointTools = !(saved.tools_off ?? entry.tools_off)
+  }
+
+  // A URL pasted with its API route, such as .../v1/chat/completions, saves
+  // as the server's base URL, and the field shows the URL that saves.
+  const API_ROUTES = ['/chat/completions', '/completions', '/models', '/responses']
+  // An endpoint's server as its card names it, without the scheme or the /v1 path.
+  function endpointHost(entry) {
+    return (entry.base_url ?? '').replace(/^https?:\/\//, '').replace(/\/v1\/?$/, '')
+  }
+  function endpointBase(url) {
+    const trimmed = url.trim().replace(/\/+$/, '')
+    const route = API_ROUTES.find((candidate) => trimmed.toLowerCase().endsWith(candidate))
+    if (!route) return url.trim()
+    const base = trimmed.slice(0, -route.length).replace(/\/+$/, '')
+    return /^[a-z][a-z0-9+.-]*:\/\/[^/]/i.test(base) ? base : url.trim()
   }
 
   function chooseProvider(id) {
     origin = view
     providerId = id
     editingEndpoint = ''
+    editingStale = false
     formError = ''
     key = ''
     endpointName = ''
     endpointModels = ''
+    endpointTools = true
     baseUrl = catalogProvider(id)?.baseUrl ?? ''
     chooseMethod(catalogProvider(id)?.methods?.[0] ?? 'key')
   }
@@ -294,6 +354,7 @@
 
   async function saveOllama() {
     if (pending || !baseUrl.trim()) return
+    baseUrl = endpointBase(baseUrl)
     pending = true
     formError = ''
     try {
@@ -310,6 +371,7 @@
   async function saveEndpoint() {
     const models = endpointModels.split(/[\n,]/).map((model) => model.trim()).filter(Boolean)
     if (pending || !baseUrl.trim() || (providerId === 'custom' && !endpointName.trim())) return
+    baseUrl = endpointBase(baseUrl)
     pending = true
     formError = ''
     try {
@@ -319,6 +381,7 @@
         baseUrl,
         key,
         models,
+        toolsOff: !endpointTools,
       })
       key = ''
       await finishConnect(`Muniment saved the ${providerId === 'lmstudio' ? 'LM Studio' : endpointName.trim()} endpoint.`)
@@ -426,7 +489,7 @@
       <p class="support" role="alert">{routerError}</p>
       <button type="button" onclick={loadRouter}>Retry routing settings</button>
     {:else if router}
-      <ModelRouterSection onconnect={openConnector} {tauri} settings={router} {inventory} onsettings={next => router = next} oninventory={(next) => { inventory = next; oninventory?.(next) }} />
+      <ModelRouterSection onconnect={openConnector} {tauri} settings={router} {inventory} onsettings={next => accounts.set(next)} oninventory={(next) => { inventory = next; oninventory?.(next) }} />
     {:else}<p class="support" role="status">Reading routing settings…</p>{/if}
 
     <section class="accounts-section" aria-label="Connections" bind:this={connectionsPart}>
@@ -451,19 +514,26 @@
               {#snippet icon()}<ProviderLogo color provider={entry.id} size={16} />{/snippet}
             </Row>
             {#if !pooled}
-              <div class="line-card" data-testid="provider-connection">
+              {@const busy = disconnecting.includes(entry.id)}
+              <div class="line-card" data-testid="provider-connection" aria-busy={busy}>
                 <LucideIcon name={endpoint ? 'server' : entry.source === 'account' ? 'credit-card' : entry.source === 'claude-code' ? 'square-terminal' : 'key-round'} size={16} />
-                <span class="line-label" class:mono={endpoint}>{endpoint ? (entry.base_url ?? '').replace(/^https?:\/\//, '').replace(/\/v1\/?$/, '') : entry.source === 'account' ? 'Subscription' : entry.source === 'claude-code' ? 'Claude Code' : 'API key'}</span>
+                <span class="line-label" class:mono={endpoint}>{endpoint ? endpointHost(entry) : entry.source === 'account' ? 'Subscription' : entry.source === 'claude-code' ? 'Claude Code' : 'API key'}</span>
                 <span class="tag model-count" data-tone={entry.count ? undefined : 'caution'}>{modelCountLabel(entry.count)}</span>
-                {#if entry.source === 'account' && piHold(fleet, entry.id)}<HoldSignIn {tauri} {runtime} account={piHold(fleet, entry.id)} onmoved={onHeld} />{/if}
+                {#if entry.source === 'account' && piHold(fleet, entry.id)}<HoldSignIn {tauri} {runtime} account={piHold(fleet, entry.id)} onmoved={onHeld} />
+                {:else if entry.source === 'account' && fleet?.length}<span class="tag here">Signed in here</span>{/if}
+                {#if busy}<span class="tag" role="status">Disconnecting…</span>{/if}
                 {#if entry.source === 'claude-code'}
                   <!-- A Claude Code connection from before signs in again as an account, whose row replaces it. -->
-                  <button type="button" class="quiet sign-in-again" onclick={signInAgain}>Sign in again</button>
+                  <button type="button" class="quiet sign-in-again" disabled={busy} onclick={signInAgain}>Sign in again</button>
                 {:else if endpoint || catalogProvider(catalogId(entry.id))}
-                  <button type="button" class="quiet icon-action" aria-label={`Edit ${entry.name}`} onclick={() => endpoint ? editProvider(entry) : chooseProvider(catalogId(entry.id))}><LucideIcon name="square-pen" size={16} variant="action" /></button>
+                  <button type="button" class="quiet icon-action" aria-label={`Edit ${entry.name}`} disabled={busy} onclick={() => endpoint ? editProvider(entry) : chooseProvider(catalogId(entry.id))}><LucideIcon name="square-pen" size={16} variant="action" /></button>
                 {/if}
-                <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${entry.name}`} onclick={() => disconnect(entry)}><LucideIcon name="unplug" size={16} variant="action" /></button>
+                <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${entry.name}`} disabled={busy} onclick={(event) => askDisconnect(entry.name, 'Muniment removes this connection. Connect it again to use it.', () => disconnect(entry), event.currentTarget)}><LucideIcon name="unplug" size={16} variant="action" /></button>
               </div>
+              <!-- The runtime holds this endpoint's key in memory alone, because the keychain refused it. -->
+              <!-- The last refresh found this endpoint's server not answering, so it lists its saved models. -->
+              {#if endpoint && entry.unreachable}<p class="support" role="status" data-testid="endpoint-not-answering">Not answering at {endpointHost(entry)}. Its saved models stay.</p>{/if}
+              {#if endpoint && entry.key_notice}<p class="support" role="status" data-testid="endpoint-key-notice">{entry.key_notice}</p>{/if}
             {/if}
             {#if entry.family && router && firstOfFamily}<ModelAccounts {tauri} {listen} {runtime} settings={router} family={entry.family} onsettings={onRouterSettings} {fleet} onheld={onHeld} />{/if}
           </section>
@@ -493,7 +563,7 @@
           <Row title={connection.name} meta={connection.active ? 'Selected for routing' : router.assist?.connection === connection.id ? 'Selected for assistance' : 'Connected'}>
             {#snippet icon()}<ProviderLogo color provider={connection.catalog_id} size={16} />{/snippet}
             {#if connection.connection?.kind !== 'pooled'}<button type="button" class="quiet icon-action" aria-label={`Edit ${connection.name}`} aria-expanded={editingClassifier === connection.id} onclick={() => { editingClassifier = editingClassifier === connection.id ? '' : connection.id }}><LucideIcon name="square-pen" size={16} variant="action" /></button>{/if}
-            <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${connection.name}`} onclick={async () => { try { const assisted = router.assist?.enabled; router = await tauri.invoke('model_router_disconnect_classifier', { id: connection.id }); if (assisted && !router.assist?.enabled) status = 'Assistance is off because its decision model was disconnected. Choose another under Roles.' } catch (error) { status = String(error?.message ?? error) } }}><LucideIcon name="unplug" size={16} variant="action" /></button>
+            <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${connection.name}`} onclick={(event) => askDisconnect(connection.name, 'Routing and assistance stop using this decision model.', () => disconnectClassifier(connection), event.currentTarget)}><LucideIcon name="unplug" size={16} variant="action" /></button>
           </Row>
           {#if editingClassifier === connection.id}<div class="classifier-edit"><ClassifierEdit {connection} {tauri} onsaved={next => { accounts.set(next); editingClassifier = ''; status = 'Decision model saved.' }} oncancel={() => { editingClassifier = '' }} /></div>{/if}
         {/each}
@@ -543,31 +613,32 @@
       <Group label={`${provider.name} key`}>
       <div class="connection-field"><label for="provider-key">{provider.name} API key</label><input id="provider-key" type="password" autocomplete="off" bind:value={key} disabled={pending}></div>
       {#each keyFields as [name, label] (name)}
-        <div class="connection-field"><label for={`key-setting-${name}`}>{label}</label><input id={`key-setting-${name}`} type="text" autocomplete="off" value={keySettings[name] ?? ''} oninput={(event) => { keySettings = { ...keySettings, [name]: event.currentTarget.value } }} disabled={pending}></div>
+        <div class="connection-field"><label for={`key-setting-${name}`}>{label}</label><input id={`key-setting-${name}`} type="text" spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" value={keySettings[name] ?? ''} oninput={(event) => { keySettings = { ...keySettings, [name]: event.currentTarget.value } }} disabled={pending}></div>
       {/each}
       </Group>
       {#if formError}<p class="support" role="alert">{formError}</p>{/if}
-      <button type="button" data-variant="primary" disabled={pending || !key.trim() || keyFields.some(([name]) => !keySettings[name]?.trim())} onclick={saveKey}>Save key</button>
+      <button type="button" data-variant="primary" disabled={pending || !key.trim() || keyFields.some(([name]) => !keySettings[name]?.trim())} aria-busy={pending} onclick={saveKey}>{pending ? 'Saving…' : 'Save key'}</button>
     {:else if method === 'ollama'}
       <p class="support">Point Muniment at a running Ollama server. It asks the server for every model it serves.</p>
       <Group label="Ollama server">
-      <div class="connection-field"><label for="provider-base-url">Ollama server URL</label><input id="provider-base-url" type="url" placeholder="http://localhost:11434/v1" autocomplete="url" bind:value={baseUrl} disabled={pending}></div>
-      <div class="connection-field"><label for="ollama-key">API key (optional)</label><input id="ollama-key" type="password" autocomplete="off" placeholder={editingEndpoint ? 'Leave blank to keep the saved key' : 'For a server behind a key'} bind:value={key} disabled={pending}></div>
+      <div class="connection-field"><label for="provider-base-url">Ollama server URL</label><input id="provider-base-url" type="url" placeholder="http://localhost:11434/v1" autocomplete="url" spellcheck="false" autocorrect="off" autocapitalize="off" bind:value={baseUrl} onblur={() => { if (baseUrl.trim()) baseUrl = endpointBase(baseUrl) }} disabled={pending}></div>
+      <div class="connection-field"><label for="ollama-key">API key (optional)</label><input id="ollama-key" type="password" autocomplete="off" placeholder={keptKeyHint('For a server behind a key')} bind:value={key} disabled={pending}></div>
       </Group>
       {#if formError}<p class="support" role="alert">{formError}</p>{/if}
-      <button type="button" data-variant="primary" disabled={pending || !baseUrl.trim()} onclick={saveOllama}>Save Ollama server</button>
+      <button type="button" data-variant="primary" disabled={pending || !baseUrl.trim()} aria-busy={pending} onclick={saveOllama}>{pending ? 'Saving…' : 'Save Ollama server'}</button>
     {:else if method === 'endpoint'}
       <p class="support">Any OpenAI-compatible server: {provider.id === 'lmstudio' ? 'LM Studio on this device.' : provider.id === 'vllm' ? 'a running vLLM server.' : 'a LiteLLM proxy or another gateway.'}</p>
       <Group label="Endpoint">
       {#if provider.id === 'custom'}
-        <div class="connection-field"><label for="endpoint-name">Name</label><input id="endpoint-name" type="text" bind:value={endpointName} disabled={pending || !!editingEndpoint}></div>
+        <div class="connection-field"><label for="endpoint-name">Name</label><input id="endpoint-name" type="text" spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" bind:value={endpointName} disabled={pending || !!editingEndpoint}></div>
       {/if}
-      <div class="connection-field"><label for="provider-base-url">Server URL</label><input id="provider-base-url" type="url" placeholder={provider.baseUrl ?? 'http://localhost:4000/v1'} autocomplete="url" bind:value={baseUrl} disabled={pending}></div>
-      <div class="connection-field"><label for="endpoint-key">API key (optional)</label><input id="endpoint-key" type="password" autocomplete="off" placeholder={editingEndpoint ? 'Leave blank to keep the saved key' : ''} bind:value={key} disabled={pending}></div>
-      <div class="connection-field"><label for="endpoint-models">Models, one per line</label><textarea id="endpoint-models" rows="3" bind:value={endpointModels} disabled={pending}></textarea><p class="support">Leave the list empty and Muniment asks the server for its models.</p></div>
+      <div class="connection-field"><label for="provider-base-url">Server URL</label><input id="provider-base-url" type="url" placeholder={provider.baseUrl ?? 'http://localhost:4000/v1'} autocomplete="url" spellcheck="false" autocorrect="off" autocapitalize="off" bind:value={baseUrl} onblur={() => { if (baseUrl.trim()) baseUrl = endpointBase(baseUrl) }} disabled={pending}></div>
+      <div class="connection-field"><label for="endpoint-key">API key (optional)</label><input id="endpoint-key" type="password" autocomplete="off" placeholder={keptKeyHint('')} bind:value={key} disabled={pending}></div>
+      <div class="connection-field"><label for="endpoint-models">Models, one per line</label><textarea id="endpoint-models" rows="3" spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" bind:value={endpointModels} disabled={pending}></textarea><p class="support">Leave the list empty and Muniment asks the server for its models.</p></div>
+      <Row title="Send tools" description="Turn off for a server without tool calling. Chats then answer from text alone."><Toggle bind:checked={endpointTools} label="Send tools" disabled={pending} /></Row>
       </Group>
       {#if formError}<p class="support" role="alert">{formError}</p>{/if}
-      <button type="button" data-variant="primary" disabled={pending || !baseUrl.trim() || (provider.id === 'custom' && !endpointName.trim())} onclick={saveEndpoint}>Save endpoint</button>
+      <button type="button" data-variant="primary" disabled={pending || !baseUrl.trim() || (provider.id === 'custom' && !endpointName.trim())} aria-busy={pending} onclick={saveEndpoint}>{pending ? 'Saving…' : 'Save endpoint'}</button>
     {:else if method === 'account'}
       <p class="support">Sign in with your {methodLabel(provider, 'account')}. {provider.id === 'anthropic' ? 'The browser opens, and Claude Code keeps the token.' : 'The browser opens, and the token stays on this device.'}</p>
       {#if signedIn.length}
@@ -575,7 +646,7 @@
           {#each signedIn as account (account.id)}
             <Row title={account.label} meta={account.plan || 'Subscription'}>
               {#snippet icon()}<LucideIcon name="credit-card" size={16} />{/snippet}
-              <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${account.label}`} onclick={() => removeAccount(account)}><LucideIcon name="unplug" size={16} variant="action" /></button>
+              <button type="button" class="quiet icon-action critical" aria-label={`Disconnect ${account.label}`} onclick={(event) => askDisconnect(`the ${provider.name} account ${account.label}`, 'Muniment removes this sign-in. Sign in again to use it.', () => removeAccount(account), event.currentTarget)}><LucideIcon name="unplug" size={16} variant="action" /></button>
             </Row>
           {/each}
         </Group>
@@ -604,7 +675,7 @@
             <button type="button" data-variant="primary" disabled={!loginAnswer.trim()} onclick={() => answerPrompt(loginAnswer.trim())}>Continue</button>
           {/if}
           {#if login.stage === 'failed' || login.stage === 'cancelled'}
-            <button type="button" data-variant="primary" onclick={startLogin}>Try again</button>
+            <button type="button" data-variant="primary" onclick={startLogin}>{login.stage === 'cancelled' ? 'Sign in again' : 'Try again'}</button>
           {:else}
             <button type="button" class="quiet" onclick={cancelLogin}>Cancel</button>
           {/if}
@@ -621,6 +692,12 @@
     {/if}
   {/if}
 </div>
+
+{#if confirming}
+  <ConfirmDialog title={`Disconnect ${confirming.name}?`} cancelLabel="Cancel" confirmLabel="Disconnect" destructive opener={confirming.opener} onDecision={decideDisconnect}>
+    <p>{confirming.line}</p>
+  </ConfirmDialog>
+{/if}
 
 <style>
   button { font: inherit; font-size: var(--text-13); color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 5px 12px; cursor: pointer; }
@@ -643,26 +720,20 @@
   .icon-action { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; min-height: 28px; padding: 4px; }
   .icon-action.critical { color: var(--danger); }
   .sign-in-again { min-height: 28px; padding: 4px 10px; font-size: var(--text-12); }
-  .models-head, .connect-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .connect-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   .connect-head { justify-content: flex-start; }
-  .connect-head h4, .models-head h4 { margin: 0; }
-  .models-label { color: var(--ink); font-size: var(--text-17); font-weight: 600; }
+  .connect-head h4 { margin: 0; }
   .accounts-section { display: grid; gap: var(--page-gap); }
   .connect-head h4 { font-size: var(--text-15); font-weight: 600; }
   .support { margin: 0; color: var(--muted); font-size: var(--text-13); }
   .empty { padding: 12px 0; }
-  .connect { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; padding: 4px 10px; white-space: nowrap; }
   .back { min-width: 28px; min-height: 28px; padding: 5px; line-height: 0; }
-  .search { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius-control); color: var(--muted); }
-  .search:focus-within { border-color: var(--muted); }
-  .search input { flex: 1; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; font-size: var(--text-13); }
-  .tag, .record { color: var(--muted); font: var(--text-12) var(--font-mono); }
+  .tag { color: var(--muted); font: var(--text-12) var(--font-mono); }
   .model-count { flex: none; white-space: nowrap; }
+  .here { flex: none; white-space: nowrap; }
   .model-count[data-tone="caution"] { color: var(--warning); }
-  .record { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .model-list, .provider-list { display: grid; margin: 0; padding: 0; list-style: none; }
+  .provider-list { display: grid; margin: 0; padding: 0; list-style: none; }
   .provider-list li + li { border-top: 1px solid var(--border); }
-  .use { min-height: 24px; padding: 2px 8px; font-size: var(--text-12); }
   /* The show switch: a hairline track and a muted knob when the model is hidden, a signal track and knob at the right when it shows. §1.2 lists the switch. */
   .provider-row { display: flex; width: calc(100% + 16px); align-items: center; gap: 10px; min-height: 44px; margin: 4px -8px; padding: 6px 8px; text-align: left; font-size: var(--text-13); }
   .provider-row .tag { margin-left: auto; text-align: right; }

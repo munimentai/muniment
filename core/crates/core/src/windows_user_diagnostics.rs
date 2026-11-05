@@ -63,11 +63,12 @@ pub fn append_owner_only_record(
     {
         return Err(io::Error::last_os_error());
     }
+    let record = crate::runtime_diagnostics::stamped(record);
     if file.metadata()?.len().saturating_add(record.len() as u64) > max_bytes {
         file.set_len(0)?;
     }
     file.seek(SeekFrom::End(0))?;
-    file.write_all(record)?;
+    file.write_all(&record)?;
     file.sync_data()
 }
 

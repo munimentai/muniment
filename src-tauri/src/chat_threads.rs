@@ -37,11 +37,11 @@ fn require_runtime(session: &DesktopClientSession) -> Result<(), String> {
 
 #[cfg(any(unix, target_os = "windows"))]
 fn rename_thread_command(
-    attach_state: &AttachCompanionState,
+    session: DesktopClientSession,
     thread_id: &str,
     title: &str,
 ) -> Result<(), String> {
-    match attach_state.desktop_client_session() {
+    match session {
         DesktopClientSession::NoSupervisor => Err(auth::background_service_error()),
         DesktopClientSession::Connected(client) => client
             .rename_thread(thread_id, title)
@@ -54,12 +54,12 @@ fn rename_thread_command(
 
 #[cfg(any(unix, target_os = "windows"))]
 trait ThreadDeleteClient {
-    fn delete_thread(&self, thread_id: &str) -> Result<(), ClientError>;
+    fn delete_thread(&self, thread_id: &str) -> Result<serde_json::Value, ClientError>;
 }
 
 #[cfg(any(unix, target_os = "windows"))]
 impl ThreadDeleteClient for muniment_core::attach::DesktopClientHolder {
-    fn delete_thread(&self, thread_id: &str) -> Result<(), ClientError> {
+    fn delete_thread(&self, thread_id: &str) -> Result<serde_json::Value, ClientError> {
         muniment_core::attach::DesktopClientHolder::delete_thread(self, thread_id)
     }
 }
@@ -90,15 +90,15 @@ fn delete_thread_command<C: ThreadDeleteClient>(
     session_thread: &SessionThread,
     subject: Option<&str>,
     thread_id: &str,
-) -> Result<(), String> {
+) -> Result<serde_json::Value, String> {
     match session {
         ThreadDeleteSession::NoSupervisor => Err(auth::background_service_error()),
         ThreadDeleteSession::Connected(client) => {
-            client
+            let answer = client
                 .delete_thread(thread_id)
                 .map_err(auth::desktop_client_error)?;
             session_thread.fresh_if_current(thread_id, subject);
-            Ok(())
+            Ok(answer)
         }
         ThreadDeleteSession::Disconnected => {
             Err("Muniment cannot reach its background service.".into())
@@ -190,12 +190,12 @@ fn chat_thread_summaries_command(
 
 #[cfg(any(unix, target_os = "windows"))]
 fn chat_thread_open_command(
-    attach_state: &AttachCompanionState,
+    session: DesktopClientSession,
     thread_id: &str,
     limit: usize,
     cursor: Option<&str>,
 ) -> Result<serde_json::Value, String> {
-    match attach_state.desktop_client_session() {
+    match session {
         DesktopClientSession::NoSupervisor => Err(auth::background_service_error()),
         DesktopClientSession::Connected(client) => client
             .thread_history(
@@ -231,12 +231,36 @@ struct RuntimePage {
     page: serde_json::Value,
 }
 
+/// The threads this computer's runtime deleted, from its page, when it
+/// answered. A runtime that names none answers an empty list.
+#[cfg(any(unix, target_os = "windows"))]
+fn local_deleted_threads(pages: &[RuntimePage]) -> Option<Vec<String>> {
+    let page = pages.iter().find(|page| page.runtime_id == LOCAL_RUNTIME)?;
+    Some(
+        page.page
+            .get("deletedThreadIds")
+            .and_then(serde_json::Value::as_array)
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default(),
+    )
+}
+
 /// Merges each runtime's page into one list, newest first. Each summary names
 /// its runtime, `runtimeIds` names the runtimes that answered, and the next
 /// cursor holds the cursor of every runtime with more threads, as a JSON
-/// object from runtime id to cursor.
+/// object from runtime id to cursor. A paired runtime's copy of a thread this
+/// computer deleted is left out: the delete here holds, whatever another
+/// machine still keeps.
 #[cfg(any(unix, target_os = "windows"))]
-fn merge_thread_pages(pages: Vec<RuntimePage>) -> serde_json::Value {
+fn merge_thread_pages(
+    pages: Vec<RuntimePage>,
+    deleted_here: &std::collections::HashSet<String>,
+) -> serde_json::Value {
     let mut summaries = Vec::new();
     let mut cursors = serde_json::Map::new();
     let mut answered = Vec::new();
@@ -244,6 +268,13 @@ fn merge_thread_pages(pages: Vec<RuntimePage>) -> serde_json::Value {
         answered.push(runtime_id.clone());
         if let Some(listed) = page.get("summaries").and_then(serde_json::Value::as_array) {
             for summary in listed {
+                let thread_id = summary
+                    .get("threadId")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default();
+                if runtime_id != LOCAL_RUNTIME && deleted_here.contains(thread_id) {
+                    continue;
+                }
                 let mut summary = summary.clone();
                 if let Some(object) = summary.as_object_mut() {
                     object.insert("runtimeId".into(), runtime_id.clone().into());
@@ -267,27 +298,102 @@ fn merge_thread_pages(pages: Vec<RuntimePage>) -> serde_json::Value {
     serde_json::json!({ "summaries": summaries, "nextCursor": next_cursor, "runtimeIds": answered })
 }
 
-/// The runtime each listed thread lives on. A thread listed both by its owner
-/// and as another runtime's replica lives on its owner, so requests for it,
-/// such as a follow-up message or a stop, reach the runtime that runs it.
+/// This computer's fleet id: the owner its runtime names on a thread it
+/// runs, when its page lists one.
 #[cfg(any(unix, target_os = "windows"))]
-fn thread_runtimes(listed: &[serde_json::Value]) -> Vec<(String, String)> {
-    let mut threads: Vec<(bool, String, String)> = listed
+fn local_fleet_id(pages: &[RuntimePage]) -> Option<String> {
+    let page = pages.iter().find(|page| page.runtime_id == LOCAL_RUNTIME)?;
+    page.page
+        .get("summaries")?
+        .as_array()?
         .iter()
-        .filter_map(|summary| {
-            Some((
-                summary.get("replica").and_then(serde_json::Value::as_bool) != Some(true),
-                summary.get("threadId")?.as_str()?.to_owned(),
-                summary.get("runtimeId")?.as_str()?.to_owned(),
-            ))
+        .filter(|summary| summary.get("replica").and_then(serde_json::Value::as_bool) != Some(true))
+        .find_map(|summary| summary.get("owner_runtime")?.as_str())
+        .map(str::to_owned)
+}
+
+/// The runtime each listed thread lives on, one per thread, whichever copy
+/// lists first: the copy of the machine that runs it, then this computer's
+/// copy, which posts through to its owner. A thread this computer runs
+/// that only a paired machine listed, such as while this computer's runtime
+/// did not answer, still lives here. Any other thread lives on the paired
+/// machine with the lowest id that lists it.
+#[cfg(any(unix, target_os = "windows"))]
+fn thread_runtimes(
+    listed: &[serde_json::Value],
+    local_fleet_id: Option<&str>,
+) -> Vec<(String, String)> {
+    // Each thread's best copy so far: its rank, its runtime and its owner.
+    let mut best: std::collections::BTreeMap<String, (u8, String, Option<String>)> =
+        std::collections::BTreeMap::new();
+    for summary in listed {
+        let (Some(thread), Some(runtime)) = (
+            summary.get("threadId").and_then(serde_json::Value::as_str),
+            summary.get("runtimeId").and_then(serde_json::Value::as_str),
+        ) else {
+            continue;
+        };
+        let runs_it = summary.get("replica").and_then(serde_json::Value::as_bool) != Some(true);
+        let rank = u8::from(runs_it) * 2 + u8::from(runtime == LOCAL_RUNTIME);
+        let owner = summary
+            .get("owner_runtime")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned);
+        let better = best.get(thread).is_none_or(|(known, held, _)| {
+            rank > *known || (rank == *known && runtime < held.as_str())
+        });
+        if better {
+            best.insert(thread.to_owned(), (rank, runtime.to_owned(), owner));
+        }
+    }
+    best.into_iter()
+        .map(|(thread, (rank, runtime, owner))| {
+            let ours = rank == 0 && local_fleet_id.is_some() && owner.as_deref() == local_fleet_id;
+            (thread, if ours { LOCAL_RUNTIME.to_owned() } else { runtime })
         })
-        .collect();
-    // Replicas first, so the owner's entry for the same thread replaces them.
-    threads.sort_by_key(|(owner, _, _)| *owner);
-    threads
-        .into_iter()
-        .map(|(_, thread, runtime)| (thread, runtime))
         .collect()
+}
+
+/// Merges the pages that answered and records where each listed thread
+/// lives, which later actions on a thread read. `deletedThreadIds` names the
+/// threads deleted here, so a run whose thread is gone says so in the window.
+#[cfg(any(unix, target_os = "windows"))]
+fn record_thread_list(attach: &AttachCompanionState, pages: Vec<RuntimePage>) -> serde_json::Value {
+    if let Some(deleted) = local_deleted_threads(&pages) {
+        attach.remember_deleted_threads(deleted);
+    }
+    if let Some(id) = local_fleet_id(&pages) {
+        attach.remember_local_fleet_id(id);
+    }
+    let local_answered = pages.iter().any(|page| page.runtime_id == LOCAL_RUNTIME);
+    let deleted = attach.deleted_threads();
+    let mut merged = merge_thread_pages(pages, &deleted);
+    let mut deleted: Vec<String> = deleted.into_iter().collect();
+    deleted.sort();
+    merged["deletedThreadIds"] = deleted.into();
+    if let Some(listed) = merged["summaries"].as_array() {
+        let fleet_id = attach.local_fleet_id();
+        // A list without this computer's runtime moves none of its threads
+        // to the paired machine that holds a copy. Until this computer's
+        // runtime names its fleet id, as at a launch where a paired machine
+        // answers first, any synced copy may be one of this computer's own
+        // threads, so such a list records only the threads a paired machine
+        // runs itself, and a select of a copy never selects its holder.
+        if local_answered {
+            attach.remember_thread_runtimes(thread_runtimes(listed, fleet_id.as_deref()));
+        } else {
+            let known: Vec<serde_json::Value> = listed
+                .iter()
+                .filter(|summary| {
+                    fleet_id.is_some()
+                        || summary.get("replica").and_then(serde_json::Value::as_bool) != Some(true)
+                })
+                .cloned()
+                .collect();
+            attach.keep_thread_runtimes(thread_runtimes(&known, fleet_id.as_deref()));
+        }
+    }
+    merged
 }
 
 /// The runtimes a page request reads, with each one's cursor: every runtime
@@ -344,11 +450,7 @@ pub async fn chat_thread_summaries(
         if pages.is_empty() {
             return Err(first_error.unwrap_or_else(auth::background_service_error));
         }
-        let merged = merge_thread_pages(pages);
-        if let Some(listed) = merged["summaries"].as_array() {
-            attach.remember_thread_runtimes(thread_runtimes(listed));
-        }
-        Ok(merged)
+        Ok(record_thread_list(&attach, pages))
     })
     .await
     .map_err(|_| auth::background_service_error())?
@@ -373,19 +475,59 @@ pub async fn chat_select_thread(
         attach_state.remember_thread_runtimes([(thread_id.clone(), runtime)]);
     }
     crate::runtimes::follow_thread(&app_handle, &thread_id);
-    let session: ThreadSelectSession<_> = attach_state.desktop_client_session().into();
-    if matches!(&session, ThreadSelectSession::Disconnected) {
-        return Err(auth::background_service_error());
+    // The select reaches the thread's own runtime, whichever one is active.
+    let (runtime, session) = select_thread_session(&attach_state, &thread_id);
+    let result = match session {
+        ThreadSelectSession::NoSupervisor | ThreadSelectSession::Disconnected => {
+            Err(auth::background_service_error())
+        }
+        session => chat_subject(&app_handle, &auth_state).and_then(|subject| {
+            select_thread_command(
+                session,
+                &state.session_thread,
+                subject.as_deref(),
+                &thread_id,
+            )
+        }),
+    };
+    if let Err(error) = &result {
+        muniment_core::runtime_eprintln!(
+            "{}",
+            thread_select_failure_record(&thread_id, &runtime, error)
+        );
     }
-    if matches!(&session, ThreadSelectSession::NoSupervisor) {
-        return Err(auth::background_service_error());
-    }
-    let subject = chat_subject(&app_handle, &auth_state)?;
-    select_thread_command(
-        session,
-        &state.session_thread,
-        subject.as_deref(),
-        &thread_id,
+    result
+}
+
+/// The runtime a select of `thread_id` reaches and its session: the runtime a
+/// list, a select or the thread's creation named, else the active one.
+#[cfg(any(unix, target_os = "windows"))]
+fn select_thread_session(
+    attach: &AttachCompanionState,
+    thread_id: &str,
+) -> (
+    String,
+    ThreadSelectSession<muniment_core::attach::DesktopClientHolder>,
+) {
+    let runtime = attach.thread_runtime_or_active(thread_id);
+    let session = attach
+        .thread_session_within(thread_id, std::time::Duration::ZERO)
+        .into();
+    (runtime, session)
+}
+
+/// One log line for a failed select. It names the thread and the runtime the
+/// select went to, and the shell's message, which carries no credential.
+#[cfg(any(unix, target_os = "windows"))]
+fn thread_select_failure_record(thread_id: &str, runtime_id: &str, error: &str) -> String {
+    let bounded = |value: &str, limit: usize| -> String {
+        serde_json::Value::from(value.chars().take(limit).collect::<String>()).to_string()
+    };
+    format!(
+        "muniment-desktop: thread select failed thread_id={} runtime_id={} error={}",
+        bounded(thread_id, 128),
+        bounded(runtime_id, 128),
+        bounded(error, 512),
     )
 }
 
@@ -398,12 +540,13 @@ pub async fn chat_rename_thread(
     thread_id: String,
     title: String,
 ) -> Result<(), String> {
-    crate::runtimes::follow_thread(&app_handle, &thread_id);
+    // A rename reaches the thread's machine and leaves the selected one.
+    let session = attach_state.thread_session_within(&thread_id, HISTORY_CONNECT_WAIT);
     #[cfg(target_os = "macos")]
-    require_runtime(&attach_state.desktop_client_session())?;
+    require_runtime(&session)?;
     // An account that cannot name its subject gets that error before the runtime call.
     chat_subject(&app_handle, &auth_state)?;
-    rename_thread_command(&attach_state, &thread_id, &title)
+    rename_thread_command(session, &thread_id, &title)
 }
 
 #[cfg(any(unix, target_os = "windows"))]
@@ -414,17 +557,24 @@ pub async fn chat_delete_thread(
     state: tauri::State<'_, ChatState>,
     attach_state: tauri::State<'_, AttachCompanionState>,
     thread_id: String,
-) -> Result<(), String> {
-    crate::runtimes::follow_thread(&app_handle, &thread_id);
+) -> Result<serde_json::Value, String> {
+    // A delete reaches the thread's machine and leaves the selected one. A
+    // runtime that holds a synced copy sends the delete on to its owner.
+    // The answer names the thread's folder when it stays with the user's files.
+    let session = attach_state.thread_session_within(&thread_id, HISTORY_CONNECT_WAIT);
     #[cfg(target_os = "macos")]
-    require_runtime(&attach_state.desktop_client_session())?;
+    require_runtime(&session)?;
     let subject = chat_subject(&app_handle, &auth_state)?;
-    delete_thread_command(
-        attach_state.desktop_client_session().into(),
+    let answer = delete_thread_command(
+        session.into(),
         &state.session_thread,
         subject.as_deref(),
         &thread_id,
-    )
+    )?;
+    // Other machines' copies stay out of the list until the owner's delete
+    // reaches them.
+    attach_state.remember_deleted_threads(vec![thread_id]);
+    Ok(answer)
 }
 
 #[cfg(any(unix, target_os = "windows"))]
@@ -500,14 +650,16 @@ pub async fn chat_thread_open(
     limit: usize,
     cursor: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    crate::runtimes::follow_thread(&app_handle, &thread_id);
+    // Selecting the thread chose its machine. A history read, such as a
+    // refresh after the list changed, reads that machine and selects none.
+    let session = attach_state.thread_session_within(&thread_id, HISTORY_CONNECT_WAIT);
     #[cfg(target_os = "macos")]
-    require_runtime(&attach_state.desktop_client_session())?;
+    require_runtime(&session)?;
     // An account that cannot name its subject, or a missing profile, gets that
     // error before the runtime call.
     chat_subject(&app_handle, &auth_state)?;
     state_session_root(&app_handle)?;
-    chat_thread_open_command(&attach_state, &thread_id, limit, cursor.as_deref())
+    chat_thread_open_command(session, &thread_id, limit, cursor.as_deref())
         .map_err(|error| crate::runtimes::name_unreachable(&app_handle, error))
 }
 
@@ -673,15 +825,20 @@ fn poll_runtime<T>(
     }
 }
 
+/// The client of the runtime `thread_id` lives on, or of the selected
+/// runtime for `None`.
 #[cfg(any(unix, target_os = "windows"))]
 async fn context_client(
     app_handle: &tauri::AppHandle,
+    thread_id: Option<String>,
 ) -> Result<muniment_core::attach::DesktopClientHolder, String> {
     let waiting_app = app_handle.clone();
     let session = tauri::async_runtime::spawn_blocking(move || {
-        waiting_app
-            .state::<AttachCompanionState>()
-            .desktop_client_session_within(HISTORY_CONNECT_WAIT)
+        let attach = waiting_app.state::<AttachCompanionState>();
+        match thread_id {
+            Some(thread_id) => attach.thread_session_within(&thread_id, HISTORY_CONNECT_WAIT),
+            None => attach.desktop_client_session_within(HISTORY_CONNECT_WAIT),
+        }
     })
     .await
     .map_err(|_| auth::background_service_error())?;
@@ -706,7 +863,7 @@ pub(crate) async fn context_settings_request(
         > + Send
         + 'static,
 ) -> Result<serde_json::Value, String> {
-    let client = context_client(&app_handle).await?;
+    let client = context_client(&app_handle, None).await?;
     let answer = tauri::async_runtime::spawn_blocking(move || request(&client))
         .await
         .map_err(|_| auth::background_service_error())?
@@ -737,8 +894,7 @@ pub async fn thread_context_usage(
     app_handle: tauri::AppHandle,
     thread_id: String,
 ) -> Result<ThreadContextUsage, String> {
-    crate::runtimes::follow_thread(&app_handle, &thread_id);
-    let client = context_client(&app_handle).await?;
+    let client = context_client(&app_handle, Some(thread_id.clone())).await?;
     tauri::async_runtime::spawn_blocking(move || {
         let snapshot = poll_runtime(
             CONTEXT_READ_WAIT,
@@ -774,8 +930,7 @@ pub async fn thread_compact(
     thread_id: String,
     instructions: Option<String>,
 ) -> Result<ThreadCompaction, String> {
-    crate::runtimes::follow_thread(&app_handle, &thread_id);
-    let client = context_client(&app_handle).await?;
+    let client = context_client(&app_handle, Some(thread_id.clone())).await?;
     tauri::async_runtime::spawn_blocking(move || {
         let instructions = instructions
             .as_deref()
@@ -848,10 +1003,34 @@ mod tests {
 
     #[cfg(any(unix, target_os = "windows"))]
     impl ThreadDeleteClient for FakeThreadDeleteClient {
-        fn delete_thread(&self, thread_id: &str) -> Result<(), ClientError> {
+        fn delete_thread(&self, thread_id: &str) -> Result<serde_json::Value, ClientError> {
             self.calls.lock().unwrap().push(thread_id.to_owned());
-            self.result
+            self.result.map(|()| {
+                if thread_id == "kept-thread" {
+                    serde_json::json!({"folder_kept": "/home/me/sessions/Kept-1", "message": "kept"})
+                } else {
+                    serde_json::json!({})
+                }
+            })
         }
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    #[test]
+    fn a_connected_delete_answers_the_folder_that_stays() {
+        let tracker = SessionThread::default();
+        let client = FakeThreadDeleteClient {
+            calls: Arc::new(Mutex::new(Vec::new())),
+            result: Ok(()),
+        };
+        let answer = delete_thread_command(
+            ThreadDeleteSession::Connected(client),
+            &tracker,
+            Some("owner"),
+            "kept-thread",
+        )
+        .unwrap();
+        assert_eq!(answer["folder_kept"], "/home/me/sessions/Kept-1");
     }
 
     #[cfg(any(unix, target_os = "windows"))]
@@ -1028,7 +1207,7 @@ mod tests {
             thread_id: &str,
             title: &str,
         ) -> Result<(), String> {
-            rename_thread_command(attach_state, thread_id, title)
+            rename_thread_command(attach_state.desktop_client_session(), thread_id, title)
         }
 
         fn invoke_delete(
@@ -1041,6 +1220,7 @@ mod tests {
                 Some("owner"),
                 thread_id,
             )
+            .map(drop)
         }
 
         fn invoke_summaries(
@@ -1057,7 +1237,7 @@ mod tests {
             limit: usize,
             cursor: Option<&str>,
         ) -> Result<Value, String> {
-            chat_thread_open_command(attach_state, thread_id, limit, cursor)
+            chat_thread_open_command(attach_state.desktop_client_session(), thread_id, limit, cursor)
         }
 
         fn read_value(stream: &mut impl Read) -> Value {
@@ -1326,7 +1506,8 @@ mod tests {
     #[cfg(any(unix, target_os = "windows"))]
     #[test]
     fn thread_pages_merge_newest_first_with_each_runtime_named() {
-        let merged = merge_thread_pages(vec![
+        let merged = merge_thread_pages(
+            vec![
             RuntimePage {
                 runtime_id: "local".into(),
                 page: serde_json::json!({
@@ -1344,7 +1525,9 @@ mod tests {
                     "nextCursor": null
                 }),
             },
-        ]);
+        ],
+            &Default::default(),
+        );
         let order: Vec<(&str, &str)> = merged["summaries"]
             .as_array()
             .unwrap()
@@ -1369,11 +1552,64 @@ mod tests {
         );
         assert!(merged_cursor_targets(Some("not json"), &[]).is_err());
 
-        let last = merge_thread_pages(vec![RuntimePage {
+        let last = merge_thread_pages(
+            vec![RuntimePage {
+                runtime_id: "local".into(),
+                page: serde_json::json!({"summaries": [], "nextCursor": null}),
+            }],
+            &Default::default(),
+        );
+        assert!(last["nextCursor"].is_null());
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    #[test]
+    fn a_paired_copy_of_a_thread_deleted_here_stays_out_of_the_list() {
+        let pages = vec![
+            RuntimePage {
+                runtime_id: "local".into(),
+                page: serde_json::json!({
+                    "summaries": [{"threadId": "kept", "updatedAt": "2026-10-31T10:00:00Z"}],
+                    "nextCursor": null,
+                    "deletedThreadIds": ["gone"]
+                }),
+            },
+            RuntimePage {
+                runtime_id: "hub".into(),
+                page: serde_json::json!({
+                    "summaries": [
+                        {"threadId": "gone", "updatedAt": "2026-10-31T12:00:00Z", "owner_runtime": "core-local", "replica": true},
+                        {"threadId": "hub-own", "updatedAt": "2026-10-30T12:00:00Z"}
+                    ],
+                    "nextCursor": null
+                }),
+            },
+        ];
+        let deleted: std::collections::HashSet<String> = local_deleted_threads(&pages)
+            .unwrap()
+            .into_iter()
+            .collect();
+        let merged = merge_thread_pages(pages, &deleted);
+        let listed: Vec<&str> = merged["summaries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|summary| summary["threadId"].as_str().unwrap())
+            .collect();
+        assert_eq!(listed, vec!["kept", "hub-own"]);
+
+        // A page without this computer's runtime names no deletes, so the
+        // ones it named before still hold; an older runtime names none.
+        let hub_only = vec![RuntimePage {
+            runtime_id: "hub".into(),
+            page: serde_json::json!({"summaries": [], "nextCursor": null}),
+        }];
+        assert_eq!(local_deleted_threads(&hub_only), None);
+        let older = vec![RuntimePage {
             runtime_id: "local".into(),
             page: serde_json::json!({"summaries": [], "nextCursor": null}),
-        }]);
-        assert!(last["nextCursor"].is_null());
+        }];
+        assert_eq!(local_deleted_threads(&older), Some(Vec::new()));
     }
 
     #[cfg(any(unix, target_os = "windows"))]
@@ -1383,10 +1619,158 @@ mod tests {
             serde_json::json!({"threadId": "t", "runtimeId": "box", "owner_runtime": "core-box", "replica": false}),
             serde_json::json!({"threadId": "t", "runtimeId": "local", "owner_runtime": "core-box", "replica": true}),
             serde_json::json!({"threadId": "only-here", "runtimeId": "local", "owner_runtime": "core-box", "replica": true}),
+            serde_json::json!({"threadId": "copies", "runtimeId": "hub", "owner_runtime": "core-box", "replica": true}),
+            serde_json::json!({"threadId": "copies", "runtimeId": "box", "owner_runtime": "core-box", "replica": true}),
         ];
-        let mut map = std::collections::HashMap::new();
-        map.extend(thread_runtimes(&listed));
+        let map: std::collections::HashMap<_, _> = thread_runtimes(&listed, None).into_iter().collect();
         assert_eq!(map["t"], "box");
         assert_eq!(map["only-here"], "local");
+        // Two paired copies of a thread whose owner is away: the same one each
+        // time, whichever lists first.
+        assert_eq!(map["copies"], "box");
+        let mut reversed = listed.clone();
+        reversed.reverse();
+        let again: std::collections::HashMap<_, _> = thread_runtimes(&reversed, None).into_iter().collect();
+        assert_eq!(again, map);
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    fn page(runtime_id: &str, summaries: serde_json::Value) -> RuntimePage {
+        RuntimePage {
+            runtime_id: runtime_id.into(),
+            page: serde_json::json!({"summaries": summaries, "nextCursor": null}),
+        }
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    #[test]
+    fn a_list_this_computer_did_not_answer_never_moves_its_threads_or_the_selection() {
+        let attach = AttachCompanionState::default();
+        let ours = serde_json::json!({"threadId": "ours", "updatedAt": "2026-10-31T10:00:00Z", "owner_runtime": "core-mac"});
+        let hub_copy = serde_json::json!({"threadId": "ours", "updatedAt": "2026-10-31T11:00:00Z", "owner_runtime": "core-mac", "replica": true});
+        record_thread_list(
+            &attach,
+            vec![page("local", serde_json::json!([ours])), page("hub", serde_json::json!([hub_copy]))],
+        );
+        assert_eq!(attach.thread_runtime("ours").as_deref(), Some("local"));
+        assert_eq!(attach.local_fleet_id().as_deref(), Some("core-mac"));
+
+        // This computer's runtime is busy past the wait, so only the hub
+        // answers with its copy. The thread stays here.
+        let merged = record_thread_list(&attach, vec![page("hub", serde_json::json!([hub_copy]))]);
+        assert_eq!(merged["summaries"][0]["runtimeId"], "hub");
+        assert_eq!(attach.thread_runtime("ours").as_deref(), Some("local"));
+
+        // A thread this computer runs that only the hub lists, such as one
+        // past this computer's first page, lives here too.
+        let older = serde_json::json!({"threadId": "older", "updatedAt": "2026-10-01T10:00:00Z", "owner_runtime": "core-mac", "replica": true});
+        record_thread_list(&attach, vec![page("local", serde_json::json!([ours])), page("hub", serde_json::json!([older]))]);
+        assert_eq!(attach.thread_runtime("older").as_deref(), Some("local"));
+
+        // An action on a hub thread reaches the hub's session and selects
+        // nothing: the hub has no connection here, so the session says so.
+        attach.remember_thread_runtimes([("hub-own".to_owned(), "hub".to_owned())]);
+        assert!(matches!(
+            attach.thread_session_within("hub-own", std::time::Duration::ZERO),
+            DesktopClientSession::Disconnected
+        ));
+        assert_eq!(attach.remote_runtime_id(), None);
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    #[test]
+    fn a_launch_list_the_hub_answers_first_never_sends_this_computers_thread_to_the_hub() {
+        let attach = AttachCompanionState::default();
+        // At launch the hub connects first, and this computer's runtime has
+        // not named its fleet id yet. The hub lists its synced copy of this
+        // computer's thread and a thread it runs itself.
+        let hub_copy = serde_json::json!({"threadId": "ours", "updatedAt": "2026-10-31T11:00:00Z", "owner_runtime": "core-mac", "replica": true});
+        let hub_own = serde_json::json!({"threadId": "hub-own", "updatedAt": "2026-10-31T10:00:00Z", "owner_runtime": "core-hub"});
+        let merged = record_thread_list(&attach, vec![page("hub", serde_json::json!([hub_copy, hub_own]))]);
+        assert_eq!(merged["summaries"].as_array().map(Vec::len), Some(2));
+        assert_eq!(attach.thread_runtime("ours"), None);
+        assert_eq!(attach.thread_runtime("hub-own").as_deref(), Some("hub"));
+        // A select of the copy reaches this computer, the active runtime,
+        // and leaves the hub unselected.
+        let (runtime, session) = select_thread_session(&attach, "ours");
+        assert_eq!(runtime, "local");
+        assert!(matches!(session, ThreadSelectSession::NoSupervisor));
+        assert_eq!(attach.remote_runtime_id(), None);
+
+        // This computer's runtime answers and names itself, so the thread lives here.
+        let ours = serde_json::json!({"threadId": "ours", "updatedAt": "2026-10-31T10:00:00Z", "owner_runtime": "core-mac"});
+        record_thread_list(&attach, vec![page("local", serde_json::json!([ours])), page("hub", serde_json::json!([hub_copy]))]);
+        assert_eq!(attach.thread_runtime("ours").as_deref(), Some("local"));
+
+        // Once the fleet id is known, a later list the hub answers alone
+        // records the copies it names again, by owner.
+        let later = serde_json::json!({"threadId": "later", "updatedAt": "2026-10-31T12:00:00Z", "owner_runtime": "core-mac", "replica": true});
+        record_thread_list(&attach, vec![page("hub", serde_json::json!([later]))]);
+        assert_eq!(attach.thread_runtime("later").as_deref(), Some("local"));
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    #[test]
+    fn a_select_reaches_the_runtime_a_new_thread_was_created_on() {
+        let attach = AttachCompanionState::default();
+        // This computer is active when the new thread starts, so its runtime
+        // holds the thread. A thread with no run lists nowhere yet.
+        attach.remember_created_thread("red-trek");
+        // The user then opens a thread on the paired hub, which becomes active.
+        attach.set_active(Some("hub".into()));
+
+        // A select of the new thread with no runtime id reaches this
+        // computer's runtime, not the active hub.
+        let (runtime, session) = select_thread_session(&attach, "red-trek");
+        assert_eq!(runtime, "local");
+        assert!(matches!(session, ThreadSelectSession::NoSupervisor));
+
+        // A thread no list, select or creation named reaches the active hub.
+        let (runtime, session) = select_thread_session(&attach, "unknown");
+        assert_eq!(runtime, "hub");
+        assert!(matches!(session, ThreadSelectSession::Disconnected));
+
+        // A thread created while the hub is active lives on the hub.
+        attach.remember_created_thread("hub-new");
+        attach.set_active(None);
+        let (runtime, session) = select_thread_session(&attach, "hub-new");
+        assert_eq!(runtime, "hub");
+        assert!(matches!(session, ThreadSelectSession::Disconnected));
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    #[test]
+    fn a_failed_select_logs_its_thread_and_runtime() {
+        assert_eq!(
+            thread_select_failure_record(
+                "019a0000-0000-7000-8000-00000000000a",
+                "local",
+                "The request could not be committed.",
+            ),
+            "muniment-desktop: thread select failed \
+             thread_id=\"019a0000-0000-7000-8000-00000000000a\" runtime_id=\"local\" \
+             error=\"The request could not be committed.\""
+        );
+        let long = "x".repeat(4096);
+        let record = thread_select_failure_record(&long, "hub\nforged=1", &long);
+        assert!(!record.contains('\n'));
+        assert!(record.len() < 800);
+    }
+
+    #[cfg(any(unix, target_os = "windows"))]
+    #[test]
+    fn a_thread_deleted_here_leaves_every_later_list() {
+        let attach = AttachCompanionState::default();
+        attach.remember_deleted_threads(vec!["gone".into()]);
+        // This computer's next page names no deletes of its own.
+        let merged = record_thread_list(
+            &attach,
+            vec![
+                page("local", serde_json::json!([])),
+                page("hub", serde_json::json!([{"threadId": "gone", "updatedAt": "2026-10-31T11:00:00Z", "owner_runtime": "core-box", "replica": true}])),
+            ],
+        );
+        assert_eq!(merged["summaries"], serde_json::json!([]));
+        assert_eq!(merged["deletedThreadIds"], serde_json::json!(["gone"]));
     }
 }

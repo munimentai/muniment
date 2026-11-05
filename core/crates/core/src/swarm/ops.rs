@@ -50,10 +50,12 @@ const RESULT_KEYS: [&str; 9] = [
 /// only ones an owner runs for another member. The phone's actions are all
 /// here: posts, approval answers, agent runs, stop and steer. A
 /// `thread.create` that names another member's `runtime_id` starts the
-/// thread there.
-pub const FORWARDABLE: [Operation; 14] = [
+/// thread there. A `thread.delete` of a synced copy also deletes the copy
+/// where it was asked.
+pub const FORWARDABLE: [Operation; 15] = [
     Operation::ThreadCreate,
     Operation::ThreadPost,
+    Operation::ThreadDelete,
     Operation::RunSteer,
     Operation::RunFollowUp,
     Operation::RunCancel,
@@ -235,9 +237,9 @@ fn item_of(operation: Operation, body: &Value) -> Option<OpItem> {
         Operation::RunSteer | Operation::RunFollowUp | Operation::RunCancel => {
             item("run", text(body, "run_id"))
         }
-        Operation::ThreadPermissionModeSet | Operation::ThreadPlanAnswer => {
-            item("thread", text(body, "thread_id"))
-        }
+        Operation::ThreadPermissionModeSet
+        | Operation::ThreadPlanAnswer
+        | Operation::ThreadDelete => item("thread", text(body, "thread_id")),
         Operation::AgentApprovalAnswer => item("approval", text(body, "approval_id")),
         Operation::AgentRunNow => item("agent", text(body, "id")),
         Operation::AgentSave => item(
@@ -307,7 +309,7 @@ fn speaks_ops(inner: &Inner, runtime_id: &str) -> bool {
     })
 }
 
-fn member_name(inner: &Inner, runtime_id: &str) -> Option<String> {
+pub(super) fn member_name(inner: &Inner, runtime_id: &str) -> Option<String> {
     member(inner, runtime_id)
         .map(|record| record.runtime_name)
         .filter(|name| !name.is_empty())

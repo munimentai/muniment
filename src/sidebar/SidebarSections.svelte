@@ -12,11 +12,17 @@
   import LucideIcon from '../lib/LucideIcon.svelte'
   import ProjectItem from './ProjectItem.svelte'
   import { freshIndex } from './sidebar-model.js'
+  import { tick } from 'svelte'
   let {
     sidebar, row, fresh = null, showFresh = false, query = '', pages = [], owners = {},
-    disabled = false, expanded = new Set(), archivedOpen = $bindable(false),
+    // A page result opens a page over the thread, so a thread that opens
+    // leaves it pressable and only `pagesDisabled` locks it.
+    disabled = false, pagesDisabled = disabled, expanded = new Set(), archivedOpen = $bindable(false),
     projectForm = null, projectName = $bindable(''), projectBusy = false, projectError = '',
-    onpage, ontoggleproject, onnewthread, onsettings, onrenameproject, onopenfolder, ongroup, onnewproject, onsaveproject, oncancelproject, onretryprojects, library, footer,
+    // A project just created scrolls into view, takes focus and carries the
+    // selection until focus leaves it, wherever core places it in the list.
+    reveal = null, onrevealed,
+    onpage, ontoggleproject, onnewthread, onsettings, onrenameproject, onopenfolder, ondeleteproject, ongroup, onnewproject, onsaveproject, oncancelproject, onretryprojects, library, footer,
     // A thread row dropped on a project of this computer moves there.
     dragType = '', onmovethread,
   } = $props()
@@ -24,6 +30,24 @@
   const matchedPages = $derived(searching ? pages.filter((page) => page.label.toLowerCase().includes(query.trim().toLowerCase())) : [])
   const freshAt = $derived(showFresh ? freshIndex(sidebar) : -1)
   const kbd = (shortcut) => shortcut.replace('Meta+', '⌘ ').replace('Control+', 'Ctrl ')
+  // The name field takes focus as it opens, after a menu or the palette that
+  // opened it returns focus, with its text selected so typing replaces the name.
+  const focusField = (node) => { void tick().then(() => { node.focus(); node.select(); node.closest('form')?.scrollIntoView?.({ block: 'nearest' }) }) }
+  let projectList = $state()
+  let marked = $state(null)
+  $effect(() => {
+    const id = reveal
+    if (!id || searching || !sidebar.projects.some((project) => project.id === id)) return
+    void tick().then(() => {
+      const title = [...(projectList?.querySelectorAll('[data-project-id]') ?? [])].find((entry) => entry.dataset.projectId === id)?.querySelector('[data-project-title]')
+      if (!title) return
+      title.scrollIntoView?.({ block: 'nearest' })
+      title.focus()
+      marked = id
+      title.addEventListener('blur', () => { if (marked === id) marked = null }, { once: true })
+      onrevealed?.(id)
+    })
+  })
 </script>
 
 <div>
@@ -31,7 +55,7 @@
     <section class="side-section" aria-label="Search results">
       {#if matchedPages.length}
         <h3>Pages</h3>
-        <div class="page-results">{#each matchedPages as page (page.id)}<button class="page-result" aria-label={page.label} {disabled} onclick={() => onpage(page.id)}><LucideIcon name={page.icon} /><span>{page.label}</span>{#if page.shortcut}<kbd>{kbd(page.shortcut)}</kbd>{/if}</button>{/each}</div>
+        <div class="page-results">{#each matchedPages as page (page.id)}<button class="page-result" aria-label={page.label} disabled={pagesDisabled} onclick={() => onpage(page.id)}><LucideIcon name={page.icon} /><span>{page.label}</span>{#if page.shortcut}<kbd>{kbd(page.shortcut)}</kbd>{/if}</button>{/each}</div>
       {/if}
       <h3>Threads</h3>
       <ul class="thread-list" aria-label="Matching threads">{#each sidebar.results as item (item.thread_id)}{@render row(item)}{/each}</ul>
@@ -41,28 +65,34 @@
     <section class="side-section" aria-label="Projects">
       <div class="section-head">
         <h3>Projects</h3>
-        <button type="button" class="section-control" aria-label="New project" data-tooltip="New project" disabled={disabled || projectBusy} onclick={onnewproject}><LucideIcon name="plus" size={14} /></button>
+        <!-- The tooltip sits below the button, over the name field, so it hides while the form is open. -->
+        <button type="button" class="section-control" class:tipless={!!projectForm} aria-label="New project" data-tooltip="New project" disabled={disabled || projectBusy} onclick={onnewproject}><LucideIcon name="plus" size={14} /></button>
       </div>
-      {#if projectForm}
+      <!-- New project opens its field above the list. Rename opens it in place of the project's row, where the project sits. -->
+      {#snippet projectField()}{#key projectForm}
         <form class="row-rename" onsubmit={(event) => { event.preventDefault(); onsaveproject() }}>
-          <input aria-label="Project name" placeholder="Project name" maxlength="80" bind:value={projectName} disabled={projectBusy} />
+          <input aria-label="Project name" placeholder="Project name" maxlength="80" spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" use:focusField bind:value={projectName} disabled={projectBusy} />
           <button type="submit" disabled={projectBusy || !projectName.trim()}>{projectForm === 'new' ? 'Create' : 'Save'}</button>
           <button type="button" disabled={projectBusy} onclick={oncancelproject}>Cancel</button>
         </form>
-      {/if}
-      <ul class="thread-list" aria-label="Projects list">
+      {/key}{/snippet}
+      {#if projectForm && !sidebar.projects.some((project) => project.kind !== 'thread' && project.id === projectForm)}{@render projectField()}{/if}
+      <ul class="thread-list" aria-label="Projects list" bind:this={projectList}>
         {#each sidebar.projects as project, index (project.id)}
           {#if index === freshAt}{@render fresh?.()}{/if}
           {#if project.kind === 'thread'}
             {@render row(project.threads[0])}
           {:else}
-            <li class="project-entry">
-              <ProjectItem name={project.name} triggers={project.triggers} status={project.status} statusLabel={project.status_label} owner={owners[project.id] ?? null} expanded={expanded.has(project.id)} disabled={disabled || projectBusy}
+            <li class="project-entry" data-project-id={project.id}>
+              {#if projectForm === project.id}{@render projectField()}{:else}
+              <ProjectItem current={marked === project.id} name={project.name} triggers={project.triggers} status={project.status} statusLabel={project.status_label} owner={owners[project.id] ?? null} expanded={expanded.has(project.id)} disabled={disabled || projectBusy}
                 ontoggle={() => ontoggleproject(project.id)} onnew={() => onnewthread(project.id)} onsettings={() => onsettings(project.id)}
                 onrename={project.kind === 'project' && !project.owner ? () => onrenameproject(project.id, project.name) : undefined}
                 onopen={project.kind === 'project' && !project.owner ? () => onopenfolder(project.id) : undefined}
+                ondelete={ondeleteproject && project.kind === 'project' && !project.owner ? () => ondeleteproject(project) : undefined}
                 ongroup={ongroup ? () => ongroup(project.id) : undefined}
                 {dragType} ondropthread={onmovethread && project.kind === 'project' && !project.owner ? (threadId) => onmovethread(threadId, project.id) : undefined} />
+              {/if}
               {#if expanded.has(project.id) && project.threads.length}<ul class="thread-list project-threads" aria-label={`${project.name} threads`}>{#each project.threads as item (item.thread_id)}{@render row(item)}{/each}</ul>{/if}
             </li>
           {/if}
@@ -91,6 +121,7 @@
   .page-result span { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; }
   .section-control::after { content: attr(data-tooltip); position: absolute; right: 0; top: calc(100% + 4px); z-index: 4; padding: 4px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-12) var(--font-human); white-space: nowrap; pointer-events: none; opacity: 0; visibility: hidden; }
   .section-control:hover::after, .section-control:focus-visible::after { opacity: 1; visibility: visible; transition: opacity 80ms ease 350ms; }
+  .section-control.tipless::after { display: none; }
   :global(:root[data-motion="reduce"]) .section-control:hover::after { transition: none; }
   .side-section { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px; margin-top: 10px; }
   .side-section h3, .section-head h3 { margin: 0; padding: 2px 8px; color: var(--muted); font: var(--weight-semibold) var(--text-12) var(--font-human); }

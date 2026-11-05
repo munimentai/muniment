@@ -41,7 +41,7 @@
     {#if error}<p role="alert">{error}</p>{/if}
     {#if creating}
       <form onsubmit={create}>
-        <input aria-label="Project name" placeholder="Project name" maxlength="80" bind:value={name} disabled={busy} />
+        <input aria-label="Project name" placeholder="Project name" maxlength="80" spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" bind:value={name} disabled={busy} />
         <Button type="submit" disabled={busy || !name.trim()}>Create</Button>
         <Button disabled={busy} onclick={() => creating = false}>Cancel</Button>
       </form>

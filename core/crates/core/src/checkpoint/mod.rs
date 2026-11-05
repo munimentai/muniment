@@ -22,7 +22,10 @@ pub use restore::{
     plan_restore, restore, restore_conversation, FailedPath, RestoreError, RestorePlan,
     RestoreReport, Unrestorable, UnrestorableReason,
 };
-pub use run::{excluded_folders, protected_folders, shared, RunCheckpoints, CHECKPOINT_FOLDER};
+pub use run::{
+    excluded_folders, existing, follow_folder, protected_folders, shared, RunCheckpoints,
+    CHECKPOINT_FOLDER,
+};
 pub use turn::{
     revert_file, revert_hunk, turn_changes, RevertError, RevertOutcome, TurnChanges, TurnFile,
     TurnFileState,
@@ -446,6 +449,39 @@ impl CheckpointStore {
         Ok(records)
     }
 
+    /// Points a thread's records of folder `from` at the folder's new path
+    /// `to`, so its turns and rewinds follow a renamed folder. Answers how
+    /// many records moved.
+    pub fn move_thread_folder(
+        &self,
+        thread_id: &str,
+        from: &Path,
+        to: &Path,
+    ) -> Result<usize, CheckpointError> {
+        let _guard = self.lock();
+        let to = fs::canonicalize(to)?.to_string_lossy().into_owned();
+        let from = from.to_string_lossy().into_owned();
+        if from == to {
+            return Ok(0);
+        }
+        let mut moved = 0;
+        for mut record in self.thread_records(thread_id)? {
+            if record.folder == from {
+                record.folder.clone_from(&to);
+                self.write_record(&record)?;
+                moved += 1;
+            }
+        }
+        let mut recent = self
+            .recent
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(files) = recent.remove(&from) {
+            recent.insert(to, files);
+        }
+        Ok(moved)
+    }
+
     /// Removes the records of a thread, as when the thread is deleted.
     pub fn forget_thread(&self, thread_id: &str) -> Result<(), CheckpointError> {
         if !safe_id(thread_id) {
@@ -457,6 +493,31 @@ impl CheckpointStore {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(error.into()),
         }
+    }
+
+    /// Removes the records of every thread `chosen` picks, as the pass at
+    /// start does for threads deleted on another path. Answers how many
+    /// threads' records went. Their objects go at the next prune.
+    pub fn forget_threads(&self, chosen: impl Fn(&str) -> bool) -> Result<usize, CheckpointError> {
+        let threads = match fs::read_dir(self.root.join("records")) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
+            Err(error) => return Err(error.into()),
+        };
+        let mut picked = Vec::new();
+        for thread in threads {
+            let thread = thread?;
+            let Some(name) = thread.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            if thread.file_type()?.is_dir() && safe_id(&name) && chosen(&name) {
+                picked.push(name);
+            }
+        }
+        for thread_id in &picked {
+            self.forget_thread(thread_id)?;
+        }
+        Ok(picked.len())
     }
 
     /// Removes records past the age and count bounds, then the oldest records

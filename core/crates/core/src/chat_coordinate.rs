@@ -1,5 +1,6 @@
 mod delta_batch;
 mod diagnostics;
+mod endpoint_wait;
 
 use crate::runtime_eprintln as eprintln;
 use delta_batch::HeldDeltas;
@@ -17,7 +18,9 @@ use crate::code_diff_journal::{load_applied_code_diffs, CodeDiffPermissionAnswer
 use crate::engine::{
     AgentEngine, CompactionOutcome, OpenError, OpenStage, PiOpen, PiRpcEngine, Submission, Thinking,
 };
-use crate::journal::pi_translation::{model_stream_delta_payload, tool_journal_entry};
+use crate::journal::pi_translation::{
+    model_stream_delta_payload, run_steered_payload, tool_journal_entry, RUN_STEERED,
+};
 use crate::journal::reducer::ChatProjector;
 use crate::journal::split_model_stream_delta;
 use crate::memory_failure::{MemoryFailure, MemoryFailureAnswer};
@@ -291,6 +294,20 @@ impl LocalRunLedger {
     }
 }
 
+/// How long the run took: from its `run.started` event's `recorded_at`, the
+/// start the live reply time counts from, to now. A run whose start is not
+/// projected counts from when this coordinator took it.
+fn run_time(started_at: Option<&str>, fallback: Instant) -> Duration {
+    started_at
+        .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+        .map(|at| {
+            (chrono::Utc::now() - at.with_timezone(&chrono::Utc))
+                .to_std()
+                .unwrap_or_default()
+        })
+        .unwrap_or_else(|| fallback.elapsed())
+}
+
 /// A local receipt preserves the model, routing evidence, usage and tools
 /// recorded by the run. The cost is a catalog estimate, never a bill.
 fn local_receipt(elapsed: Duration, ledger: &LocalRunLedger) -> crate::sidecar::pi_chat::Receipt {
@@ -304,7 +321,8 @@ fn local_receipt(elapsed: Duration, ledger: &LocalRunLedger) -> crate::sidecar::
             .filter(|_| !ledger.cost_incomplete)
             .map(|cost| format!("${cost:.3} est.")),
         cost_usd: ledger.cost.filter(|_| !ledger.cost_incomplete),
-        time: Some(format!("{:.1}s", elapsed.as_secs_f64())),
+        // Milliseconds, so the receipt rounds as the live time does.
+        time: Some(format!("{:.3}s", elapsed.as_secs_f64())),
         tokens: ledger.tokens,
         turns: (ledger.turns > 0).then_some(ledger.turns),
         tools: ledger
@@ -483,6 +501,13 @@ fn coordinate_work(
     resume_result: Option<std::sync::mpsc::Sender<Result<(), String>>>,
     prepared: Option<(u64, ChatProjector)>,
 ) {
+    // Every way out of the run tells the host it ended, so a run that fails
+    // before it replies ends its record as soon as one that replies.
+    let mut ended = RunEnd {
+        app: &app,
+        run_id: run_id.clone(),
+        told: false,
+    };
     let engine = PiRpcEngine::new(app.pi_session_root().ok());
     if let Some(token) = grant.native_access_token.take() {
         access_token = token;
@@ -642,12 +667,22 @@ fn coordinate_work(
         return;
     }
     diagnostics.startup_stage("runtime_lock");
+    // Dropped after the slot's lock, so the reaper sees the process this
+    // run leaves idle.
+    let _reaper_wake = crate::pi_execution::ReaperWake;
     let mut runtime = runtime
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    // Each run owns its process. Reopen only its own thread's saved conversation.
+    // Each run owns its process. A new reply takes the process its thread's
+    // last reply left idle only when that process answers as a new one
+    // would; any other process stops before this run's own starts.
     diagnostics.startup_stage("runtime_reset");
-    *runtime = None;
+    let mut idle = runtime.take();
+    if resume.is_some() || compaction.is_some() {
+        if let Some(process) = idle.take() {
+            crate::pi_execution::stop_replaced(&run_id, process);
+        }
+    }
     let opening = {
         diagnostics.startup_stage("grant_renewal");
         if let Err(error) = crate::chat_launch::renew_grant_if_needed(&mut grant, || {
@@ -725,7 +760,25 @@ fn coordinate_work(
                     .map(|resume| &resume.locator)
                     .or(previous_session.as_ref()),
             )?;
-            if let Some(directory) = config.working_directory.as_deref() {
+            let reused = idle.take().and_then(|process| {
+                match engine.reuse(process, &config, previous_session.as_ref()) {
+                    Ok(reused) => Some(reused),
+                    Err(miss) => {
+                        eprintln!(
+                            "muniment-runtime: run_id={run_id} pi_reuse miss={}",
+                            miss.as_str()
+                        );
+                        crate::pi_execution::log_replaced(&run_id);
+                        None
+                    }
+                }
+            });
+            // A process that already works in the folder needs no new read of it.
+            if let Some(directory) = config
+                .working_directory
+                .as_deref()
+                .filter(|_| reused.is_none())
+            {
                 diagnostics.startup_stage("folder_access");
                 // The run names the wait while macOS asks, so the window can
                 // say which prompt to answer.
@@ -774,7 +827,7 @@ fn coordinate_work(
                 )
                 .map_err(|error| PiLaunchError::rejected("pi_acquire_completed_append", error))?;
             }
-            Ok(config)
+            Ok((config, reused))
         })();
         if cancelled.load(Ordering::SeqCst) {
             eprintln!("muniment-runtime: run_id={run_id} pi_spawn cancelled");
@@ -798,7 +851,7 @@ fn coordinate_work(
             );
             return;
         }
-        let config = match config {
+        let (config, reused) = match config {
             Ok(config) => config,
             Err(PiLaunchError::MissingRoot) => {
                 eprintln!("muniment-runtime: run_id={run_id} pi_spawn missing_root");
@@ -842,43 +895,65 @@ fn coordinate_work(
         let startup_timeout = config.startup_timeout;
         let working_directory = config.working_directory.clone();
         diagnostics.startup_stage("pi_spawn");
-        let opened = engine.open(PiOpen {
-            config,
-            cancelled: &cancelled,
-            observe: &mut |stage| match stage {
-                OpenStage::Spawned(supervisor) => diagnostics.spawned(supervisor),
-                OpenStage::Waiting => diagnostics.log_lifecycle(),
-            },
-        });
-        let (process, opened) = match opened {
-            Ok((process, transport)) => (process, Ok(transport)),
-            Err(OpenError::Spawn(error)) => {
-                eprintln!("muniment-runtime: run_id={run_id} pi_spawn error={error}");
-                fail_start(
-                    &app,
-                    &journal,
-                    &mut projector,
-                    &run_id,
-                    &mut seq,
-                    "The agent runtime could not start.",
-                    subject.as_deref(),
-                    resume.is_some(),
-                );
-                return;
+        if let Some((process, transport, launch)) = reused {
+            diagnostics.reused(&process.supervisor);
+            if launch.moved() {
+                eprintln!("muniment-runtime: run_id={run_id} pi_spawn reused folder_moved=true");
+            } else {
+                eprintln!("muniment-runtime: run_id={run_id} pi_spawn reused");
             }
-            Err(OpenError::Cancelled(process)) => (process, Err(OpenError::Cancelled(()))),
-            Err(OpenError::NotReady(process, status)) => {
-                (process, Err(OpenError::NotReady((), status)))
-            }
-            Err(OpenError::Unavailable(process)) => (process, Err(OpenError::Unavailable(()))),
-        };
-        *runtime = Some(process);
-        (startup_timeout, working_directory, opened)
+            *runtime = Some(process);
+            (
+                startup_timeout,
+                working_directory,
+                Ok(transport),
+                Some(launch),
+            )
+        } else {
+            let launch_config = config.clone();
+            let opened = engine.open(PiOpen {
+                config,
+                cancelled: &cancelled,
+                observe: &mut |stage| match stage {
+                    OpenStage::Spawned(supervisor) => diagnostics.spawned(supervisor),
+                    OpenStage::Waiting => diagnostics.log_lifecycle(),
+                },
+            });
+            let (process, opened) = match opened {
+                Ok((process, transport)) => (process, Ok(transport)),
+                Err(OpenError::Spawn(error)) => {
+                    eprintln!("muniment-runtime: run_id={run_id} pi_spawn error={error}");
+                    fail_start(
+                        &app,
+                        &journal,
+                        &mut projector,
+                        &run_id,
+                        &mut seq,
+                        "The agent runtime could not start.",
+                        subject.as_deref(),
+                        resume.is_some(),
+                    );
+                    return;
+                }
+                Err(OpenError::Cancelled(process)) => (process, Err(OpenError::Cancelled(()))),
+                Err(OpenError::NotReady(process, status)) => {
+                    (process, Err(OpenError::NotReady((), status)))
+                }
+                Err(OpenError::Unavailable(process)) => (process, Err(OpenError::Unavailable(()))),
+            };
+            // The launch is read once Pi is ready, so a file Pi writes as it
+            // starts belongs to it.
+            let launch = opened
+                .is_ok()
+                .then(|| crate::engine::PiLaunch::ready(launch_config));
+            *runtime = Some(process);
+            (startup_timeout, working_directory, opened, launch)
+        }
     };
-    let (startup_timeout, working_directory, opened) = opening;
+    let (startup_timeout, working_directory, opened, launch) = opening;
     // A reply records its folder and conversation before its prompt goes,
     // and its folder again when it ends, so a rewind can return to them.
-    let _checkpoints = if compaction.is_some() {
+    let checkpoints = if compaction.is_some() {
         None
     } else if resume.is_some() {
         crate::checkpoint::RunCheckpoints::resume(&app, &run_id, working_directory.as_deref())
@@ -913,10 +988,14 @@ fn coordinate_work(
             return;
         }
         Err(OpenError::NotReady((), readiness_status)) => {
+            // The exit that ended a start carries what Pi wrote before it.
+            diagnostics.log_lifecycle();
             let waiting_on = startup_waiting_on(
                 &app,
                 &runtime.wiring,
                 working_directory.as_deref(),
+                readiness_status,
+                &diagnostics.stderr_tail(),
                 &cancelled,
             );
             diagnostics.readiness_failed(readiness_status, startup_timeout, &waiting_on);
@@ -928,13 +1007,14 @@ fn coordinate_work(
             );
             let reason = if let StartupWait::Folder { access, folder } = waiting_on {
                 crate::folder_access::failure_reason(access, folder)
-            } else if grant.is_local() {
-                match diagnostics.stderr_error() {
-                    Some(error) => format!("Reply setup failed. {error}"),
-                    None => "Reply setup timed out. Try again.".to_owned(),
-                }
+            } else if waiting_on == StartupWait::MissingFolder {
+                MISSING_FOLDER_REASON.to_owned()
+            } else if let Some(error) = diagnostics.stderr_error().filter(|_| grant.is_local()) {
+                format!("Reply setup failed. {error}")
             } else if readiness_status != SidecarStatus::Starting {
                 "Reply setup stopped before it became ready. Try again.".to_owned()
+            } else if grant.is_local() {
+                "Reply setup timed out. Try again.".to_owned()
             } else {
                 format!(
                     "Reply setup did not become ready within {} seconds. Try again.",
@@ -1341,6 +1421,25 @@ fn coordinate_work(
     // Text deltas wait here for one batched commit. Every other append below
     // flushes them first, so the journal keeps stream order.
     let mut held_deltas = HeldDeltas::default();
+    // The reply text's last character, and whether a model call ended
+    // since, so the next call's text starts on a paragraph of its own.
+    let mut text_end: Option<char> = None;
+    let mut call_ended = false;
+    // A reply on a server the person added names that server while Pi
+    // retries it, and a probe with a short connect bound ends the wait when
+    // the server does not accept a connection.
+    let endpoint = grant
+        .is_local()
+        .then(|| app.local_default_model())
+        .flatten()
+        .zip(crate::state_root::state_directory())
+        .and_then(|(model, state)| {
+            endpoint_wait::Endpoint::of_model(&crate::state_root::agent_directory(&state), &model)
+        });
+    let probe = endpoint.as_ref().and_then(|endpoint| {
+        endpoint_wait::Probe::start(&endpoint.url, endpoint_wait::CONNECT_BOUND)
+    });
+    let mut answered = false;
     'coordinate: loop {
         diagnostics.log_lifecycle();
         if let Some(error) = gateway_failure
@@ -1398,6 +1497,45 @@ fn coordinate_work(
                 &mut open_effects,
                 "run.cancelled",
                 json!({}),
+                subject.as_deref(),
+            );
+            break;
+        }
+        if let Some(endpoint) = endpoint.as_ref().filter(|_| {
+            !answered
+                && probe
+                    .as_ref()
+                    .is_some_and(|probe| probe.silent(Duration::ZERO))
+        }) {
+            eprintln!(
+                "muniment-runtime: run_id={run_id} endpoint_probe outcome=silent bound_ms={}",
+                endpoint_wait::CONNECT_BOUND.as_millis()
+            );
+            if engine
+                .cancel(&transport, &adapter, Duration::from_secs(2))
+                .is_err()
+            {
+                engine.stop(runtime);
+            }
+            diagnostics.outcome = "failed";
+            diagnostics.provider_error = Some("Connection error.".into());
+            let _ = held_deltas.flush(
+                &app,
+                &journal,
+                &mut projector,
+                &run_id,
+                &mut seq,
+                subject.as_deref(),
+            );
+            fail_with_detail(
+                &app,
+                &journal,
+                &mut projector,
+                &run_id,
+                &mut seq,
+                &mut open_effects,
+                &endpoint.silent_reason(),
+                Some("Connection error."),
                 subject.as_deref(),
             );
             break;
@@ -1492,6 +1630,10 @@ fn coordinate_work(
         });
         if let Ok(event) = &event {
             ledger.record(event);
+            answered |= matches!(
+                event,
+                PiChatEvent::TextDelta(_) | PiChatEvent::ToolStarted { .. }
+            );
         }
         // Any event but text, and the idle poll that ends a window, commits
         // the held text before the event's own append.
@@ -1509,8 +1651,50 @@ fn coordinate_work(
         {
             break 'coordinate;
         }
+        // A message Pi took during the reply joins the run's journal after
+        // the text committed so far, which places it in the reply, and before
+        // the event in hand, so a reply that ends next still records it.
+        let steered = adapter.take_steered();
+        if !steered.is_empty() {
+            if held_deltas
+                .flush(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    subject.as_deref(),
+                )
+                .is_err()
+            {
+                break 'coordinate;
+            }
+            for message in steered {
+                if append_emit(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    RUN_STEERED,
+                    run_steered_payload(&message),
+                    subject.as_deref(),
+                )
+                .is_err()
+                {
+                    break 'coordinate;
+                }
+            }
+        }
         match event {
             Ok(PiChatEvent::TextDelta(text)) => {
+                if call_ended && !text.is_empty() {
+                    call_ended = false;
+                    if let Some(separator) = call_separator(text_end, &text) {
+                        held_deltas.push(model_stream_delta_payload(separator));
+                    }
+                }
+                text_end = text.chars().next_back().or(text_end);
                 for slice in split_model_stream_delta(&text) {
                     held_deltas.push(model_stream_delta_payload(slice));
                 }
@@ -1538,6 +1722,8 @@ fn coordinate_work(
                 match result {
                     Ok(outcome) => {
                         diagnostics.outcome = "completed";
+                        let receipt =
+                            local_receipt(run_time(projector.started_at(), run_started), &ledger);
                         diagnostics.failed = append_terminal(
                             &app,
                             &journal,
@@ -1546,7 +1732,7 @@ fn coordinate_work(
                             &mut seq,
                             &mut open_effects,
                             "run.completed",
-                            json!({"receipt": local_receipt(run_started.elapsed(), &ledger)}),
+                            json!({ "receipt": receipt }),
                             subject.as_deref(),
                         )
                         .is_err();
@@ -1576,7 +1762,10 @@ fn coordinate_work(
             Ok(PiChatEvent::Completed) => {
                 diagnostics.outcome = "completed";
                 let receipt = if grant.is_local() {
-                    Ok(local_receipt(run_started.elapsed(), &ledger))
+                    Ok(local_receipt(
+                        run_time(projector.started_at(), run_started),
+                        &ledger,
+                    ))
                 } else {
                     app.fetch_receipt(&grant, &access_token, &run_id)
                 }
@@ -1641,8 +1830,15 @@ fn coordinate_work(
                 if let Some(detail) = &detail {
                     diagnostics.provider_error = Some(detail.clone());
                 }
+                let silent = endpoint.as_ref().filter(|_| {
+                    detail
+                        .as_deref()
+                        .is_some_and(crate::sidecar::pi_chat::connection_failure)
+                });
                 let reason = if event == PiChatEvent::UsageLimit {
                     crate::model_router::balance::PickError::UsageLimit.message()
+                } else if let Some(endpoint) = silent {
+                    endpoint.silent_reason()
                 } else {
                     failure_reason(detail.as_deref())
                 };
@@ -1750,7 +1946,52 @@ fn coordinate_work(
                     break;
                 }
             }
-            Ok(PiChatEvent::ModelReported { .. }) => {}
+            Ok(PiChatEvent::ModelReported { .. }) => call_ended = true,
+            Ok(PiChatEvent::Retrying {
+                attempt,
+                max_attempts,
+                error,
+            }) => {
+                let connection = crate::sidecar::pi_chat::connection_failure(&error);
+                // A call that never reached the server gets one more try.
+                if connection && attempt > endpoint_wait::CONNECTION_RETRIES {
+                    eprintln!(
+                        "muniment-runtime: run_id={run_id} provider_retry stopped attempt={attempt} reason=connection"
+                    );
+                    if let Err(error) = adapter.stop_retry(&transport) {
+                        eprintln!(
+                            "muniment-runtime: run_id={run_id} provider_retry stop_failed error={error}"
+                        );
+                    }
+                    continue;
+                }
+                eprintln!(
+                    "muniment-runtime: run_id={run_id} provider_retry attempt={attempt} max={max_attempts} connection={connection}"
+                );
+                let retries = if connection {
+                    max_attempts.min(endpoint_wait::CONNECTION_RETRIES)
+                } else {
+                    max_attempts
+                };
+                let stage = match endpoint.as_ref().filter(|_| connection) {
+                    Some(endpoint) => endpoint.retry_stage(attempt + 1, retries + 1),
+                    None => endpoint_wait::retry_stage(attempt + 1, retries + 1),
+                };
+                if append_emit(
+                    &app,
+                    &journal,
+                    &mut projector,
+                    &run_id,
+                    &mut seq,
+                    "model.routing.stage",
+                    json!({ "stage": stage }),
+                    subject.as_deref(),
+                )
+                .is_err()
+                {
+                    break;
+                }
+            }
             Ok(PiChatEvent::RoutingStage(stage)) => {
                 if append_emit(
                     &app,
@@ -1829,6 +2070,37 @@ fn coordinate_work(
             }
         }
     }
+    // The reply is over: the host learns it before the post-run work below.
+    ended.tell();
+    // A reply that ended cleanly leaves its process for the thread's next one.
+    if let Some(launch) = launch.filter(|_| {
+        compaction.is_none()
+            && resume.is_none()
+            && gateway_failure.is_none()
+            && matches!(
+                projector.status(),
+                Some(crate::journal::reducer::RunStatus::Completed)
+            )
+    }) {
+        engine.park(runtime, launch);
+    }
+    // The reply records its folder as it ended before the folder takes a
+    // new name, and the thread's records then follow the folder.
+    let folder_before_name = working_directory
+        .as_deref()
+        .and_then(|folder| std::fs::canonicalize(folder).ok());
+    drop(checkpoints);
+    // The thread's folder takes the thread's title once the run ends, never
+    // while Pi runs a turn in it. The next launch points the stored session
+    // at the renamed folder, and an idle process follows it there.
+    if compaction.is_none() {
+        if let Some(title) = run_thread_title(&journal, &run_id) {
+            if let (Some(named), Some(from)) = (app.name_thread_folder(&title), folder_before_name)
+            {
+                crate::checkpoint::follow_folder(&app, &from, &named);
+            }
+        }
+    }
     if compaction.is_none()
         && matches!(
             projector.status(),
@@ -1844,6 +2116,41 @@ fn coordinate_work(
         };
         memory_runtime.extract_after_run(&run_id, messages);
     }
+}
+
+/// Tells the host once that a run ended: at the end of its reply, or when
+/// the run leaves the coordinator by any other way.
+struct RunEnd<'a, A: PiLaunchBoundaries> {
+    app: &'a A,
+    run_id: String,
+    told: bool,
+}
+
+impl<A: PiLaunchBoundaries> RunEnd<'_, A> {
+    fn tell(&mut self) {
+        if !std::mem::replace(&mut self.told, true) {
+            self.app.run_ended(&self.run_id);
+        }
+    }
+}
+
+impl<A: PiLaunchBoundaries> Drop for RunEnd<'_, A> {
+    fn drop(&mut self) {
+        self.tell();
+    }
+}
+
+/// The title of the thread `run_id` ran in, when it has one.
+fn run_thread_title(journal: &SharedStorage, run_id: &str) -> Option<String> {
+    let mut storage = journal.lock().ok()?;
+    let thread = storage.journal.run_thread_id(run_id).ok()??;
+    let summary = storage
+        .journal
+        .summaries_of_threads(&[thread])
+        .ok()?
+        .into_iter()
+        .next()?;
+    (!summary.title.trim().is_empty()).then_some(summary.title)
 }
 
 fn stored_prompt(run_id: &str, subject: Option<&str>) -> Vec<String> {
@@ -2469,6 +2776,8 @@ pub(crate) enum StartupWait {
         access: crate::folder_access::FolderAccess,
         folder: Option<&'static str>,
     },
+    /// The folder Pi works in, or the one its stored session names, is gone.
+    MissingFolder,
     /// Pi asked a question through an extension and has no answer yet.
     Dialog(String),
     Unknown,
@@ -2482,45 +2791,95 @@ impl std::fmt::Display for StartupWait {
                 "folder_access access={access:?} folder={}",
                 folder.unwrap_or("other")
             ),
+            Self::MissingFolder => formatter.write_str("missing_working_folder"),
             Self::Dialog(request) => write!(formatter, "extension_request {request}"),
             Self::Unknown => formatter.write_str("unknown"),
         }
     }
 }
 
+/// What a run tells the user when the folder its thread works in is gone.
+pub(crate) const MISSING_FOLDER_REASON: &str =
+    "Muniment could not find the folder this thread works in, so the reply did not start. Try again.";
+
+/// The first line Pi writes when the working folder its stored session
+/// names does not exist.
+const PI_MISSING_SESSION_FOLDER: &str = "Stored session working directory does not exist";
+
 fn startup_waiting_on(
     app: &impl PiLaunchBoundaries,
     wiring: &crate::sidecar::PiRpcWiring,
     directory: Option<&std::path::Path>,
+    status: SidecarStatus,
+    stderr: &[String],
     cancelled: &AtomicBool,
 ) -> StartupWait {
+    startup_wait(
+        directory,
+        status,
+        stderr,
+        |directory| app.folder_access(directory, Duration::from_millis(500), cancelled),
+        || wiring.pending_request(),
+    )
+}
+
+/// The break that starts a model call's text when an earlier call of the
+/// same reply wrote text: one paragraph, unless either side already holds
+/// the space.
+fn call_separator(text_end: Option<char>, next: &str) -> Option<&'static str> {
+    let end = text_end?;
+    let next_start = next.chars().next()?;
+    (!end.is_whitespace() && !next_start.is_whitespace()).then_some("\n\n")
+}
+
+/// Names what Pi waited on. A missing folder comes first. A consent prompt
+/// holds a Pi that is still starting, so a Pi that exited waited on no prompt.
+fn startup_wait(
+    directory: Option<&std::path::Path>,
+    status: SidecarStatus,
+    stderr: &[String],
+    access: impl FnOnce(&std::path::Path) -> crate::folder_access::FolderAccess,
+    pending: impl FnOnce() -> Option<String>,
+) -> StartupWait {
     use crate::folder_access::FolderAccess;
+    let stored_missing = stderr
+        .iter()
+        .any(|line| line.trim().starts_with(PI_MISSING_SESSION_FOLDER));
+    if stored_missing || directory.is_some_and(|directory| !directory.exists()) {
+        return StartupWait::MissingFolder;
+    }
     if let Some(directory) = directory {
-        let access = app.folder_access(directory, Duration::from_millis(500), cancelled);
-        if access != FolderAccess::Open {
+        let access = access(directory);
+        let held = access == FolderAccess::Waiting && status == SidecarStatus::Starting;
+        if access == FolderAccess::Denied || held {
             let folder = crate::state_root::home_directory_value().and_then(|home| {
                 crate::folder_access::protected_folder(directory, std::path::Path::new(&home))
             });
             return StartupWait::Folder { access, folder };
         }
     }
-    wiring
-        .pending_request()
-        .map_or(StartupWait::Unknown, StartupWait::Dialog)
+    pending().map_or(StartupWait::Unknown, StartupWait::Dialog)
 }
 
-/// What a reply that never became ready keeps as its detail: the bound, the
-/// state Pi reached, what it waited on and the first error it wrote.
+/// What a reply that never became ready keeps as its detail: the bound, or
+/// the exit when Pi stopped before it, the state Pi reached, what it waited
+/// on and the first error it wrote.
 fn readiness_detail(
     bound: Duration,
     status: SidecarStatus,
     waiting_on: &StartupWait,
     stderr_error: Option<String>,
 ) -> String {
-    let mut detail = format!(
-        "The agent runtime did not report ready within {} seconds. Status: {status:?}. Waiting on: {waiting_on}.",
-        bound.as_secs()
-    );
+    let mut detail = if status == SidecarStatus::Starting {
+        format!(
+            "The agent runtime did not report ready within {} seconds. Status: {status:?}. Waiting on: {waiting_on}.",
+            bound.as_secs()
+        )
+    } else {
+        format!(
+            "The agent runtime exited before it reported ready. Status: {status:?}. Waiting on: {waiting_on}."
+        )
+    };
     if let Some(error) = stderr_error {
         detail.push(' ');
         detail.push_str(&error);
@@ -2529,12 +2888,47 @@ fn readiness_detail(
 }
 
 /// The line a failed reply shows: the provider's own sentence after ours,
-/// when it gave one.
+/// when it gave one. A refused sign-in or key reads as the step that fixes
+/// it, and the provider's answer stays in the detail.
 fn failure_reason(detail: Option<&str>) -> String {
     match detail {
-        Some(detail) => format!("The model could not complete this reply. {detail}"),
+        Some(detail) => credential_step(detail)
+            .or_else(|| model_refusal(detail))
+            .unwrap_or_else(|| format!("The model could not complete this reply. {detail}")),
         None => "The model could not complete this reply.".into(),
     }
+}
+
+/// The sentence that names a refused credential and the step that fixes it:
+/// the router's own, such as `The OpenAI sign-in expired. Sign in again in
+/// Models.`, else a provider's answer that its token expired.
+fn credential_step(detail: &str) -> Option<String> {
+    use crate::model_router::usage::{KEY_REFUSED, SIGN_IN_EXPIRED};
+    for hint in [SIGN_IN_EXPIRED, KEY_REFUSED] {
+        if let Some(at) = detail.find(hint) {
+            if let Some(start) = detail[..at].rfind("The ") {
+                return Some(format!("{}{hint}", &detail[start..at]));
+            }
+        }
+    }
+    let lower = detail.to_ascii_lowercase();
+    ["token_expired", "token has expired", "token expired"]
+        .iter()
+        .any(|words| lower.contains(words))
+        .then(|| format!("The{SIGN_IN_EXPIRED}"))
+}
+
+/// The sentence that names a provider's lasting refusal of the model: the
+/// router's own, such as `xAI refused this model: it requires beta access.`,
+/// else a provider's answer that the model requires beta access.
+fn model_refusal(detail: &str) -> Option<String> {
+    use crate::model_router::usage::{model_refusal_sentence, MODEL_REFUSED};
+    model_refusal_sentence(detail).or_else(|| {
+        detail
+            .to_ascii_lowercase()
+            .contains("beta access")
+            .then(|| format!("The provider{MODEL_REFUSED}it requires beta access."))
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2605,6 +2999,152 @@ mod tests {
     use std::cell::RefCell;
     use std::io;
     use uuid::Uuid;
+
+    #[test]
+    fn a_model_calls_text_starts_a_paragraph_unless_space_already_parts_it() {
+        assert_eq!(call_separator(Some('d'), "finished"), Some("\n\n"));
+        assert_eq!(call_separator(Some('.'), "Next"), Some("\n\n"));
+        assert_eq!(call_separator(Some('\n'), "finished"), None);
+        assert_eq!(call_separator(Some('d'), " finished"), None);
+        assert_eq!(call_separator(None, "finished"), None);
+        assert_eq!(call_separator(Some('d'), ""), None);
+    }
+
+    #[test]
+    fn a_pi_that_exits_before_ready_is_named_as_an_exit_not_a_timeout() {
+        let error =
+            "Error: Failed to load extension \"/m/x.mjs\": Extension path does not exist: /m/x.mjs";
+        let exited = readiness_detail(
+            Duration::from_secs(120),
+            SidecarStatus::Restarting,
+            &StartupWait::Unknown,
+            Some(error.to_owned()),
+        );
+        assert_eq!(
+            exited,
+            format!("The agent runtime exited before it reported ready. Status: Restarting. Waiting on: unknown. {error}")
+        );
+        let waited = readiness_detail(
+            Duration::from_secs(120),
+            SidecarStatus::Starting,
+            &StartupWait::Unknown,
+            None,
+        );
+        assert_eq!(
+            waited,
+            "The agent runtime did not report ready within 120 seconds. Status: Starting. Waiting on: unknown."
+        );
+    }
+
+    #[test]
+    fn a_missing_working_folder_is_named_and_never_blamed_on_a_consent_prompt() {
+        use crate::folder_access::FolderAccess;
+        let directory = std::env::temp_dir();
+        let missing = directory.join(format!("muniment-missing-{}", Uuid::new_v4()));
+        let held = |_: &std::path::Path| FolderAccess::Waiting;
+        let stored = vec![
+            format!(
+                "Stored session working directory does not exist: {}",
+                missing.display()
+            ),
+            "Session file: /profile/sessions/one.jsonl".to_owned(),
+        ];
+        // Pi exited because its stored folder is gone, while a late read still waits.
+        for status in [SidecarStatus::Restarting, SidecarStatus::Starting] {
+            assert_eq!(
+                startup_wait(Some(&directory), status, &stored, held, || None),
+                StartupWait::MissingFolder
+            );
+        }
+        // The folder Pi starts in is gone.
+        assert_eq!(
+            startup_wait(Some(&missing), SidecarStatus::Restarting, &[], held, || {
+                None
+            }),
+            StartupWait::MissingFolder
+        );
+        // A Pi that exited was not held by a prompt, so its own error stands.
+        assert_eq!(
+            startup_wait(
+                Some(&directory),
+                SidecarStatus::Restarting,
+                &[],
+                held,
+                || None
+            ),
+            StartupWait::Unknown
+        );
+        // A Pi still starting while macOS holds its folder waits on the prompt.
+        assert!(matches!(
+            startup_wait(Some(&directory), SidecarStatus::Starting, &[], held, || {
+                None
+            }),
+            StartupWait::Folder {
+                access: FolderAccess::Waiting,
+                ..
+            }
+        ));
+        assert!(matches!(
+            startup_wait(
+                Some(&directory),
+                SidecarStatus::Restarting,
+                &[],
+                |_: &std::path::Path| FolderAccess::Denied,
+                || None
+            ),
+            StartupWait::Folder {
+                access: FolderAccess::Denied,
+                ..
+            }
+        ));
+        let reason = MISSING_FOLDER_REASON;
+        assert!(
+            !reason.contains("macOS") && !reason.contains('/'),
+            "{reason}"
+        );
+        assert_eq!(
+            StartupWait::MissingFolder.to_string(),
+            "missing_working_folder"
+        );
+    }
+
+    #[test]
+    fn a_refused_credential_reads_as_the_step_that_fixes_it() {
+        let routed = "No eligible model served this turn. The OpenAI sign-in expired. Sign in again in Models. { \"error\": { \"code\": \"token_expired\" } } me answered 401.";
+        assert_eq!(
+            failure_reason(Some(routed)),
+            "The OpenAI sign-in expired. Sign in again in Models."
+        );
+        assert_eq!(
+            failure_reason(Some(
+                "Your authentication token has expired. Please sign in."
+            )),
+            "The sign-in expired. Sign in again in Models."
+        );
+        assert_eq!(
+            failure_reason(Some("The model is busy.")),
+            "The model could not complete this reply. The model is busy."
+        );
+    }
+
+    #[test]
+    fn a_lasting_provider_refusal_reads_as_its_cause() {
+        let body = r#"{"code":"invalid-argument","error":"Client-side tools for multi-agent models require beta access"}"#;
+        let routed = format!(
+            "No eligible model served this turn. xAI refused this model: it requires beta access. {body} me answered 400."
+        );
+        assert_eq!(
+            failure_reason(Some(&routed)),
+            "xAI refused this model: it requires beta access."
+        );
+        // An older router's text and a provider's direct answer name no provider.
+        assert_eq!(
+            failure_reason(Some(&format!(
+                "No eligible model served this turn. {body} me answered 400."
+            ))),
+            "The provider refused this model: it requires beta access."
+        );
+    }
 
     fn ledger_of_one_run() -> LocalRunLedger {
         let mut ledger = LocalRunLedger::default();
@@ -2761,7 +3301,7 @@ mod tests {
             .split_once('.')
             .expect("local receipt time has a decimal point");
         assert!(!whole.is_empty() && whole.chars().all(|character| character.is_ascii_digit()));
-        assert_eq!(tenths.len(), 1);
+        assert_eq!(tenths.len(), 3);
         assert!(tenths.chars().all(|character| character.is_ascii_digit()));
         assert!(expected_range.contains(&seconds.parse::<f64>().unwrap()));
         assert_eq!(receipt.route, None);
@@ -2805,6 +3345,24 @@ mod tests {
     #[test]
     fn local_receipt_records_multi_second_time_without_a_route() {
         assert_local_receipt(Duration::from_millis(6_200), 6.0..7.0);
+        let receipt = local_receipt(Duration::from_millis(5_499), &LocalRunLedger::default());
+        assert_eq!(receipt.time.as_deref(), Some("5.499s"));
+    }
+
+    #[test]
+    fn run_time_counts_from_the_run_started_event() {
+        let fallback = Instant::now();
+        let started = (chrono::Utc::now() - chrono::Duration::milliseconds(5_600))
+            .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true);
+        let time = run_time(Some(&started), fallback);
+        assert!(time >= Duration::from_millis(5_600) && time < Duration::from_millis(6_600));
+        // A start in the future counts as no time, and a missing or unreadable
+        // start counts from the coordinator's own clock.
+        let later = (chrono::Utc::now() + chrono::Duration::seconds(5))
+            .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true);
+        assert_eq!(run_time(Some(&later), fallback), Duration::ZERO);
+        assert!(run_time(None, fallback) < Duration::from_secs(1));
+        assert!(run_time(Some("not a time"), fallback) < Duration::from_secs(1));
     }
 
     #[derive(Default)]
@@ -3085,7 +3643,8 @@ mod tests {
         prefill: Option<&str>,
         failure: Option<MemoryFailure>,
     ) -> ExtensionUiAnswer {
-        let root = std::env::temp_dir().join(format!("muniment-memory-failure-{}", Uuid::now_v7()));
+        let root = crate::state_root::test_root()
+            .join(format!("muniment-memory-failure-{}", Uuid::now_v7()));
         std::fs::create_dir_all(&root).unwrap();
         let sink = FakeChatEventSink;
         let shared = Arc::new(Mutex::new(crate::run_events::ChatStorage {
@@ -3130,11 +3689,6 @@ mod tests {
                 MemoryIndexError::InvalidToolArguments,
                 "invalid_tool_arguments",
                 "The memory search arguments are invalid.",
-            ),
-            (
-                MemoryIndexError::LimitRaised,
-                "limit_raised",
-                "The memory search requested a limit above the configured limit.",
             ),
             (
                 MemoryIndexError::QueryTooLong,
@@ -3228,6 +3782,29 @@ mod tests {
             serde_json::to_value(event).unwrap()["recalls"],
             json!([{"query": "lease terms", "files": ["memory/lease.md"]}])
         );
+    }
+
+    #[test]
+    fn live_chat_event_carries_the_run_start() {
+        let event = crate::run_events::chat_event(
+            "run-1",
+            ChatProjection {
+                started_at: Some("2026-08-05T00:00:00.123Z".into()),
+                ..ChatProjection::default()
+            },
+            None,
+            Vec::new(),
+        );
+        assert_eq!(
+            serde_json::to_value(event).unwrap()["startedAt"],
+            "2026-08-05T00:00:00.123Z"
+        );
+        let unstarted =
+            crate::run_events::chat_event("run-1", ChatProjection::default(), None, Vec::new());
+        assert!(serde_json::to_value(unstarted)
+            .unwrap()
+            .get("startedAt")
+            .is_none());
     }
 
     #[test]

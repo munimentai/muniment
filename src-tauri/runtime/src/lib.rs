@@ -72,3 +72,17 @@ pub use windows_attach_activation::{
 pub use windows_attach_activation::{
     run_windows_attach_activation_with_upgrade_watch, MacosUpgradeWatchTestControl,
 };
+
+/// With the instance lock held, a thread extension older than an hour that no
+/// running Pi names belongs to a session that ended. The process list takes a
+/// moment, so the sweep runs beside startup.
+pub(crate) fn spawn_memory_extension_sweep(memory_directory: std::path::PathBuf) {
+    std::thread::spawn(move || {
+        let swept = muniment_core::memory_runtime::sweep_ended_extensions(&memory_directory);
+        if swept > 0 {
+            muniment_core::runtime_eprintln!(
+                "muniment-runtime: memory extensions swept removed={swept}"
+            );
+        }
+    });
+}

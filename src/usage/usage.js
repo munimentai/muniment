@@ -5,8 +5,8 @@
 // with a row per window.
 import { agentRuntimes } from '../agents/agent-runtime.js'
 import { LOCAL_RUNTIME_ID, machineName } from '../runtimes/runtimes.js'
-import { familyName, providerName } from '../lib/provider-catalog.js'
-import { formatDate, formatHour, zoneOffsetMinutes } from '../lib/time-format.svelte.js'
+import { familyName, modelDisplayName, providerName } from '../lib/provider-catalog.js'
+import { displayZone, formatDate, formatHour, zoneOffsetMinutes } from '../lib/time-format.svelte.js'
 
 export const USAGE_VIEWS = [
   { value: 'limits', label: 'Limits' },
@@ -35,11 +35,34 @@ export function machineRefs(runtimeList) {
   }))
 }
 
+// The note for a machine that failed to answer. Core counts the copies of
+// its runs that the machines that answer hold, under a row of its own.
+export function failedNote(entry, summary) {
+  const counted = (summary?.breakdown?.machine ?? []).some((row) => row.key === entry.id && row.runs > 0)
+  return counted
+    ? `${entry.name} did not answer. The totals count the copies of its runs that other machines hold.`
+    : `${entry.name} did not answer. The totals leave it out.`
+}
+
+// Each paired machine that does not answer, by its Machines list name. Core
+// counts its runs from the copies the machines that answer hold.
+export function offlineMembers(runtimeList) {
+  return (runtimeList?.runtimes ?? [])
+    .filter((runtime) => !runtime.local && runtime.id !== LOCAL_RUNTIME_ID && runtime.status !== 'online')
+    .map((runtime) => ({ id: runtime.id, name: machineName(runtime) }))
+}
+
 // One request through the window: each named machine answers and core joins them.
-export function readUsage(tauri, machines, { range = '7d', provider = null } = {}) {
-  const body = { range, utc_offset_minutes: zoneOffsetMinutes() }
+// Days start at the shown zone's own midnight. A machine whose runtime
+// predates the zone answers at the offset alone. `machine` is the machine
+// filter, and `members` names the machines that do not answer.
+export function readUsage(tauri, machines, { range = '7d', provider = null, machine = '', members = [] } = {}) {
+  const body = { range, utc_offset_minutes: zoneOffsetMinutes(), time_zone: displayZone() }
   if (provider) body.provider = provider
-  return tauri.invoke('usage_summary', { machines, body })
+  const args = { machines, body }
+  if (machine) args.machine = machine
+  if (members.length) args.members = members
+  return tauri.invoke('usage_summary', args)
 }
 
 // Each provider's bar color: its brand's own hue, a neutral for the rest.
@@ -60,10 +83,17 @@ export function providerColor(provider) {
 }
 
 // A family's name, else the catalog's name for a provider such as a local server.
-export function providerLabel(provider) {
+// A provider the catalog names keeps that name. A custom endpoint takes the
+// name the inventory gives it, and a disconnected one the last name it had,
+// so its usage history still reads by a name. An endpoint with neither reads
+// as its id.
+export function providerLabel(provider, inventory = null) {
   if (!provider) return 'Unknown'
   const family = familyName(provider)
-  return family !== provider ? family : providerName(provider) || provider
+  if (family !== provider) return family
+  const named = providerName(provider)
+  if (named && named !== provider) return named
+  return inventory?.providers?.find((entry) => entry.id === provider)?.name || inventory?.former_names?.[provider] || provider
 }
 
 const WINDOW_NAMES = { five_hour: '5-hour', daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly', other: 'Window' }
@@ -161,16 +191,18 @@ export function bucketLabel(startMs, bucket) {
 }
 
 // A breakdown row's name: the label core gives, else what an empty key means.
-export function rowLabel(row, breakdown) {
-  if (row?.label) return row.label
+// Core labels a model row with the model's id, which reads by the name the
+// composer gives it from `inventory`.
+export function rowLabel(row, breakdown, inventory = null) {
+  if (row?.label) return breakdown === 'model' ? modelDisplayName(inventory, row.provider ?? null, row.label) : row.label
   if (row?.key) return row.key
   return breakdown === 'agent' ? 'No agent' : breakdown === 'project' ? 'No project' : 'Unknown'
 }
 
 // Every provider the page can filter by: those with usage and those with a window.
-export function providerOptions(summary) {
+export function providerOptions(summary, inventory = null) {
   const ids = new Set([...(summary?.providers ?? []), ...(summary?.accounts ?? []).map((account) => account.provider)])
-  return [{ value: '', label: 'All providers' }, ...[...ids].sort().map((id) => ({ value: id, label: providerLabel(id), provider: id }))]
+  return [{ value: '', label: 'All providers' }, ...[...ids].sort().map((id) => ({ value: id, label: providerLabel(id, inventory), provider: id }))]
 }
 
 const UNMETERED = { local: 'No limit', key: 'Billed by use', pending: 'Allowance pending', unread: 'Allowance unavailable' }

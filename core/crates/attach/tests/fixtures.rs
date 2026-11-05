@@ -15,7 +15,7 @@ struct TestDirectory(PathBuf);
 
 impl TestDirectory {
     fn new() -> Self {
-        let path = std::env::temp_dir().join(format!(
+        let path = muniment_atomic_file::test_root::test_root().join(format!(
             "muniment-attach-fixtures-{}-{}",
             std::process::id(),
             NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed)

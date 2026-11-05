@@ -555,6 +555,8 @@ export function buildProbeCommandTable(fixtureName) {
     }
     if (command === 'launcher_register') return null
     if (command === 'artifact_list') return []
+    // A settled run publishes each HTML file it changed.
+    if (command === 'artifact_from_file') return { id: `artifact:${payload.path}` }
     if (command === 'creation_list') return JSON.parse(JSON.stringify(probeCreations))
     // The plan arrives as the app's live state, which only serializes as JSON.
     if (command === 'creation_save') {
@@ -914,6 +916,8 @@ export function buildProbeCommandTable(fixtureName) {
     if (command === 'parakeet_install_status') return { state: 'installed' }
     if (command === 'installed_fonts') return ['Avenir Next', 'Helvetica Neue', 'Iowan Old Style', 'Menlo', 'SF Mono']
     if (command === 'browser_language' || command === 'browser_language_set') return { languages: [{ code: 'en-US', state: 'installed' }, { code: 'de', state: 'installed' }, { code: 'fr', state: 'available' }, { code: 'ja', state: 'available' }], selected: payload?.code ?? null, active: null, downloadSize: 3_400_000 }
+    // The window and input-source mark commands answer nothing in a browser.
+    if (['main_window_ready', 'input_mark_watch', 'input_mark_unwatch', 'input_mark_dismiss'].includes(command)) return null
     unknownCommands.push(command)
     throw new Error(`Unknown probe command: ${command}`)
   }

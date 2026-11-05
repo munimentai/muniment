@@ -35,6 +35,7 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
+    globalSetup: ['./test/isolated-home.global.js'],
     setupFiles: ['./test/isolated-home.setup.js', './test/model-registry.setup.js'],
     // The core tree runs its own node:test suites, and vitest.browser.config.js
     // runs the browser tests.

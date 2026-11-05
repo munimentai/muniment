@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import { createChatController } from './chat-controller.js'
+import { responseParts } from '../activity/action-feedback.js'
 
 function deferred() {
   let resolve
@@ -12,7 +13,7 @@ function deferred() {
   return { promise, resolve, reject }
 }
 
-function setup(invoke = vi.fn(), { threadId = null, summaries = [], projectId = null, agentId = null, thinkingLevel = null, permissionMode = null } = {}) {
+function setup(invoke = vi.fn(), { threadId = null, summaries = [], projectId = null, agentId = null, thinkingLevel = null, permissionMode = null, launchThreadId = null, options = {} } = {}) {
   let messages = []
   let active = null
   let announced = null
@@ -35,6 +36,8 @@ function setup(invoke = vi.fn(), { threadId = null, summaries = [], projectId = 
   const onFollow = vi.fn()
   const onSignInLink = vi.fn()
   const onSubmission = vi.fn()
+  const onCancelError = vi.fn()
+  const onQueueError = vi.fn()
   const controller = createChatController({
     invoke,
     listen: vi.fn(async (_, callback) => {
@@ -49,6 +52,7 @@ function setup(invoke = vi.fn(), { threadId = null, summaries = [], projectId = 
     readThinkingLevel: () => thinkingLevel,
     readPermissionMode: () => permissionMode,
     readThreadId: () => openThreadId,
+    readLaunchThreadId: () => launchThreadId,
     readProject: () => projectId,
     readAgent: () => agentId,
     readThreadSummaries: () => threadSummaries,
@@ -59,8 +63,8 @@ function setup(invoke = vi.fn(), { threadId = null, summaries = [], projectId = 
     onDraft: (next) => { draft = next },
     onFiles: (next) => { files = next },
     onSubmitError: (error) => { if (error) errors.push(error) },
-    onCancelError: vi.fn(),
-    onQueueError: vi.fn(),
+    onCancelError,
+    onQueueError,
     onHistoryError,
     onThreadSummaries,
     onMoreThreads,
@@ -71,6 +75,7 @@ function setup(invoke = vi.fn(), { threadId = null, summaries = [], projectId = 
     onSignInLink,
     onSubmission,
     onBackgroundRun: (next) => { background = next },
+    ...options,
   })
   return {
     controller,
@@ -92,6 +97,8 @@ function setup(invoke = vi.fn(), { threadId = null, summaries = [], projectId = 
     onFollow,
     onSignInLink,
     onSubmission,
+    onCancelError,
+    onQueueError,
     summaries: () => threadSummaries,
     setActive: (next) => { active = next },
     setDraft: (next) => { draft = next },
@@ -103,6 +110,168 @@ function setup(invoke = vi.fn(), { threadId = null, summaries = [], projectId = 
     setRuntime: (next) => { runtime = next },
   }
 }
+
+describe('first thread page', () => {
+  const page = (from, count, nextCursor) => ({ summaries: Array.from({ length: count }, (_, index) => ({ threadId: `t${from + index}` })), nextCursor })
+
+  it('reads older pages until the list holds 20 threads the user did not archive', async () => {
+    const archived = new Set(Array.from({ length: 12 }, (_, index) => `t${index}`))
+    const invoke = vi.fn(async (command, args) => {
+      if (command === 'chat_thread_summaries') return args.cursor == null ? page(0, 20, 'c1') : args.cursor === 'c1' ? page(20, 20, 'c2') : page(40, 20, null)
+      if (command === 'chat_current_thread') return null
+      if (command === 'chat_thread_open') return { entries: [], nextCursor: null }
+      return null
+    })
+    const context = setup(invoke, { options: { readArchived: (id) => archived.has(id) } })
+    await context.controller.loadHistory()
+    await vi.waitFor(() => expect(context.summaries()).toHaveLength(40))
+    expect(context.summaries().filter((summary) => !archived.has(summary.threadId))).toHaveLength(28)
+    expect(invoke.mock.calls.filter(([command]) => command === 'chat_thread_summaries').map(([, args]) => args)).toEqual([{ limit: 20 }, { limit: 20, cursor: 'c1' }])
+    expect(context.onMoreThreads).toHaveBeenLastCalledWith(true)
+  })
+
+  it('stops when the list ends', async () => {
+    const invoke = vi.fn(async (command, args) => {
+      if (command === 'chat_thread_summaries') return args.cursor == null ? page(0, 20, 'c1') : page(20, 3, null)
+      if (command === 'chat_thread_open') return { entries: [], nextCursor: null }
+      return null
+    })
+    const context = setup(invoke, { options: { readArchived: () => true } })
+    await context.controller.loadHistory()
+    await vi.waitFor(() => expect(context.summaries()).toHaveLength(23))
+    expect(context.onMoreThreads).toHaveBeenLastCalledWith(false)
+    expect(invoke.mock.calls.filter(([command]) => command === 'chat_thread_summaries')).toHaveLength(2)
+  })
+
+  // 12 archived threads lead 30 others, as in the live list that hid ten threads.
+  const live = Array.from({ length: 42 }, (_, index) => ({ threadId: `t${index}` }))
+  const liveArchived = new Set(['t0', 't1', 't2', 't3', 't4', 't5', 't6', 't7', 't8', 't9', 't10', 't11'])
+  const livePage = (cursor) => {
+    const from = cursor == null ? 0 : Number(cursor)
+    return { summaries: live.slice(from, from + 20), nextCursor: from + 20 < live.length ? String(from + 20) : null }
+  }
+  const shownCount = (context) => context.summaries().filter((summary) => !liveArchived.has(summary.threadId)).length
+
+  it('fills to 20 unarchived threads when a history load replaces the list during a page read', async () => {
+    const reads = []
+    const invoke = vi.fn(async (command, args) => {
+      if (command === 'chat_thread_summaries') {
+        if (args.cursor == null) return livePage(null)
+        const read = deferred()
+        reads.push(read)
+        return read.promise.then(() => livePage(args.cursor))
+      }
+      if (command === 'chat_thread_open') return { entries: [], nextCursor: null }
+      return null
+    })
+    const context = setup(invoke, { options: { readArchived: (id) => liveArchived.has(id) } })
+    const first = context.controller.loadHistory()
+    await vi.waitFor(() => expect(reads).toHaveLength(1))
+    // A reconnect reloads the history while the first fill reads page two.
+    const second = context.controller.loadHistory()
+    await vi.waitFor(() => expect(context.summaries()).toHaveLength(20))
+    reads[0].resolve()
+    await vi.waitFor(() => expect(reads).toHaveLength(2))
+    reads[1].resolve()
+    await Promise.all([first, second])
+    await vi.waitFor(() => expect(shownCount(context)).toBeGreaterThanOrEqual(20))
+    expect(context.summaries().map((summary) => summary.threadId)).toEqual(live.slice(0, 40).map((summary) => summary.threadId))
+    expect(context.onMoreThreads).toHaveBeenLastCalledWith(true)
+  })
+
+  it('takes the next page from a refresh when the first list read failed', async () => {
+    let failFirst = true
+    const invoke = vi.fn(async (command, args) => {
+      if (command === 'chat_thread_summaries') {
+        if (args.cursor == null && failFirst) { failFirst = false; throw new Error('Muniment is busy with another request.') }
+        return livePage(args.cursor)
+      }
+      if (command === 'chat_current_thread') return null
+      if (command === 'chat_thread_open') return { entries: [], nextCursor: null }
+      return null
+    })
+    const context = setup(invoke, { options: { readArchived: (id) => liveArchived.has(id) } })
+    await context.controller.loadHistory()
+    expect(context.controller.historyReadFailed()).toBe(true)
+    await context.controller.refreshThreads()
+    await vi.waitFor(() => expect(shownCount(context)).toBe(28))
+    expect(context.onMoreThreads).toHaveBeenLastCalledWith(true)
+    await expect(context.controller.loadOlderThreads()).resolves.toBe('t40')
+    expect(shownCount(context)).toBe(30)
+    expect(context.onMoreThreads).toHaveBeenLastCalledWith(false)
+  })
+
+  it('shares one page read between the fill and a search, so neither reads nothing', async () => {
+    const read = deferred()
+    const invoke = vi.fn(async (command, args) => {
+      if (command === 'chat_thread_summaries') return args.cursor == null ? livePage(null) : read.promise.then(() => livePage(args.cursor))
+      if (command === 'chat_thread_open') return { entries: [], nextCursor: null }
+      return null
+    })
+    const context = setup(invoke, { options: { readArchived: (id) => liveArchived.has(id) } })
+    const loading = context.controller.loadHistory()
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_summaries', { limit: 20, cursor: '20' }))
+    const searched = context.controller.loadOlderThreads()
+    read.resolve()
+    await expect(searched).resolves.toBe('t20')
+    await loading
+    expect(invoke.mock.calls.filter(([command, args]) => command === 'chat_thread_summaries' && args.cursor === '20')).toHaveLength(1)
+    expect(shownCount(context)).toBe(28)
+  })
+
+  it('keeps filling when a refresh lands during a page read', async () => {
+    const read = deferred()
+    const invoke = vi.fn(async (command, args) => {
+      if (command === 'chat_thread_summaries') return args.cursor == null ? livePage(null) : read.promise.then(() => livePage(args.cursor))
+      if (command === 'chat_current_thread') return null
+      if (command === 'chat_thread_open') return { entries: [], nextCursor: null }
+      return null
+    })
+    const context = setup(invoke, { options: { readArchived: (id) => liveArchived.has(id) } })
+    const loading = context.controller.loadHistory()
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('chat_thread_summaries', { limit: 20, cursor: '20' }))
+    await context.controller.refreshThreads()
+    read.resolve()
+    await loading
+    await vi.waitFor(() => expect(shownCount(context)).toBe(28))
+    expect(context.onMoreThreads).toHaveBeenLastCalledWith(true)
+  })
+
+  it('reads no further page when the first holds 20 threads to show', async () => {
+    const invoke = vi.fn(async (command) => {
+      if (command === 'chat_thread_summaries') return page(0, 20, 'c1')
+      if (command === 'chat_thread_open') return { entries: [], nextCursor: null }
+      return null
+    })
+    const context = setup(invoke)
+    await context.controller.loadHistory()
+    await Promise.resolve()
+    expect(invoke.mock.calls.filter(([command]) => command === 'chat_thread_summaries')).toHaveLength(1)
+  })
+})
+
+describe('deleted threads', () => {
+  it('passes on the threads the first page names as deleted', async () => {
+    const onDeletedThreads = vi.fn()
+    const invoke = vi.fn(async (command) => command === 'chat_thread_summaries' ? { summaries: [], nextCursor: null, deletedThreadIds: ['gone'] } : null)
+    const controller = createChatController({ invoke, listen: vi.fn(async () => vi.fn()), readMessages: () => [], readActive: () => null, readAnnounced: () => null, readDraft: () => '', readFiles: () => [], onMessages: vi.fn(), onActive: vi.fn(), onAnnounce: vi.fn(), onHistoryError: vi.fn(), onDeletedThreads })
+    await controller.refreshThreads()
+    await controller.loadHistory()
+    expect(onDeletedThreads.mock.calls).toEqual([[['gone']], [['gone']]])
+    controller.cleanup()
+  })
+
+  it('reports a failed open to its caller and leaves the open thread\'s view alone', async () => {
+    const missing = 'Muniment cannot find this thread. Open another thread.'
+    const invoke = vi.fn((command) => command === 'chat_select_thread' ? Promise.reject(missing) : Promise.resolve(null))
+    const context = setup(invoke, { threadId: 'thread-1' })
+    const onFailure = vi.fn()
+    await expect(context.controller.openThread('thread-gone', onFailure)).resolves.toBe(false)
+    expect(onFailure).toHaveBeenCalledWith(missing)
+    expect(context.onHistoryError).not.toHaveBeenCalledWith(expect.stringMatching(/./), expect.anything(), true)
+    context.controller.cleanup()
+  })
+})
 
 describe('submission admission', () => {
   const busy = 'Muniment is busy with another request. Try again.'
@@ -178,6 +347,48 @@ describe('submission admission', () => {
     expect(invoke).toHaveBeenCalledTimes(1)
     expect(context.draft()).toBe('Hello')
     expect(context.active()).toBeNull()
+    context.controller.cleanup()
+  })
+
+  it('empties the composer in the update that shows the sent message, and puts a refused draft back', async () => {
+    const submit = deferred()
+    const invoke = vi.fn((command) => command === 'chat_submit' ? submit.promise : Promise.resolve({ summaries: [], nextCursor: null }))
+    const context = setup(invoke, { threadId: 'thread-1' })
+    const file = { path: '/tmp/notes.md', isDirectory: false }
+    context.setFiles([file])
+
+    // No await: the bubble and the empty composer land in one synchronous step.
+    const sending = context.controller.send()
+    expect(context.messages().at(-2)).toMatchObject({ role: 'user', text: 'Hello' })
+    expect(context.draft()).toBe('')
+    expect(context.files()).toEqual([])
+
+    submit.reject('The message could not be sent.')
+    await expect(sending).resolves.toBe(false)
+    expect(context.draft()).toBe('Hello')
+    expect(context.files()).toEqual([file])
+    context.controller.cleanup()
+  })
+
+  it('keeps what the user typed after Send when the send is refused', async () => {
+    const submit = deferred()
+    const invoke = vi.fn((command) => command === 'chat_submit' ? submit.promise : Promise.resolve({ summaries: [], nextCursor: null }))
+    const context = setup(invoke, { threadId: 'thread-1' })
+    const sending = context.controller.send()
+    expect(context.draft()).toBe('')
+    context.setDraft('A new thought')
+    submit.reject('The message could not be sent.')
+    await expect(sending).resolves.toBe(false)
+    expect(context.draft()).toBe('A new thought')
+    context.controller.cleanup()
+  })
+
+  it('leaves the composer empty once the runtime accepts the send', async () => {
+    const invoke = vi.fn((command) => command === 'chat_submit' ? Promise.resolve({ runId: 'run-1', attachments: [] }) : Promise.resolve({ summaries: [], nextCursor: null }))
+    const context = setup(invoke, { threadId: 'thread-1' })
+    await expect(context.controller.send()).resolves.toBe(true)
+    expect(context.draft()).toBe('')
+    expect(context.files()).toEqual([])
     context.controller.cleanup()
   })
 
@@ -577,6 +788,53 @@ describe('chat controller', () => {
     expect(context.onThreadSummaries.mock.lastCall[0].map((summary) => summary.threadId)).toEqual(['new', 'mine', 'boxed'])
   })
 
+  // This computer's runtime names itself `core-mac`. The hub holds a synced
+  // copy of its thread, which names the hub as the runtime that listed it.
+  const hubCopy = { threadId: 'ours', title: 'Lease renewal', runtimeId: 'hub', replica: true, owner_runtime: 'core-mac' }
+  const ownCopy = { threadId: 'ours', title: 'Lease renewal', runtimeId: 'local', owner_runtime: 'core-mac' }
+  const hubFirst = (lists) => vi.fn(async (command) => {
+    if (command === 'chat_thread_summaries') return lists.length > 1 ? lists.shift() : lists[0]
+    if (command === 'chat_thread_open') return { entries: [], nextCursor: null }
+    return undefined
+  })
+
+  it('holds the launch list until this computer answers when the hub connects first, and selects this computer', async () => {
+    const invoke = hubFirst([
+      { summaries: [hubCopy], nextCursor: null, runtimeIds: ['hub'] },
+      { summaries: [hubCopy], nextCursor: null, runtimeIds: ['hub'] },
+      { summaries: [ownCopy], nextCursor: null, runtimeIds: ['local', 'hub'] },
+    ])
+    const context = setup(invoke, { launchThreadId: 'ours', options: { localListRetryMs: 1 } })
+    // A refresh during the wait publishes nothing.
+    const refresh = context.controller.refreshThreads()
+    await context.controller.loadHistory()
+    await refresh
+    // The window never saw the hub's copy: one list, this computer's.
+    expect(context.onThreadSummaries.mock.calls.map(([list]) => list.map((summary) => summary.runtimeId))).toEqual([['local']])
+    expect(invoke.mock.calls.filter(([command]) => command === 'chat_thread_summaries').length).toBeGreaterThanOrEqual(3)
+    const selects = invoke.mock.calls.filter(([command]) => command === 'chat_select_thread').map(([, payload]) => payload)
+    expect(selects).toEqual([{ threadId: 'ours', runtimeId: 'local' }])
+    expect(context.onThreadSelected).toHaveBeenLastCalledWith('ours')
+  })
+
+  it('selects no paired machine for a synced copy when this computer does not answer before the wait ends', async () => {
+    const invoke = hubFirst([{ summaries: [hubCopy], nextCursor: null, runtimeIds: ['hub'] }])
+    const context = setup(invoke, { launchThreadId: 'ours', options: { localListWaitMs: 20, localListRetryMs: 1 } })
+    await context.controller.loadHistory()
+    const selects = invoke.mock.calls.filter(([command]) => command === 'chat_select_thread').map(([, payload]) => payload)
+    expect(selects.length).toBeGreaterThan(0)
+    for (const payload of selects) expect(payload).toEqual({ threadId: 'ours' })
+  })
+
+  it('keeps a thread on this computer when a refresh this computer does not answer lists only the hub copy', async () => {
+    const invoke = vi.fn(async (command) => command === 'chat_current_thread'
+      ? 'ours'
+      : { summaries: [hubCopy], nextCursor: null, runtimeIds: ['hub'] })
+    const context = setup(invoke, { threadId: 'ours', summaries: [ownCopy] })
+    await context.controller.refreshThreads()
+    expect(context.onThreadSummaries.mock.lastCall[0]).toEqual([ownCopy])
+  })
+
   it('keeps the restored thread selected when the backend has no explicit selection', async () => {
     const invoke = vi.fn(async (command) => command === 'chat_current_thread'
       ? null
@@ -653,6 +911,41 @@ describe('chat controller', () => {
     expect(invoke).toHaveBeenCalledWith('chat_delete_thread', { threadId: 'thread-2' })
     expect(summaries).toEqual([{ threadId: 'thread-1' }])
     expect(context.messages()).toBe(previous)
+  })
+
+  it('hands a deleted thread\'s kept folder answer to the app with the thread it belonged to', async () => {
+    const answer = { folder_kept: '/home/me/sessions/Report-1', message: "The thread's folder holds your files, so it stays." }
+    const invoke = vi.fn(async (command) => (command === 'chat_delete_thread' ? answer : undefined))
+    const kept = vi.fn()
+    const context = setup(vi.fn().mockResolvedValue(undefined))
+    let summaries = [{ threadId: 'thread-0' }, { threadId: 'thread-1' }, { threadId: 'thread-2', runtimeId: 'local' }]
+    const controller = createChatController({
+      invoke,
+      listen: vi.fn(),
+      readMessages: context.messages,
+      readActive: context.active,
+      readAnnounced: () => null,
+      readDraft: () => '',
+      readFiles: () => [],
+      readThreadId: () => 'thread-0',
+      readThreadSummaries: () => summaries,
+      onMessages: context.setMessages,
+      onActive: vi.fn(),
+      onAnnounce: vi.fn(),
+      onDraft: vi.fn(),
+      onFiles: vi.fn(),
+      onSubmitError: vi.fn(),
+      onCancelError: vi.fn(),
+      onQueueError: vi.fn(),
+      onHistoryError: vi.fn(),
+      onThreadSummaries: (next) => { summaries = next },
+      onThreadFolderKept: kept,
+    })
+    await expect(controller.deleteThread('thread-2')).resolves.toBe(true)
+    expect(kept).toHaveBeenCalledWith({ threadId: 'thread-2', runtimeId: 'local' }, answer)
+    invoke.mockResolvedValue({})
+    await expect(controller.deleteThread('thread-1')).resolves.toBe(true)
+    expect(kept).toHaveBeenCalledTimes(1)
   })
 
   it('treats the newest thread as open when no selection is recorded and lands on a fresh thread', async () => {
@@ -1093,6 +1386,38 @@ describe('chat controller', () => {
       ['chat_select_thread', { threadId: 'thread-3' }],
     ])
     expect(context.onThreadSelected).toHaveBeenLastCalledWith('thread-3')
+  })
+
+  it('opens the thread open at quit on launch, not the newest', async () => {
+    const invoke = vi.fn(async (command) => command === 'chat_thread_summaries'
+      ? { summaries: [{ threadId: 'thread-3' }, { threadId: 'thread-1' }], nextCursor: null }
+      : { entries: [], nextCursor: null })
+    const context = setup(invoke, { launchThreadId: 'thread-1' })
+
+    await context.controller.loadHistory()
+
+    expect(invoke.mock.calls).toEqual([
+      ['chat_thread_summaries', { limit: 20 }],
+      ['chat_thread_open', { threadId: 'thread-1', limit: 100 }],
+      ['chat_select_thread', { threadId: 'thread-1' }],
+    ])
+    expect(context.onThreadSelected).toHaveBeenLastCalledWith('thread-1')
+  })
+
+  it('opens the newest thread on launch with no error when the thread open at quit is gone', async () => {
+    const invoke = vi.fn(async (command, payload) => {
+      if (command === 'chat_thread_summaries') return { summaries: [{ threadId: 'thread-3' }, { threadId: 'thread-1' }], nextCursor: null }
+      if (command === 'chat_thread_open' && payload.threadId === 'deleted-thread') throw new Error('thread not found')
+      return { entries: [], nextCursor: null }
+    })
+    const context = setup(invoke, { launchThreadId: 'deleted-thread' })
+
+    await context.controller.loadHistory()
+
+    expect(invoke.mock.calls.filter(([command]) => command === 'chat_select_thread')).toEqual([['chat_select_thread', { threadId: 'thread-3' }]])
+    expect(context.onThreadSelected).toHaveBeenCalledTimes(1)
+    expect(context.onThreadSelected).toHaveBeenLastCalledWith('thread-3')
+    expect(context.onHistoryError.mock.calls.every(([message]) => !message)).toBe(true)
   })
 
   it('restores the backend selection and four replies after a desktop relaunch', async () => {
@@ -1749,7 +2074,69 @@ describe('chat controller', () => {
     await opening
   })
 
-  it.each(['chat_select_thread', 'chat_thread_open'])('keeps the transcript when %s fails', async (failedCommand) => {
+  it('shows the requested thread with a notice and holds sending when its select is refused', async () => {
+    vi.useFakeTimers()
+    try {
+      const busy = 'Muniment is busy with another request. Try again.'
+      let refusing = true
+      const invoke = vi.fn(async (command, payload) => {
+        if (command === 'chat_select_thread' && refusing) throw busy
+        if (command === 'chat_thread_open') return { entries: payload.threadId === 'thread-2' ? [{ runId: 'run-2', phase: 'complete', text: 'Second answer', prompt: 'Second question', receipt: {}, toolActivity: [] }] : [], nextCursor: null }
+        if (command === 'chat_submit') return { runId: 'run-9' }
+        return undefined
+      })
+      const onThreadSwitch = vi.fn()
+      const context = setup(invoke, { threadId: 'thread-1', options: { onThreadSwitch } })
+      const controller = context.controller
+      context.onThreadSelected.mockImplementation((next) => context.setThreadId(next))
+      context.setMessages([{ role: 'user', text: 'First question' }])
+      const opening = controller.openThread('thread-2')
+      await vi.advanceTimersByTimeAsync(3_000)
+      await expect(opening).resolves.toBe(true)
+
+      // The select tried again before it gave up.
+      expect(invoke.mock.calls.filter(([command]) => command === 'chat_select_thread')).toHaveLength(4)
+      expect(context.onThreadSelected).toHaveBeenLastCalledWith('thread-2')
+      expect(context.messages().map((message) => message.text ?? message.run.text)).toEqual(['Second question', 'Second answer'])
+      expect(context.onHistoryError).toHaveBeenLastCalledWith(`This thread did not open, so sending waits. ${busy}`, expect.objectContaining({ label: 'Open again' }))
+      expect(onThreadSwitch).toHaveBeenLastCalledWith(true)
+      // Nothing goes to the thread left behind, nor to one the runtime did not select.
+      context.setDraft('Next message')
+      await controller.send()
+      expect(invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
+      expect(context.draft()).toBe('Next message')
+
+      refusing = false
+      await context.onHistoryError.mock.lastCall[1].run()
+      expect(invoke).toHaveBeenLastCalledWith('chat_thread_open', expect.objectContaining({ threadId: 'thread-2' }))
+      expect(context.onHistoryError).toHaveBeenLastCalledWith('')
+      expect(onThreadSwitch).toHaveBeenLastCalledWith(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('opens the thread once a busy select answers on a retry', async () => {
+    vi.useFakeTimers()
+    try {
+      let refusals = 2
+      const invoke = vi.fn(async (command) => {
+        if (command === 'chat_select_thread' && refusals > 0) { refusals -= 1; throw 'Muniment is busy with another request. Try again.' }
+        if (command === 'chat_thread_open') return { entries: [], nextCursor: null }
+        return undefined
+      })
+      const context = setup(invoke, { threadId: 'thread-1' })
+      const opening = context.controller.openThread('thread-2')
+      await vi.advanceTimersByTimeAsync(2_000)
+      await expect(opening).resolves.toBe(true)
+      expect(context.onHistoryError).toHaveBeenLastCalledWith('')
+      expect(context.onThreadSelected).toHaveBeenLastCalledWith('thread-2')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it.each(['chat_thread_open'])('keeps the transcript when %s fails', async (failedCommand) => {
     const previous = [{ role: 'user', text: 'Current transcript' }]
     const onHistoryError = vi.fn()
     const context = setup()
@@ -1822,6 +2209,45 @@ describe('chat controller', () => {
       prompt: 'Send after recovery',
       files: [],
     })
+  })
+
+  it('restores the previous thread on its own machine when a local thread fails to load', async () => {
+    const summaries = [
+      { threadId: 'red-trek', runtimeId: 'local' },
+      { threadId: 'hub-thread', runtimeId: 'hub' },
+    ]
+    const invoke = vi.fn(async (command) => {
+      if (command === 'chat_thread_open') throw new Error('offline')
+    })
+    const context = setup(invoke, { threadId: 'hub-thread', summaries })
+
+    await context.controller.openThread('red-trek', true)
+
+    expect(invoke.mock.calls.filter(([command]) => command === 'chat_select_thread')).toEqual([
+      ['chat_select_thread', { threadId: 'red-trek', runtimeId: 'local' }],
+      ['chat_select_thread', { threadId: 'hub-thread', runtimeId: 'hub' }],
+    ])
+  })
+
+  it('retries Restore history on the thread\'s own machine after the list drops the thread', async () => {
+    const invoke = vi.fn(async (command) => {
+      if (command === 'chat_thread_open') throw new Error('offline')
+    })
+    const context = setup(invoke, {
+      threadId: 'hub-thread',
+      summaries: [{ threadId: 'red-trek', runtimeId: 'local' }, { threadId: 'hub-thread', runtimeId: 'hub' }],
+    })
+    await context.controller.openThread('red-trek', true)
+    const retry = context.onHistoryError.mock.lastCall[1]
+    expect(retry.label).toBe('Restore history')
+    // A reconnect list answered by the paired hub alone leaves the local thread out.
+    context.onThreadSummaries([{ threadId: 'hub-thread', runtimeId: 'hub' }])
+    invoke.mockClear()
+
+    await retry.run()
+
+    expect(invoke.mock.calls.filter(([command]) => command === 'chat_select_thread')[0])
+      .toEqual(['chat_select_thread', { threadId: 'red-trek', runtimeId: 'local' }])
   })
 
   it('blocks sends after restoration fails until a thread retry succeeds', async () => {
@@ -2194,7 +2620,9 @@ describe('chat controller', () => {
     history.resolve({ entries: [{ runId: 'run-2', phase: 'streaming', text: 'Half an ans', prompt: 'A question', receipt: null, toolActivity: [] }], nextCursor: null })
     await refreshing
 
-    expect(context.messages().map((message) => message.text ?? message.run.text)).toEqual(['Half an answer', 'Hello'])
+    // The queued message sits inside the reply, where its text stood.
+    expect(context.messages().map((message) => message.text ?? message.run.text)).toEqual(['Half an answer'])
+    expect(context.messages()[0].run.steers).toEqual([{ text: 'Hello', textOffset: 11 }])
     expect(context.active()).toMatchObject({ id: 'run-2', phase: 'streaming', text: 'Half an answer' })
   })
 
@@ -2375,6 +2803,27 @@ describe('chat controller', () => {
     ])
     expect(context.onHistoryError).toHaveBeenLastCalledWith('')
     expect(context.onThreadSelected).toHaveBeenLastCalledWith('thread-2')
+  })
+
+  it('gives a live reply no start time until the runtime names the run\'s start', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'))
+      const submit = deferred()
+      const context = setup(vi.fn(() => submit.promise))
+      await context.start()
+      const sending = context.controller.send()
+      expect(context.messages().at(-1).run.startedAt).toBeUndefined()
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.700Z'))
+      submit.resolve({ runId: 'run-1' })
+      await sending
+      expect(context.messages().at(-1).run.id).toBe('run-1')
+      expect(context.messages().at(-1).run.startedAt).toBeUndefined()
+      expect(context.active().startedAt).toBeUndefined()
+      // The runtime's first event names the run's own start, which its receipt times from.
+      context.event({ runId: 'run-1', phase: 'thinking', text: '', startedAt: '2026-01-01T00:00:01.290Z' })
+      expect(context.messages().at(-1).run.startedAt).toBe('2026-01-01T00:00:01.290Z')
+    } finally { vi.useRealTimers() }
   })
 
   it('replays events buffered before a submitted run id is known', async () => {
@@ -3112,7 +3561,7 @@ describe('background runs', () => {
 
     await context.controller.send()
     expect(context.invoke).not.toHaveBeenCalledWith('chat_submit', expect.anything())
-    expect(context.errors).toEqual(['Another reply is still running. Send again when it ends.'])
+    expect(context.errors).toEqual(['Another reply is still running. Send it again when that reply ends.'])
 
     context.invoke.mockImplementation((command) => Promise.resolve(command === 'chat_submit' ? { runId: 'run-box' } : undefined))
     context.setRuntime('box')
@@ -3248,6 +3697,42 @@ describe('background runs', () => {
     await expect(context.controller.deleteThread('thread-1')).resolves.toBe(true)
   })
 
+  it('shows a steering message inside the reply where the runtime took it, and places it from history after a reload', async () => {
+    const threads = { 'thread-1': [streaming('run-1', 'echo')] }
+    const invoke = vi.fn((command, payload) => {
+      if (command === 'chat_thread_open') return Promise.resolve({ entries: threads[payload.threadId] ?? [], nextCursor: null })
+      return Promise.resolve()
+    })
+    const context = setup(invoke, { threadId: 'thread-1' })
+    context.onThreadSelected.mockImplementation((next) => context.setThreadId(next))
+    await context.start()
+    await context.controller.openThread('thread-1')
+    context.setDraft('foxtrot')
+
+    await context.controller.queue('steer')
+
+    expect(invoke).toHaveBeenCalledWith('chat_queue', { runId: 'run-1', delivery: 'steer', message: 'foxtrot' })
+    expect(context.draft()).toBe('')
+    // No user turn trails the reply: the message sits inside it at its offset.
+    expect(context.messages().filter((message) => message.role === 'user' && message.text === 'foxtrot')).toEqual([])
+    expect(context.messages().at(-1).run.steers).toEqual([{ text: 'foxtrot', textOffset: 4 }])
+    context.event({ runId: 'run-1', type: 'text-delta', text: 'foxtrot' })
+    expect(context.messages().at(-1).run).toMatchObject({ text: 'echofoxtrot', steers: [{ text: 'foxtrot', textOffset: 4 }] })
+
+    // The runtime's journal is the record: a reload, or another device, reads
+    // the message and its place from history, with nothing kept in the window.
+    const recorded = [{ text: 'foxtrot', textOffset: 4, sentAt: '2026-08-05T00:00:01Z' }]
+    threads['thread-1'] = [{ ...complete('run-1', 'echofoxtrot', 'echo'), steers: recorded }]
+    await context.controller.openThread('thread-1')
+    expect(context.messages().at(-1).run).toMatchObject({ text: 'echofoxtrot', steers: recorded })
+    expect(responseParts(context.messages().at(-1).run)).toEqual([
+      { type: 'text', text: 'echo' },
+      { type: 'steer', text: 'foxtrot' },
+      { type: 'text', text: 'foxtrot' },
+    ])
+    expect(context.messages().filter((message) => message.role === 'user').map((message) => message.text)).toEqual(['echo'])
+  })
+
   it('keeps a queued message off a thread the user opened since', async () => {
     const context = await startRunning()
     const queued = deferred()
@@ -3260,6 +3745,71 @@ describe('background runs', () => {
     await queueing
 
     expect(context.messages().map((message) => message.text ?? message.run.text)).toEqual(['Earlier question', 'Earlier answer'])
+  })
+
+  it('tries Stop and a steer again while the runtime is busy with another request', async () => {
+    const context = await startRunning()
+    vi.useFakeTimers()
+    try {
+      const busy = { cancel: 1, queue: 1 }
+      context.invoke.mockImplementation((command) => {
+        const kind = command === 'chat_cancel' ? 'cancel' : command === 'chat_queue' ? 'queue' : null
+        if (kind && busy[kind]-- > 0) return Promise.reject('Muniment is busy with another request. Try again.')
+        return Promise.resolve({ entries: [], nextCursor: null })
+      })
+      const stopping = context.controller.cancel()
+      await vi.advanceTimersByTimeAsync(300)
+      await stopping
+      expect(context.invoke.mock.calls.filter(([command]) => command === 'chat_cancel')).toEqual([['chat_cancel', { runId: 'run-1' }], ['chat_cancel', { runId: 'run-1' }]])
+      expect(context.onCancelError.mock.calls.filter(([error]) => error)).toEqual([])
+
+      context.setDraft('Then summarize it')
+      const steering = context.controller.queue('steer')
+      await vi.advanceTimersByTimeAsync(300)
+      await steering
+      expect(context.invoke.mock.calls.filter(([command]) => command === 'chat_queue')).toHaveLength(2)
+      expect(context.draft()).toBe('')
+      expect(context.onQueueError.mock.calls.filter(([error]) => error)).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('sends a message as the next turn when the reply ends before the runtime takes it', async () => {
+    const context = await startRunning()
+    const queued = deferred()
+    context.invoke.mockImplementation((command, payload) => {
+      if (command === 'chat_queue') return queued.promise
+      if (command === 'chat_submit') return Promise.resolve({ runId: 'run-2' })
+      if (command === 'chat_current_thread') return Promise.resolve(null)
+      return Promise.resolve({ entries: context.threads[payload?.threadId] ?? [], nextCursor: null, summaries: [] })
+    })
+    context.setDraft('Then summarize it')
+
+    const queueing = context.controller.queue('steer')
+    context.event({ runId: 'run-1', threadId: 'thread-1', type: 'completed', receipt: {} })
+    await vi.waitFor(() => expect(context.active()).toBeNull())
+    queued.reject('The reply has ended.')
+    await queueing
+
+    expect(context.invoke).toHaveBeenCalledWith('chat_submit', expect.objectContaining({ prompt: 'Then summarize it' }))
+    expect(context.draft()).toBe('')
+    expect(context.onQueueError.mock.calls.filter(([error]) => error)).toEqual([])
+    expect(context.messages().filter((message) => message.role === 'user').map((message) => message.text)).toContain('Then summarize it')
+  })
+
+  it('shows no Stop failure for a reply that ended before the runtime answered', async () => {
+    const context = await startRunning()
+    const stopped = deferred()
+    context.invoke.mockImplementation((command, payload) => command === 'chat_cancel' ? stopped.promise : Promise.resolve(command === 'chat_current_thread' ? null : { entries: context.threads[payload?.threadId] ?? [], nextCursor: null, summaries: [] }))
+
+    const stopping = context.controller.cancel()
+    context.event({ runId: 'run-1', threadId: 'thread-1', type: 'completed', receipt: {} })
+    await vi.waitFor(() => expect(context.active()).toBeNull())
+    stopped.reject('The reply has ended.')
+    await stopping
+
+    expect(context.onCancelError.mock.calls.filter(([error]) => error)).toEqual([])
   })
 
   it('takes back a turn the runtime refuses while another reply runs, and keeps the draft', async () => {
@@ -3280,7 +3830,7 @@ describe('background runs', () => {
       expect(context.messages()).toEqual(earlier)
       expect(context.active()).toBeNull()
       expect(context.draft()).toBe('Second question')
-      expect(context.errors).toEqual(['Another reply is still running. Send again when it ends.'])
+      expect(context.errors).toEqual(['Another reply is still running. Send it again when that reply ends.'])
     } finally {
       vi.useRealTimers()
     }

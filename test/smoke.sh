@@ -31,6 +31,9 @@ grep -Fq "if: matrix.platform == 'linux' || (matrix.platform == 'windows' && nee
 grep -Fq 'echo "windows=$windows"' scripts/ci/classify.sh
 grep -Fq 'echo "macos=$macos"' scripts/ci/classify.sh
 grep -Fq "cmd='cargo check --manifest-path src-tauri/Cargo.toml --locked --all-targets'" "$ci"
+# The macOS preflight lints the desktop crate with default features and with local-runtime.
+grep -Fq 'cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-desktop --locked --all-targets --target aarch64-apple-darwin -- -D warnings' "$ci"
+grep -Fq 'cargo clippy --manifest-path src-tauri/Cargo.toml --package muniment-desktop --locked --all-targets --features local-runtime --target aarch64-apple-darwin -- -D warnings' "$ci"
 windows_preflight=$(
   awk '
     index($0, "- name: Check (${{ matrix.platform }}) via desktop-ci") { in_check = 1 }

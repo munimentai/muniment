@@ -154,6 +154,19 @@ impl TriggerKind {
     }
 }
 
+impl RunTrigger {
+    /// Whether the agent's own run: a routine, another agent's message or
+    /// Run now. A user's message another machine relays into the agent's
+    /// thread is the user's send.
+    pub fn agent_started(&self) -> bool {
+        !(self.kind == TriggerKind::Manual
+            && self
+                .source
+                .as_deref()
+                .is_some_and(|source| source.starts_with("swarm:")))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunTrigger {
     pub kind: TriggerKind,
@@ -392,8 +405,18 @@ pub fn activities(
     agent_ids: &[String],
     gate: &dyn Fn(&str) -> Option<String>,
 ) -> Result<std::collections::BTreeMap<String, Activity>, String> {
-    let store = RunStore::open(profile)?;
-    let active = store.active()?;
+    // Activity is a view of the history. A history that cannot be read, such
+    // as on a full disk, shows each agent idle and fails no list.
+    let (store, active) = match RunStore::read(profile).and_then(|store| match store {
+        Some(store) => store.active().map(|active| (Some(store), active)),
+        None => Ok((None, Vec::new())),
+    }) {
+        Ok(read) => read,
+        Err(error) => {
+            crate::runtime_eprintln!("agent_runs: run history unread error={error}");
+            (None, Vec::new())
+        }
+    };
     let mut activities = std::collections::BTreeMap::new();
     for agent_id in agent_ids {
         let mine: Vec<Run> = active
@@ -401,10 +424,9 @@ pub fn activities(
             .filter(|run| &run.agent_id == agent_id)
             .cloned()
             .collect();
-        let latest = if mine.is_empty() {
-            store.latest(agent_id)?
-        } else {
-            None
+        let latest = match &store {
+            Some(store) if mine.is_empty() => store.latest(agent_id).unwrap_or(None),
+            _ => None,
         };
         activities.insert(
             agent_id.clone(),
@@ -421,6 +443,8 @@ pub const REPLAY_SOURCE: &str = "replay";
 #[derive(Clone, Debug)]
 pub struct RunStore {
     path: PathBuf,
+    /// A reader's store opens its database read-only.
+    read_only: bool,
 }
 
 const COLUMNS: &str =
@@ -433,6 +457,7 @@ impl RunStore {
     pub fn open(profile: &Path) -> Result<Self, String> {
         let store = Self {
             path: profile.join(STORE_FILE),
+            read_only: false,
         };
         let connection = store.connect()?;
         connection
@@ -468,20 +493,62 @@ impl RunStore {
                     PRIMARY KEY (hook_id, delivery_id)
                 );",
             )
-            .map_err(|_| "Agent run history could not be opened.".to_string())?;
+            .map_err(|error| {
+                crate::disk_full::or_message(&error, "Agent run history could not be opened.")
+            })?;
         Ok(store)
     }
 
-    fn connect(&self) -> Result<Connection, String> {
-        if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|_| "Agent run history is unavailable.".to_string())?;
+    /// The store under `profile` for a reader: none when no run was ever
+    /// queued. A read makes no store and changes no schema.
+    pub fn read(profile: &Path) -> Result<Option<Self>, String> {
+        let path = profile.join(STORE_FILE);
+        match std::fs::metadata(&path) {
+            Ok(_) => Ok(Some(Self {
+                path,
+                read_only: true,
+            })),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(crate::disk_full::or_message(
+                &error,
+                "Agent run history is unavailable.",
+            )),
         }
-        let connection = Connection::open(&self.path)
-            .map_err(|_| "Agent run history is unavailable.".to_string())?;
+    }
+
+    fn connect(&self) -> Result<Connection, String> {
+        if self.read_only {
+            // A reader opens the existing file and refuses every write. It
+            // opens read-write so SQLite removes its shared-memory files
+            // when the connection closes.
+            let connection = Connection::open_with_flags(
+                &self.path,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
+                    | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            )
+            .and_then(|connection| {
+                connection.busy_timeout(Duration::from_secs(5))?;
+                connection.pragma_update(None, "query_only", true)?;
+                Ok(connection)
+            })
+            .map_err(|error| {
+                crate::disk_full::or_message(&error, "Agent run history is unavailable.")
+            })?;
+            return Ok(connection);
+        }
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| {
+                crate::disk_full::or_message(&error, "Agent run history is unavailable.")
+            })?;
+        }
+        let connection = Connection::open(&self.path).map_err(|error| {
+            crate::disk_full::or_message(&error, "Agent run history is unavailable.")
+        })?;
         connection
             .busy_timeout(Duration::from_secs(5))
-            .map_err(|_| "Agent run history is unavailable.".to_string())?;
+            .map_err(|error| {
+                crate::disk_full::or_message(&error, "Agent run history is unavailable.")
+            })?;
         let _ = connection.pragma_update(None, "journal_mode", "WAL");
         Ok(connection)
     }
@@ -541,7 +608,7 @@ impl RunStore {
                     run.prompt,
                 ],
             )
-            .map_err(|_| "The run could not be queued.".to_string())?;
+            .map_err(|error| crate::disk_full::or_message(&error, "The run could not be queued."))?;
         publish(&self.path, &run, false);
         Ok(run)
     }
@@ -554,7 +621,9 @@ impl RunStore {
                 read_run,
             )
             .optional()
-            .map_err(|_| "Agent run history could not be read.".to_string())
+            .map_err(|error| {
+                crate::disk_full::or_message(&error, "Agent run history could not be read.")
+            })
     }
 
     /// Runs that are queued, leased, running or waiting, oldest first.
@@ -572,12 +641,17 @@ impl RunStore {
         let connection = self.connect()?;
         let mut statement = connection
             .prepare("SELECT id, agent_id, thread_id FROM runs")
-            .map_err(|_| "Agent run history could not be read.".to_string())?;
+            .map_err(|error| {
+                crate::disk_full::or_message(&error, "Agent run history could not be read.")
+            })?;
         let rows = statement
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
-            .map_err(|_| "Agent run history could not be read.".to_string())?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|_| "Agent run history could not be read.".to_string())
+            .map_err(|error| {
+                crate::disk_full::or_message(&error, "Agent run history could not be read.")
+            })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|error| {
+            crate::disk_full::or_message(&error, "Agent run history could not be read.")
+        })
     }
 
     /// One agent's newest run, if it has one.
@@ -609,14 +683,15 @@ impl RunStore {
 
     fn query(&self, sql: &str, params: impl rusqlite::Params) -> Result<Vec<Run>, String> {
         let connection = self.connect()?;
-        let mut statement = connection
-            .prepare(sql)
-            .map_err(|_| "Agent run history could not be read.".to_string())?;
-        let rows = statement
-            .query_map(params, read_run)
-            .map_err(|_| "Agent run history could not be read.".to_string())?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|_| "Agent run history could not be read.".to_string())
+        let mut statement = connection.prepare(sql).map_err(|error| {
+            crate::disk_full::or_message(&error, "Agent run history could not be read.")
+        })?;
+        let rows = statement.query_map(params, read_run).map_err(|error| {
+            crate::disk_full::or_message(&error, "Agent run history could not be read.")
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|error| {
+            crate::disk_full::or_message(&error, "Agent run history could not be read.")
+        })
     }
 
     /// Records a webhook delivery id. A delivery the hook already received
@@ -630,13 +705,15 @@ impl RunStore {
                 "DELETE FROM webhook_deliveries WHERE received_at < ?1",
                 [now - DELIVERY_MEMORY_SECONDS],
             )
-            .map_err(|_| "Webhook deliveries could not be read.".to_string())?;
+            .map_err(|error| {
+                crate::disk_full::or_message(&error, "Webhook deliveries could not be read.")
+            })?;
         let inserted = connection
             .execute(
                 "INSERT OR IGNORE INTO webhook_deliveries (hook_id, delivery_id, received_at) VALUES (?1, ?2, ?3)",
                 params![hook_id, delivery_id, now],
             )
-            .map_err(|_| "Webhook deliveries could not be saved.".to_string())?;
+            .map_err(|error| crate::disk_full::or_message(&error, "Webhook deliveries could not be saved."))?;
         Ok(inserted == 1)
     }
 
@@ -650,7 +727,7 @@ impl RunStore {
                 "UPDATE runs SET status = 'leased', lease_owner = ?2, lease_expires_at = ?3, attempt = attempt + 1, updated_at = ?4 WHERE id = ?1 AND status = 'queued'",
                 params![id, owner, now + LEASE_SECONDS, now],
             )
-            .map_err(|_| "The run could not be leased.".to_string())?;
+            .map_err(|error| crate::disk_full::or_message(&error, "The run could not be leased."))?;
         if changed == 0 {
             return Ok(None);
         }
@@ -695,7 +772,7 @@ impl RunStore {
                     now,
                 ],
             )
-            .map_err(|_| "The run could not be saved.".to_string())?;
+            .map_err(|error| crate::disk_full::or_message(&error, "The run could not be saved."))?;
         if !run.status.is_active() {
             prune(&connection, &run.agent_id)?;
         }
@@ -718,7 +795,9 @@ impl RunStore {
         self.connect()?
             .execute("DELETE FROM runs WHERE agent_id = ?1", [agent_id])
             .map(drop)
-            .map_err(|_| "The agent's runs could not be removed.".to_string())
+            .map_err(|error| {
+                crate::disk_full::or_message(&error, "The agent's runs could not be removed.")
+            })
     }
 }
 
@@ -731,7 +810,7 @@ fn prune(connection: &Connection, agent_id: &str) -> Result<(), String> {
             params![agent_id, MAX_RUN_HISTORY as i64],
         )
         .map(drop)
-        .map_err(|_| "Agent run history could not be trimmed.".to_string())
+        .map_err(|error| crate::disk_full::or_message(&error, "Agent run history could not be trimmed."))
 }
 
 fn read_run(row: &Row<'_>) -> rusqlite::Result<Run> {
@@ -770,8 +849,8 @@ mod tests {
     use super::*;
 
     fn store() -> (PathBuf, RunStore) {
-        let root =
-            std::env::temp_dir().join(format!("muniment-agent-runs-{}", uuid::Uuid::new_v4()));
+        let root = crate::state_root::test_root()
+            .join(format!("muniment-agent-runs-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let store = RunStore::open(&root).unwrap();
         (root, store)

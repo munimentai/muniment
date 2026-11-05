@@ -832,6 +832,47 @@ fn an_ordinary_thread_reaches_every_member_and_a_post_runs_on_its_owner() {
 }
 
 #[test]
+fn a_delete_of_a_synced_copy_reaches_its_owner_and_every_member() {
+    let _environment = environment();
+    let a = Member::new("delete-a");
+    let b = Member::new("delete-b");
+    let c = Member::new("delete-c");
+    for member in [&a, &b, &c] {
+        member.state().use_pi_artifact(member.artifact);
+    }
+    b.join(&a);
+    c.join(&a);
+    std::env::set_var("PI_RESUME_STUB_REPLY", " list ready");
+    let mut writer = a.client(None);
+    let thread = writer
+        .run_submit("Write the list.", &[], None, None, None)
+        .unwrap()
+        .thread_id;
+    let mut b_reader = b.client(None);
+    let mut c_reader = c.client(None);
+    for reader in [&mut b_reader, &mut c_reader] {
+        assert!(
+            wait(|| listed(reader, &thread).is_some_and(|summary| summary["replica"] == true)),
+            "the thread never reached a member"
+        );
+    }
+
+    // B deletes its copy: it leaves B at once, and A, which owns the
+    // thread, deletes it, so C's copy goes too.
+    b_reader.delete_thread(&thread).unwrap();
+    assert!(listed(&mut b_reader, &thread).is_none());
+    assert!(
+        wait(|| listed(&mut writer, &thread).is_none()),
+        "A never deleted its thread"
+    );
+    assert!(
+        wait(|| listed(&mut c_reader, &thread).is_none()),
+        "C kept its copy"
+    );
+    assert!(listed(&mut b_reader, &thread).is_none());
+}
+
+#[test]
 fn a_move_fences_the_old_primary_and_a_forced_move_steps_it_down() {
     let _environment = environment();
     let mut a = Member::new("move-a");
@@ -1925,9 +1966,12 @@ fn an_action_on_another_members_item_reaches_its_owner_through_a_relay_once() {
         .unwrap()
         .unwrap();
     assert_eq!(first["op_id"], again["op_id"]);
+    // A refuses a run now while the agent has a pending run, so the east
+    // run ends first.
     assert!(wait(|| {
         a.tick();
         prompted(&a, &scout.id, "Then the east region.") == 1
+            && a.runs(&scout.id).iter().all(|run| !run.status.is_active())
     }));
 
     // Running A's agent from C runs it on A.
@@ -1938,10 +1982,15 @@ fn an_action_on_another_members_item_reaches_its_owner_through_a_relay_once() {
         )
         .unwrap();
     assert_eq!(ran["forwarded"], true, "{ran}");
-    assert!(wait(|| {
-        a.tick();
-        prompted(&a, &scout.id, "Run it from C.") == 1
-    }));
+    let ran_op = ran["op_id"].as_str().unwrap_or_default().to_owned();
+    assert!(
+        wait(|| {
+            a.tick();
+            prompted(&a, &scout.id, "Run it from C.") == 1
+        }),
+        "A never ran the agent: {}",
+        op_status(&mut device, &ran_op)
+    );
     assert!(c.runs(&scout.id).is_empty());
 
     // The owner checks the scopes the actor and its member share: a

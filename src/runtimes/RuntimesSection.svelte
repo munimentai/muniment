@@ -11,7 +11,10 @@
   // the list, one switch has core share this computer's model connections
   // through `fleet.credentials`. This computer's row opens its network,
   // offline and log settings. Sync lists what this computer still takes from
-  // the others while a bootstrap runs or a sign-in waits. With MuniCloud on, the account's devices and
+  // the others while a bootstrap runs or a sign-in waits. When the keychain
+  // refused this computer's fleet key or other saved secrets, a notice names
+  // them, with remote access on or off, and Try again asks core to read them
+  // once more. Core asks the keychain only on that action or at its next start. With MuniCloud on, the account's devices and
   // the phone paired through the relay are rows as well, and Add machine
   // pairs a phone.
   import { onMount } from 'svelte'
@@ -25,11 +28,11 @@
   import AddMachine from './AddMachine.svelte'
   import ThisComputer from './ThisComputer.svelte'
   import SyncProgress from './SyncProgress.svelte'
-  import { errorText, skipLabel, updatableRuntimes } from './runtimes.js'
+  import { canRequestUpdate, errorText, skipLabel, updatableRuntimes } from './runtimes.js'
   import FailureNote from '../lib/FailureNote.svelte'
   import { linkHolders, machineRows, removable } from './machines.js'
   import { agentRequest } from '../agents/agent-runtime.js'
-  import { listSwarm } from '../agents/swarm.js'
+  import { keychainRefusal, listSwarm } from '../agents/swarm.js'
   import { interruptionCount, interruptionMessage } from '../lib/app-update.js'
   import PhonePairing from '../lib/PhonePairing.svelte'
   import { featureFlags } from '../feature-flags.js'
@@ -39,6 +42,7 @@
   let { tauri, listen = (...args) => window.__TAURI__?.event?.listen(...args), focus = null } = $props()
   let list = $state(null)
   let swarm = $state(null)
+  let keychain = $state(null)
   let devices = $state([])
   let cloudDevices = $state([])
   let phone = $state(null)
@@ -62,8 +66,11 @@
   let adding = $state(focus === 'add')
   // svelte-ignore state_referenced_locally
   let computerOpen = $state(focus === 'this-computer')
+  const keyRefusal = $derived(keychainRefusal(keychain))
   const rows = $derived(list ? machineRows({ list, swarm, devices, cloudDevices, phone }) : [])
   const updateWaits = $derived(!!localVersion || updatableRuntimes(list).length > 0)
+  // Update all acts only on this computer's waiting update or a machine that answers and is behind.
+  const updateReady = $derived(!!localVersion || updatableRuntimes(list).some(canRequestUpdate))
 
   onMount(() => {
     let alive = true
@@ -114,7 +121,13 @@
   // A machine without a fleet refuses, and the list shows the machines this
   // app reaches.
   async function readSwarm() {
+    void readKeychain()
     try { swarm = await listSwarm(tauri, list) } catch (_) { swarm = null }
+  }
+
+  // What the keychain refused this computer, which core answers with remote access off too.
+  async function readKeychain() {
+    try { keychain = await agentRequest(tauri, 'local', 'swarm.members', { keychain: true }) } catch (_) { keychain = null }
   }
 
   async function readDevices() {
@@ -218,8 +231,10 @@
       let version = null
       try { version = await tauri.invoke('app_update_prepare') } catch { /* This computer keeps its version. */ }
       if (!version) skips.push({ id: 'local', name: 'This computer', reason: 'current' })
-      skipped = skips
-      notice = asked.length ? `Update requested on ${named(asked)}.` : ''
+      // Nothing to update and nothing skipped for another cause: every machine is current.
+      const current = !asked.length && !failures.length && !version && skips.every((skip) => skip.reason === 'current')
+      skipped = current ? [] : skips
+      notice = asked.length ? `Update requested on ${named(asked)}.` : current ? 'All machines are current.' : ''
       if (version) await updateThisComputer(version)
     } catch (failure) {
       error = errorText(failure)
@@ -305,6 +320,24 @@
     }
   }
 
+  // Asks core to read the refused secrets once more, which can show the keychain's prompt.
+  async function retryKeychain() {
+    busy = 'keychain'
+    try {
+      keychain = await agentRequest(tauri, 'local', 'swarm.members', { retry_keychain: true })
+    } catch (failure) {
+      error = errorText(failure)
+    } finally {
+      busy = ''
+      void readSwarm()
+    }
+  }
+
+  const listed = (labels) => labels.length < 2 ? labels.join('') : `${labels.slice(0, -1).join(', ')} and ${labels.at(-1)}`
+  const refusalText = (refusal) => refusal.declined
+    ? `The keychain refused this computer's ${listed(refusal.labels)}. Muniment holds them back until you try again. Choose Always Allow when your Mac asks.`
+    : `This computer could not read its ${listed(refusal.labels)} from the keychain. Muniment tries again later.`
+
   function onadded(next) {
     if (next?.runtimes) list = next
     linkFailure = next?.notice ?? ''
@@ -317,14 +350,20 @@
 <section class="settings-runtimes" aria-label="Machines" data-settings-controls>
   <PageHead intro="This computer and every machine and device that works with it. Machines you add share agents, threads and approvals.">
     {#snippet actions()}
-      {#if updateWaits}<Button icon="arrow-down" disabled={!list || !!busy} onclick={updateAll}>Update all</Button>{/if}
+      {#if updateWaits}<Button icon="arrow-down" disabled={!list || !!busy || !updateReady} onclick={updateAll}>Update all</Button>{/if}
       <Button icon="plus" variant="primary" aria-expanded={adding} onclick={() => { adding = !adding }}>Add machine</Button>
     {/snippet}
   </PageHead>
 
   {#if error}<FailureNote failure={error} />{/if}
-  {#if notice}<p class="line" role="status">{notice}</p>{/if}
+  {#if notice}<p class="line" role="status">{notice}</p>{:else if list && updateWaits && !updateReady && !busy}<p class="line" role="status">Every machine that answers is current.</p>{/if}
   {#if linkFailure}<FailureNote failure={linkFailure} />{/if}
+  {#if keyRefusal}
+    <div class="key-refusal" role="alert">
+      <p>{refusalText(keyRefusal)}</p>
+      <Button icon="key-round" disabled={busy === 'keychain'} onclick={retryKeychain}>Try again</Button>
+    </div>
+  {/if}
   {#each failures as failure (failure)}<FailureNote {failure} />{/each}
   {#if skipped.length}<p class="line" role="status">Skipped: {skipped.map(skipLabel).join(', ')}.</p>{/if}
 
@@ -379,5 +418,7 @@
 
 <style>
   .settings-runtimes { display: grid; gap: var(--page-gap); }
+  .key-refusal { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+  .key-refusal p { flex: 1 1 240px; margin: 0; color: var(--ink); font-size: var(--text-13); }
   .line { margin: 0; color: var(--muted); font-size: var(--text-13); }
 </style>

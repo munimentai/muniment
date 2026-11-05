@@ -7,20 +7,21 @@
   // `runs`, the window's agent runs. Save turns the triggers on. The chat's
   // creation record keeps every message and draft, so the chat stays to
   // revise the agent, and each later Save updates the same agent.
-  import { onMount } from 'svelte'
+  import { onMount, untrack } from 'svelte'
   import Button from '../lib/ui/Button.svelte'
   import FailureNote from '../lib/FailureNote.svelte'
   import { agentRequest } from './agent-runtime.js'
-  import { draftAgent, draftForm, formProblem, testRunLine } from './agent-draft.js'
+  import { draftAgent, draftForm, formProblem, sameAgent, testRunLine } from './agent-draft.js'
   import { emptyCatalog, loadToolCatalog } from './agent-tools.js'
-  import { triggerSummary } from './routine-labels.js'
+  import { DEFAULT_TIME_NOTE, hasPickedTime, triggerSummary } from './routine-labels.js'
   import { LOCAL_RUNTIME_ID } from '../runtimes/runtimes.js'
 
   // `turns` are the creation record's `{ message, at, reply }`. `pending` is
   // the message a draft is answering. `agentId` is the agent a Save made.
-  // `model` names the model the agent runs.
+  // `model` names the model the agent runs. `failed` is the message whose
+  // draft failed, which Try again sends once more.
   let {
-    tauri, runtime = LOCAL_RUNTIME_ID, turns = [], pending = '', error = '', agentId = null, projectId = null, model = '', runs = [],
+    tauri, runtime = LOCAL_RUNTIME_ID, turns = [], pending = '', error = '', failed = '', agentId = null, projectId = null, model = '', runs = [],
     onsend = () => {}, onsaved = () => {}, onopenchat = () => {},
   } = $props()
 
@@ -29,23 +30,46 @@
   let saveError = $state('')
   let saved = $state(null)
   let testRun = $state(null)
+  // The draft a Save turned on, which a later message replaces. Save rests
+  // while the newest draft is that one.
+  let savedDraft = $state(null)
+  // The agent as core last saved it: read fresh each time the chat names
+  // its agent, then each Save's answer. Save rests while the newest draft
+  // would save that agent unchanged. `reads` counts the reads and Saves, so
+  // an older read never replaces a newer answer.
+  let stored = $state(null)
+  let reads = 0
   let alive = true
 
   onMount(() => {
     void loadToolCatalog(tauri, runtime).then((value) => { if (alive) catalog = value })
     return () => { alive = false }
   })
+  $effect(() => {
+    const id = agentId
+    const read = ++reads
+    if (!id) return
+    untrack(() => { if (stored?.id !== id) stored = null })
+    void agentRequest(tauri, runtime, 'agent.read', { id }).then((answer) => { if (alive && read === reads) stored = answer?.agent ?? null }).catch(() => {})
+  })
 
   const latest = $derived(turns.length - 1)
+  const draftKey = $derived(`${latest}:${turns[latest]?.at ?? ''}`)
+  // The routines the chat's earlier drafts named, which the newest draft may drop.
+  const earlier = $derived(turns.slice(0, latest).flatMap((turn) => turn?.reply?.draft?.routines ?? []))
+  const unchanged = $derived(savedDraft === draftKey || (!!stored && !!turns[latest]?.reply?.draft && sameAgent(draftAgent(draftForm($state.snapshot(turns[latest].reply.draft)), { saved: $state.snapshot(stored), projectId, earlier: $state.snapshot(earlier) }), stored)))
   const skillNames = (draft) => (draft?.skills ?? []).map((id) => catalog.skills.find((skill) => skill.id === id)?.name ?? id)
   const schedule = (draft) => (draft?.routines ?? []).map((routine) => triggerSummary(routine.trigger)).join(', ') || 'Runs when you ask.'
   // The test run as the window last heard of it.
   const testLatest = $derived(testRun ? (runs.find((run) => run.id === testRun.id && (run.runtimeId ?? LOCAL_RUNTIME_ID) === runtime) ?? testRun) : null)
   const testLine = $derived(testLatest ? testRunLine(testLatest) : null)
+  // A Save error speaks for the draft it tried, so the next draft clears it.
+  $effect(() => { void draftKey; saveError = '' })
 
   // A test save keeps the triggers off, then starts one run of the agent.
   async function save(test) {
     const form = draftForm($state.snapshot(turns[latest]?.reply?.draft))
+    const key = draftKey
     const problem = formProblem(form)
     if (problem) { saveError = problem; return }
     busy = true
@@ -53,8 +77,11 @@
     try {
       const id = saved?.id ?? agentId
       const previous = id ? await agentRequest(tauri, runtime, 'agent.read', { id }).then((answer) => answer?.agent ?? null).catch(() => null) : null
-      const answer = await agentRequest(tauri, runtime, 'agent.save', { agent: draftAgent(form, { saved: $state.snapshot(previous), test, projectId }) })
+      const answer = await agentRequest(tauri, runtime, 'agent.save', { agent: draftAgent(form, { saved: $state.snapshot(previous), test, projectId, earlier: $state.snapshot(earlier) }) })
       saved = answer.agent
+      reads += 1
+      stored = answer.agent
+      savedDraft = test ? null : key
       if (test) {
         const started = await agentRequest(tauri, runtime, 'agent.run_now', { id: saved.id, test: true })
         testRun = started.run ?? null
@@ -79,7 +106,7 @@
         {#if draft.label}<p class="label">{draft.label}</p>{/if}
         <dl>
           <dt>What it does</dt><dd class="instructions">{draft.instructions}</dd>
-          <dt>When</dt><dd>{schedule(draft)}</dd>
+          <dt>When</dt><dd>{schedule(draft)}{#if (draft.routines ?? []).some(hasPickedTime)}<p class="picked" role="note">{DEFAULT_TIME_NOTE}</p>{/if}</dd>
           {#if skillNames(draft).length}<dt>Skills</dt><dd>{skillNames(draft).join(', ')}</dd>{/if}
           {#if model}<dt>Model</dt><dd>{model}</dd>{/if}
         </dl>
@@ -92,7 +119,7 @@
         {/if}
         {#if index === latest}
           <div class="actions">
-            <Button variant="primary" disabled={busy || !!pending} onclick={() => save(false)}>{saved || agentId ? 'Save changes' : 'Save'}</Button>
+            <Button variant={unchanged ? 'outline' : 'primary'} disabled={busy || !!pending || unchanged} onclick={() => save(false)}>{saved || agentId ? 'Save changes' : 'Save'}</Button>
             <Button variant="outline" icon="play" disabled={busy || !!pending} onclick={() => save(true)}>Test run</Button>
           </div>
           {#if saveError}<p class="error" role="alert">{saveError}</p>{/if}
@@ -101,7 +128,8 @@
               {#if testLine.failed}<FailureNote failure={testLine.text} role="none" />{:else}<span>{testLine.text}</span>{/if}
               <Button disabled={busy} onclick={() => onopenchat({ ...saved, runtimeId: runtime }, testLatest)}>{testLine.done ? 'Open result' : 'Open chat'}</Button>
             </div>
-          {:else if saved}
+          {:else if saved && unchanged}
+            <!-- Saved. reads only while the newest draft is the saved agent. -->
             <div class="state" role="status"><span>Saved.</span><Button disabled={busy} onclick={() => onopenchat({ ...saved, runtimeId: runtime }, null)}>Open agent</Button></div>
           {/if}
         {/if}
@@ -114,7 +142,12 @@
     <div class="user-turn"><div class="user-message"><p>{pending}</p></div></div>
     <p class="state" role="status">Drafting the agent…</p>
   {/if}
-  {#if error}<p class="error" role="alert">{error}</p>{/if}
+  {#if error}
+    <div class="state">
+      <p class="error" role="alert">{error}</p>
+      {#if failed && !pending}<Button variant="outline" onclick={() => onsend(failed)}>Try again</Button>{/if}
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -128,6 +161,7 @@
   dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 16px; margin: 0; }
   dt { color: var(--muted); font-size: var(--text-13); }
   dd { margin: 0; overflow-wrap: anywhere; }
+  .picked { margin: 2px 0 0; color: var(--warning); font-size: var(--text-12); }
   .instructions { white-space: pre-wrap; }
   .question { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); }
   .question p { margin: 0; font-weight: var(--weight-semibold); }

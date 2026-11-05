@@ -634,7 +634,8 @@ mod tests {
     use uuid::Uuid;
 
     fn record() -> CompanyRecord {
-        let path = std::env::temp_dir().join(format!("muniment-report-{}.sqlite3", Uuid::now_v7()));
+        let path = crate::state_root::test_root()
+            .join(format!("muniment-report-{}.sqlite3", Uuid::now_v7()));
         CompanyRecord::open(&path).unwrap()
     }
 

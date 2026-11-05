@@ -7,11 +7,22 @@ const signaledThreadCap = 256
 const signaledRunCap = 256
 const liveTextCap = 256
 const desktopBusy = 'Muniment is busy with another request. Try again.'
+const desktopBusyStart = 'Muniment is busy with another request.'
+// The waits before each select retry, in milliseconds.
+const selectRetryDelays = [250, 750, 1500]
+
+// The notice a refused select shows over the thread it was for.
+function selectFailureText(error) {
+  const cause = typeof error === 'string' ? error : error?.message
+  const failure = 'This thread did not open, so sending waits.'
+  return typeof cause === 'string' && cause.trim() ? `${failure} ${cause}` : failure
+}
 // The runtime admits one active run per profile and answers a second submit
 // with this reason before it records anything (attach_boundaries.rs).
 const replyInProgress = 'A reply is already in progress.'
 const replyInProgressRetryMs = 2_000
-const runElsewhere = 'Another reply is still running. Send again when it ends.'
+// Every busy-send notice reads this one sentence.
+const runElsewhere = 'Another reply is still running. Send it again when that reply ends.'
 // The runtime refuses a run in a thread another fleet member runs with this
 // reason before it records anything (attach_boundaries.rs).
 const threadElsewhere = 'Another machine runs this thread. Send the message to that machine.'
@@ -38,6 +49,8 @@ export function createChatController({
   readAnnounced,
   readDraft,
   readFiles,
+  // The composer's own draft and files, which a refused send puts back.
+  readComposer = () => ({ text: readDraft(), files: readFiles() }),
   // The thinking level a send carries, or null for the model's default.
   readThinkingLevel = () => null,
   // The permission mode picked for a new thread before its first message, or
@@ -51,7 +64,13 @@ export function createChatController({
   readMentions = () => [],
   onMentions = () => {},
   readThreadId = () => null,
+  // The thread open when the app last quit, which launch opens again while it
+  // still exists, or null.
+  readLaunchThreadId = () => null,
   readThreadSummaries = () => [],
+  // Whether the user archived a thread. Archive state lives in the window,
+  // so the first page reads on until it holds a full page of other threads.
+  readArchived = () => false,
   // The machine the composer sends to. A run left running on one machine
   // does not hold a send to another.
   readRuntime = () => null,
@@ -67,6 +86,11 @@ export function createChatController({
   onHistoryError: publishHistoryError,
   onHistoryStart = () => {},
   onThreadSummaries = () => {},
+  // The threads the local runtime names as deleted, from each first page.
+  onDeletedThreads = () => {},
+  // A deleted thread whose folder stays because it holds the user's files:
+  // the thread's summary and core's answer, which names the folder.
+  onThreadFolderKept = () => {},
   onMoreThreads = () => {},
   onThreadListError = () => {},
   readProject = () => null,
@@ -88,6 +112,10 @@ export function createChatController({
   // Sends a message the runtime refused because another machine runs the
   // thread to that machine, and answers whether it went.
   postElsewhere = null,
+  // How long launch waits for this computer's runtime to answer the thread
+  // list, and the pause between asks.
+  localListWaitMs = 10_000,
+  localListRetryMs = 250,
 }) {
   const buffered = new Map()
   // How many calls wait for a run id right now: a submission, a resume, or a
@@ -119,7 +147,19 @@ export function createChatController({
   let threadRefreshSequence = 0
   let threadPageCount = 1
   let nextThreadCursor = null
-  let loadingOlderThreads = false
+  // Whether this computer's list ended: a page it answered named no next
+  // cursor. Until then a refresh's cursor restores the next page.
+  let threadListEnded = false
+  // The read of the next page in flight. A second caller shares it, so a
+  // search, the Older threads control and the fill never race for a page.
+  let olderThreadsLoad = null
+  // Each history load starts the list again, so a page read for the list
+  // it replaced is read again from the new list's cursor.
+  let threadListSequence = 0
+  // Whether the last page read failed. The list then waits for the user's
+  // Retry, and the fill stops.
+  let olderThreadsFailed = false
+  const threadPageSize = 20
   // The shell shows a fresh thread and the first load after sign-in the same way:
   // no thread id. loadHistory reads this flag back to tell the two apart.
   let freshThread = false
@@ -128,6 +168,16 @@ export function createChatController({
   // the same thread id does not refresh. The set is insertion-ordered and holds
   // at most 256 thread ids. It drops the oldest entry past that bound.
   const signaledThreads = new Set()
+  // The machine each select named, by thread id.
+  const selectedRuntimes = new Map()
+  // Whether this computer's runtime answered the last thread list. A list it
+  // did not answer holds the paired machines' synced copies of its threads.
+  let localListed = true
+  // Whether a thread list published yet, and whether launch waits for this
+  // computer's list now. A refresh during that wait publishes nothing.
+  let launchListed = false
+  let launchWaiting = false
+  const listedLocally = (page) => !Array.isArray(page?.runtimeIds) || page.runtimeIds.includes(LOCAL_RUNTIME_ID)
   let signaledThreadRefreshInFlight = false
   let signaledThreadRefreshFollowUp = false
   // The signaled-run set marks each new run id once. A later event with the
@@ -290,14 +340,29 @@ export function createChatController({
         invoke('chat_thread_summaries', { limit: 20 }),
         invoke('chat_current_thread'),
       ])
-      if (destroyed || sequence !== threadRefreshSequence) return false
+      if (destroyed || sequence !== threadRefreshSequence || launchWaiting) return false
+      onDeletedThreads(firstPage.deletedThreadIds ?? [])
+      localListed = listedLocally(firstPage)
       const refreshedThreadIds = new Set(firstPage.summaries.map((summary) => summary.threadId))
       // A machine that did not answer, such as one that revoked this device, leaves its threads out.
       const answered = Array.isArray(firstPage.runtimeIds) ? new Set(firstPage.runtimeIds) : null
-      const retainedSummaries = readThreadSummaries().filter((summary) => !refreshedThreadIds.has(summary.threadId)
+      const previous = readThreadSummaries()
+      const retainedSummaries = previous.filter((summary) => !refreshedThreadIds.has(summary.threadId)
         && (!answered || !summary.runtimeId || answered.has(summary.runtimeId)))
-      const summaries = [...firstPage.summaries, ...retainedSummaries]
+      // A synced copy never stands in for a thread its own machine listed
+      // before and did not answer for this time, so its row and the title's
+      // machine stay put while that machine is busy.
+      const held = new Map(answered ? previous.filter((summary) => summary.runtimeId && !answered.has(summary.runtimeId)).map((summary) => [summary.threadId, summary]) : [])
+      const listed = firstPage.summaries.map((summary) => summary.replica && held.has(summary.threadId) ? held.get(summary.threadId) : summary)
+      const summaries = [...listed, ...retainedSummaries]
       onThreadSummaries(summaries)
+      // A list whose first read failed or held no next cursor, such as one a
+      // paired machine answered alone, takes the next page from this read.
+      if (nextThreadCursor == null && !threadListEnded && firstPage.nextCursor != null && localListed) {
+        nextThreadCursor = firstPage.nextCursor
+        onMoreThreads(true)
+      }
+      void fillThreads()
       const shownThreadId = currentThreadId ?? (freshThread ? null : readThreadId())
       onThreadSelected(shownThreadId)
       if (shownThreadId && summaries.some((summary) => summary.threadId === shownThreadId)) {
@@ -446,13 +511,38 @@ export function createChatController({
     onHistoryStart()
     onAnnounce(null)
     try {
-      const { summaries, nextCursor } = await invoke('chat_thread_summaries', { limit: 20 })
+      // At launch a paired machine can answer before this computer's
+      // runtime. Its list holds synced copies of this computer's threads,
+      // which would name the paired machine on each row, in the title and in
+      // the restored thread's select. Launch asks again until this computer
+      // answers or the wait ends, and the shell keeps its loading state.
+      launchWaiting = !launchListed
+      let page
+      try {
+        page = await invoke('chat_thread_summaries', { limit: 20 })
+        const deadline = Date.now() + localListWaitMs
+        while (launchWaiting && !listedLocally(page) && Date.now() < deadline && !destroyed) {
+          await new Promise((resolve) => setTimeout(resolve, localListRetryMs))
+          if (destroyed) return
+          try { page = await invoke('chat_thread_summaries', { limit: 20 }) } catch (_) { /* The list in hand stands. */ }
+        }
+      } finally {
+        launchWaiting = false
+      }
+      const { summaries, nextCursor, deletedThreadIds } = page
       if (destroyed) return
+      localListed = listedLocally(page)
+      launchListed = true
+      onDeletedThreads(deletedThreadIds ?? [])
       historyLoadFailed = false
       threadPageCount = 1
+      threadListSequence += 1
       nextThreadCursor = nextCursor
+      threadListEnded = nextCursor == null && localListed
       onThreadSummaries(summaries)
       onMoreThreads(nextThreadCursor != null)
+      await fillThreads()
+      if (destroyed) return
       if (!summaries.length) {
         onHistoryError('')
         publishMessages([])
@@ -474,6 +564,13 @@ export function createChatController({
       // A reload keeps the run the user watches on screen.
       if (active()) return
       const newest = summaries[0].threadId
+      // At launch the shell holds no thread yet. The thread open at quit opens
+      // again, and one that is gone falls through to the newest with no error.
+      const launchThreadId = openThreadId ? null : readLaunchThreadId()
+      if (launchThreadId && launchThreadId !== newest) {
+        if (await openThread(launchThreadId, switchBlocked, !switchBlocked, true) !== false) return
+        if (destroyed) return
+      }
       if (openThreadId && openThreadId !== newest) {
         // Retention can prune the open thread, and a sign-in under another
         // subject leaves the shell holding an id it no longer owns. Fall back to
@@ -493,43 +590,91 @@ export function createChatController({
     }
   }
 
-  async function loadOlderThreads() {
-    if (destroyed || loadingOlderThreads || nextThreadCursor == null) return null
-    loadingOlderThreads = true
-    const cursor = nextThreadCursor
-    const sequence = threadRefreshSequence
-    try {
-      const result = await invoke('chat_thread_summaries', { limit: 20, cursor })
-      if (destroyed || sequence !== threadRefreshSequence) return null
-      const firstThreadId = result.summaries[0]?.threadId ?? null
-      onThreadSummaries([...readThreadSummaries(), ...result.summaries])
-      threadPageCount += 1
-      nextThreadCursor = result.nextCursor
-      onMoreThreads(nextThreadCursor != null)
-      onThreadListError('')
-      return firstThreadId
-    } catch (_) {
-      if (!destroyed && sequence === threadRefreshSequence) onThreadListError('Older threads could not be loaded.', { label: 'Load older threads', run: loadOlderThreads })
-      return null
-    } finally {
-      loadingOlderThreads = false
+  // Archived threads count toward a page, so the list reads older pages
+  // until it holds a page of threads the user did not archive or ends. A
+  // page read in flight is awaited, never a reason to stop.
+  async function fillThreads() {
+    for (let pages = 0; pages < 50; pages += 1) {
+      if (destroyed || nextThreadCursor == null) return
+      const listed = readThreadSummaries()
+      const shown = listed.filter((summary) => !readArchived(summary.threadId)).length
+      if (shown >= threadPageSize || shown === listed.length) return
+      await loadOlderThreads()
+      if (olderThreadsFailed) return
     }
   }
 
-  async function openThread(threadId, select = false, restoreSelection = false) {
+  function loadOlderThreads() {
+    if (destroyed || nextThreadCursor == null) return Promise.resolve(null)
+    olderThreadsLoad ??= readOlderThreads()
+    return olderThreadsLoad
+  }
+
+  async function readOlderThreads() {
+    // A history load that replaced the list during the read leaves its page
+    // unused, and the read goes on from the new list's cursor.
+    try {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        if (destroyed || nextThreadCursor == null) return null
+        const cursor = nextThreadCursor
+        const sequence = threadListSequence
+        let result
+        try {
+          result = await invoke('chat_thread_summaries', { limit: threadPageSize, cursor })
+        } catch (_) {
+          if (destroyed) return null
+          if (sequence !== threadListSequence) continue
+          olderThreadsFailed = true
+          onThreadListError('Older threads could not be loaded.', { label: 'Load older threads', run: loadOlderThreads })
+          return null
+        }
+        if (destroyed) return null
+        if (sequence !== threadListSequence || cursor !== nextThreadCursor) continue
+        olderThreadsFailed = false
+        const firstThreadId = result.summaries[0]?.threadId ?? null
+        onThreadSummaries([...readThreadSummaries(), ...result.summaries])
+        threadPageCount += 1
+        nextThreadCursor = result.nextCursor
+        if (result.nextCursor == null && listedLocally(result)) threadListEnded = true
+        onMoreThreads(nextThreadCursor != null)
+        onThreadListError('')
+        return firstThreadId
+      }
+      return null
+    } finally {
+      olderThreadsLoad = null
+    }
+  }
+
+  // A quiet open reports no failure, since its caller falls back to another
+  // thread or names the failure itself through `onFailure`.
+  async function openThread(threadId, select = false, restoreSelection = false, quiet = false, onFailure = null) {
     if (switchingThread || holdsThread()) return
     threadRefreshSequence += 1
     switchingThread = true
     onThreadSwitch(true)
     const previousThreadId = readThreadId()
+    // Each select names its thread's machine as the list shows it now, so a
+    // list that changes during the load sends no select to another machine.
+    const target = selection(threadId)
+    const previous = previousThreadId == null ? null : selection(previousThreadId)
     const wasBlocked = switchBlocked
     let selected = false
+    // A select the runtime refused: the thread still shows, and sending waits
+    // until a select of it succeeds, so no message goes to the thread before.
+    let selectFailure = null
     historyLoads += 1
     holdBuffer()
     try {
       if (select) {
-        await invoke('chat_select_thread', selection(threadId))
-        selected = true
+        try {
+          await selectThread(target)
+          selected = true
+        } catch (error) {
+          // A select of the thread already shown leaves nothing to mix up.
+          if (quiet || destroyed || threadId === previousThreadId) throw error
+          selectFailure = error
+        }
       }
       const history = []
       let posted = []
@@ -546,8 +691,8 @@ export function createChatController({
       }
       if (destroyed) return
       // Read first so a failed initial history read still permits a fresh thread.
-      if (restoreSelection && !selected) {
-        await invoke('chat_select_thread', selection(threadId))
+      if (restoreSelection && !selected && !selectFailure) {
+        await invoke('chat_select_thread', target)
         selected = true
         if (destroyed) return
       }
@@ -577,8 +722,13 @@ export function createChatController({
       if (rejoined) onAnnounce(rejoined)
       onHistoryLoaded()
       onFollow()
-      onHistoryError('')
-      switchBlocked = false
+      if (selectFailure) {
+        switchBlocked = true
+        onHistoryError(selectFailureText(selectFailure), { label: 'Open again', run: () => openThread(threadId, true) })
+      } else {
+        onHistoryError('')
+        switchBlocked = false
+      }
       // The buffer can hold the whole run, so a rejoin can settle at once. The
       // refresh stays unawaited because this call already bumped the refresh
       // sequence. An awaited refresh would reorder onThreadSelected.
@@ -595,7 +745,7 @@ export function createChatController({
             switchBlocked = true
           } else {
             try {
-              await invoke('chat_select_thread', { threadId: previousThreadId })
+              await invoke('chat_select_thread', previous)
               switchBlocked = false
             } catch (_) {
               switchBlocked = true
@@ -605,7 +755,8 @@ export function createChatController({
         // The transcript stays on the run the user left, so it takes the
         // events that landed while the other thread loaded.
         drainVisibleRun()
-        onHistoryError(historyReadError(error), {
+        if (quiet) onFailure?.(error)
+        if (!quiet) onHistoryError(historyReadError(error), {
           label: 'Restore history',
           run: () => openThread(threadId, select || switchBlocked, restoreSelection),
         }, true)
@@ -617,6 +768,21 @@ export function createChatController({
       switchingThread = false
       if (!destroyed) onThreadSwitch(switchBlocked)
       if (recoveryPending) void recoverChatEvents()
+    }
+  }
+
+  // A busy runtime answers in a moment, so a select, a Stop and a message to
+  // a running reply try again a few times before they report the refusal.
+  const selectThread = (target) => whenNotBusy('chat_select_thread', target)
+  async function whenNotBusy(command, payload) {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await invoke(command, payload)
+      } catch (error) {
+        const cause = typeof error === 'string' ? error : error?.message
+        if (destroyed || attempt >= selectRetryDelays.length || !String(cause ?? '').startsWith(desktopBusyStart)) throw error
+        await new Promise((resolve) => setTimeout(resolve, selectRetryDelays[attempt]))
+      }
     }
   }
 
@@ -839,9 +1005,11 @@ export function createChatController({
     threadRefreshSequence += 1
     switchingThread = true
     onThreadSwitch(true)
+    const summary = readThreadSummaries().find((item) => item.threadId === threadId)
     try {
-      await invoke('chat_delete_thread', { threadId })
+      const answer = await invoke('chat_delete_thread', { threadId })
       if (destroyed) return false
+      if (answer?.folder_kept) onThreadFolderKept(summary ?? { threadId }, answer)
       onThreadSummaries(readThreadSummaries().filter((summary) => summary.threadId !== threadId))
       if (deletingCurrent) {
         onHistoryStart()
@@ -867,9 +1035,21 @@ export function createChatController({
 
   // A thread's selection names the machine its row lives on, so requests
   // and the model list follow the machine the composer shows.
+  // The machine a select names. A thread the list no longer names keeps the
+  // machine a select last named for it, so a select never falls back to
+  // whichever machine is active.
+  // A synced copy listed while this computer's runtime did not answer names
+  // its holder, never the machine the thread lives on, so its select names
+  // no machine and selects no paired machine.
   function selection(threadId) {
-    const runtimeId = readThreadSummaries().find((summary) => summary.threadId === threadId)?.runtimeId
-    return runtimeId ? { threadId, runtimeId } : { threadId }
+    const summary = readThreadSummaries().find((entry) => entry.threadId === threadId)
+    if (summary?.replica && !localListed) return { threadId }
+    const runtimeId = summary?.runtimeId
+      ?? selectedRuntimes.get(threadId)
+    if (!runtimeId) return { threadId }
+    selectedRuntimes.set(threadId, runtimeId)
+    if (selectedRuntimes.size > signaledThreadCap) selectedRuntimes.delete(selectedRuntimes.keys().next().value)
+    return { threadId, runtimeId }
   }
 
   async function sendNewThread(text) {
@@ -887,7 +1067,7 @@ export function createChatController({
     }
     const selected = readFiles()
     const folders = selected.filter(file => file.isDirectory).map(file => file.path)
-    return submitPrompt(withFolders(prompt, folders), selected.filter(file => !file.isDirectory).map(({ path }) => ({ path })))
+    return submitPrompt(withFolders(prompt, folders), selected.filter(file => !file.isDirectory).map(({ path }) => ({ path })), false, readComposer())
   }
 
   async function submitWhenAvailable(payload) {
@@ -917,13 +1097,27 @@ export function createChatController({
     }
   }
 
-  async function submitPrompt(prompt, files, preserveDraft = false) {
+  // `composer` is the draft and files the send took from the composer. They
+  // leave it in the same update that shows the sent message, and a send the
+  // runtime refuses puts them back while the composer stays empty.
+  async function submitPrompt(prompt, files, preserveDraft = false, composer = null) {
     onSend()
     onSubmitError('')
     const submissionId = ++submissionSequence
     const userMessage = { role: 'user', sentAt: new Date().toISOString(), text: prompt, attachments: [], submissionId }
-    const pending = { id: 'pending', phase: 'thinking', startedAt: userMessage.sentAt, text: '', receipt: null, prompt, submissionId }
+    // A reply carries no start time until the runtime's first event names the
+    // run's start, which its receipt times from, so its live time never jumps back.
+    const pending = { id: 'pending', phase: 'thinking', text: '', receipt: null, prompt, submissionId }
     publishMessages([...messages(), userMessage, { role: 'assistant', run: pending }])
+    if (composer) {
+      onDraft('')
+      onFiles([])
+    }
+    const restoreComposer = () => {
+      if (!composer || submissionId !== submissionSequence || readDraft().trim() || readFiles().length) return
+      onDraft(composer.text)
+      onFiles(composer.files)
+    }
     onActive(pending)
     onAnnounce(pending)
     onFollow()
@@ -941,10 +1135,6 @@ export function createChatController({
       if (destroyed || submissionId !== submissionSequence) return
       onSubmitted()
       if (run.mentions?.length) onMentions(run.mentions)
-      if (!preserveDraft) {
-        onDraft('')
-        onFiles([])
-      }
       publishMessages(messages().map((message) => message.submissionId === submissionId ? { ...message, attachments: run.attachments ?? [] } : message))
       const identified = { ...pending, id: run.runId }
       const projected = applyLiveEvents(identified, buffered.get(run.runId) ?? [])
@@ -964,6 +1154,7 @@ export function createChatController({
         publishMessages(messages().filter((message) => message.submissionId !== submissionId && message.run?.submissionId !== submissionId))
         if (submissionId !== submissionSequence) return false
         if (preserveDraft && !readDraft().trim()) onDraft(prompt)
+        restoreComposer()
         onAnnounce(null)
         onActive(null)
         onSubmitError(runElsewhere)
@@ -975,10 +1166,8 @@ export function createChatController({
         publishMessages(messages().filter((message) => message.submissionId !== submissionId && message.run?.submissionId !== submissionId))
         onAnnounce(null)
         onActive(null)
-        if (await postElsewhere(prompt)) {
-          if (!preserveDraft) { onDraft(''); onFiles([]) }
-          return true
-        }
+        if (await postElsewhere(prompt)) return true
+        restoreComposer()
         return false
       }
       if (deliveryFailureReason || recoveryPending || [...buffered.values()].some((events) => events.some((event) => event.threadId && (!readThreadId() || event.threadId === readThreadId())))) {
@@ -988,11 +1177,13 @@ export function createChatController({
         onActive(restoring)
         onAnnounce(restoring)
         recoveryPending = true
+        restoreComposer()
         return false
       }
       const { message } = submissionFailure(error)
       const failed = { ...pending, id: `rejected-${messages().length}`, phase: 'failed', failureReason: typeof message === 'string' ? message : 'The message could not be sent.' }
       publishMessages(messages().map((message) => message.run?.submissionId === submissionId ? { ...message, run: failed } : message))
+      restoreComposer()
       if (submissionId !== submissionSequence) return
       onAnnounce(failed)
       onActive(null)
@@ -1008,9 +1199,10 @@ export function createChatController({
     if (!run) return
     onCancelError('')
     try {
-      await invoke('chat_cancel', { runId: run.id })
+      await whenNotBusy('chat_cancel', { runId: run.id })
     } catch (_) {
-      if (!destroyed) onCancelError('Could not stop this reply. Try again.')
+      // A reply that ended meanwhile needs no Stop.
+      if (!destroyed && active()?.id === run.id) onCancelError('Could not stop this reply. Try again.')
     }
   }
 
@@ -1050,14 +1242,28 @@ export function createChatController({
     onQueueError('')
     const threadId = readThreadId()
     try {
-      await invoke('chat_queue', { runId: run.id, delivery, message })
-      // The message joins the run's own transcript, not one the user opened since.
-      if (destroyed || readThreadId() !== threadId) return
-      publishMessages([...messages(), { role: 'user', text: message }])
+      await whenNotBusy('chat_queue', { runId: run.id, delivery, message })
+      if (destroyed) return
+      // The runtime took the message into the running reply, so it shows
+      // inside that reply where its text stood, never after it as a turn
+      // with no answer. It joins the run's own transcript, not one the user
+      // opened since. The runtime's journal records it too, and history
+      // places it from there on every device.
+      if (readThreadId() !== threadId) return
+      const index = runIndex(run.id)
+      const shown = index < 0 ? run : messages()[index].run
+      const steer = { text: message, textOffset: (shown.text ?? '').length }
+      if (index >= 0) replaceRun(index, { ...shown, steers: [...(shown.steers ?? []), steer] })
+      const running = active()
+      if (running?.id === run.id) onActive({ ...running, steers: [...(running.steers ?? []), steer] })
       onFollow()
       if (readDraft().trim() === message) onDraft('')
     } catch (error) {
-      if (!destroyed) onQueueError(typeof error === 'string' ? error : String(error))
+      if (destroyed) return
+      // The reply ended before the runtime took the message, so the message
+      // goes as the next turn instead of staying in the composer.
+      if (!active() && readThreadId() === threadId && readDraft().trim() === message) return send()
+      onQueueError(typeof error === 'string' ? error : String(error))
     }
   }
 
@@ -1071,5 +1277,5 @@ export function createChatController({
     liveText.clear()
   }
 
-  return { start, loadHistory, loadOlderThreads, openThread: (threadId) => openThread(threadId, true), refreshOpenThread, refreshThreads, recoverChatEvents, historyReadFailed: () => historyLoadFailed, newThread: () => newThread(), sendNewThread, renameThread, deleteThread, send, cancel, resume, queue, cleanup }
+  return { start, loadHistory, loadOlderThreads, openThread: (threadId, onFailure) => typeof onFailure === 'function' ? openThread(threadId, true, false, true, onFailure) : openThread(threadId, true), refreshOpenThread, refreshThreads, recoverChatEvents, historyReadFailed: () => historyLoadFailed, newThread: () => newThread(), sendNewThread, renameThread, deleteThread, send, cancel, resume, queue, cleanup }
 }

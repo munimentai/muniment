@@ -87,3 +87,40 @@ it('leads with core\'s headline for any tool and keeps raw JSON behind Show deta
   expect(screen.getByRole('article')).toHaveTextContent('Search the web for \u201cLocal desktop October 2026\u201d and 1 more on news.ycombinator.com')
   expect(screen.getByRole('article').querySelector('.tool-details')).toHaveTextContent('Results per query8')
 })
+
+const question = (thread_id) => ({
+  approval_id: 'r1:g1', agent_id: 'a1', agent_name: 'Lead scout', runtime_id: 'core-box', runtimeId: 'box', run_id: 'r1', gate_id: 'g1', thread_id, state: 'pending', created_at: new Date().toISOString(),
+  request: { gate_id: 'g1', kind: 'editor', title: 'muniment:ask_user_question', prefill: JSON.stringify({ questions: [{ id: 'tone', question: 'Which tone?', options: [{ label: 'Formal' }, { label: 'Casual' }] }, { id: 'goal', question: 'What should it say?' }] }) },
+})
+
+it('answers an agent run question with its options and text through the approval answer', async () => {
+  const invoke = vi.fn(async () => ({ status: 'sent' }))
+  render(ApprovalCard, { tauri: { invoke }, approval: question(null) })
+  expect(screen.queryByText('This request needs its conversation.')).toBeNull()
+  expect(screen.getByText('Lead scout asks you')).toBeInTheDocument()
+  const send = screen.getByRole('button', { name: 'Send answers' })
+  expect(send).toBeDisabled()
+  await fireEvent.click(screen.getByRole('button', { name: 'Casual' }))
+  expect(screen.getByRole('button', { name: 'Casual' })).toHaveAttribute('aria-pressed', 'true')
+  await fireEvent.input(screen.getByRole('textbox', { name: 'Your answer: What should it say?' }), { target: { value: 'Ship it Friday' } })
+  expect(send).toBeEnabled()
+  await fireEvent.click(send)
+  const value = JSON.stringify({ answers: [{ id: 'tone', question: 'Which tone?', selected: ['Casual'], text: '' }, { id: 'goal', question: 'What should it say?', selected: [], text: 'Ship it Friday' }] })
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: 'box', operation: 'agent.approval_answer', body: { approval_id: 'r1:g1', answer: { type: 'editor', value } } }))
+  expect(await screen.findByRole('status')).toHaveTextContent('Answer sent. The machine applies it when it answers.')
+})
+
+it('answers a text request and says what a run with no conversation can do with a file review', async () => {
+  const invoke = vi.fn(async () => ({ status: 'answered' }))
+  const text = { ...question('t1'), request: { gate_id: 'g1', kind: 'input', title: 'Folder name?', placeholder: 'records' } }
+  render(ApprovalCard, { tauri: { invoke }, approval: text })
+  await fireEvent.input(screen.getByRole('textbox', { name: 'Folder name?' }), { target: { value: 'Quarterly' } })
+  await fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_request', { runtime: 'box', operation: 'agent.approval_answer', body: { approval_id: 'r1:g1', answer: { type: 'input', value: 'Quarterly' } } }))
+  cleanup()
+  render(ApprovalCard, { tauri: { invoke }, approval: { ...question(null), request: { gate_id: 'g1', kind: 'code_diff', effect_id: 'e1' } } })
+  expect(buttons()).toEqual(['Deny'])
+  expect(screen.getByText('This run has no conversation to show its file changes in. Deny ends the wait.')).toBeInTheDocument()
+  await fireEvent.click(screen.getByRole('button', { name: 'Deny' }))
+  await waitFor(() => expect(invoke).toHaveBeenLastCalledWith('agent_request', { runtime: 'box', operation: 'agent.approval_answer', body: { approval_id: 'r1:g1', answer: { type: 'cancelled' } } }))
+})

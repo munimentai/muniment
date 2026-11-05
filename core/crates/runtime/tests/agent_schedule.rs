@@ -157,3 +157,73 @@ fn queued_agent_runs_once_in_its_project_and_records_completion() {
     std::env::remove_var("PI_RESUME_STUB_ARGS");
     std::env::remove_var("MUNIMENT_PI_ROOT");
 }
+
+/// The inode and modification time of the agent state file, which change
+/// on each save because a save replaces the file.
+fn state_file_identity(profile: &std::path::Path) -> (u64, std::time::SystemTime, Vec<u8>) {
+    use std::os::unix::fs::MetadataExt;
+    let path = profile.join("agent-state.json");
+    let metadata = std::fs::metadata(&path).unwrap();
+    (
+        metadata.ino(),
+        metadata.modified().unwrap(),
+        std::fs::read(&path).unwrap(),
+    )
+}
+
+#[test]
+fn an_idle_schedule_pass_writes_no_agent_state() {
+    let temporary = common::TemporaryProfile::new("agent-schedule-idle", false);
+    let profile = &temporary.profile;
+    muniment_core::home::confirm_home(profile, &temporary.root.join("muniment")).unwrap();
+    let agent = agents::save(
+        profile,
+        Agent {
+            name: "Daily scout".into(),
+            instructions: "Prepare the daily brief.".into(),
+            schedule: Some(agents::Schedule {
+                enabled: true,
+                cadence: "daily".into(),
+                time: "09:00".into(),
+                weekday: 0,
+            }),
+            ..Agent::default()
+        },
+    )
+    .unwrap();
+    let state = RuntimeAttachState::open(RuntimeHost::default(), profile, profile).unwrap();
+    // The save records the routine's next fire time, so no pass has to.
+    assert!(
+        agents::state(profile).unwrap().routines[&agent.id]["schedule"]
+            .next_fire_at
+            .is_some()
+    );
+    let recorded = state_file_identity(profile);
+    // Passes find nothing to change and leave the file alone.
+    for _ in 0..3 {
+        std::thread::sleep(Duration::from_millis(20));
+        state
+            .check_agent_schedules_with(state.boundaries())
+            .unwrap();
+        assert_eq!(state_file_identity(profile), recorded);
+    }
+    // A changed routine writes once, and the pass after it writes nothing.
+    let mut moved = agents::get(profile, &agent.id).unwrap();
+    moved.schedule.as_mut().unwrap().time = "10:00".into();
+    moved.routines.clear();
+    let fired = agents::state(profile).unwrap().routines[&agent.id]["schedule"].next_fire_at;
+    agents::save(profile, moved).unwrap();
+    let rescheduled = state_file_identity(profile);
+    assert_ne!(rescheduled.0, recorded.0, "the save records the new time");
+    assert_ne!(
+        agents::state(profile).unwrap().routines[&agent.id]["schedule"].next_fire_at,
+        fired
+    );
+    for _ in 0..2 {
+        std::thread::sleep(Duration::from_millis(20));
+        state
+            .check_agent_schedules_with(state.boundaries())
+            .unwrap();
+        assert_eq!(state_file_identity(profile), rescheduled);
+    }
+}

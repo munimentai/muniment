@@ -4,14 +4,14 @@
   // names its bucket and every provider's amount to assistive technology and
   // on hover.
   import { bucketLabel, measure, measureLabel, providerColor, providerLabel } from './usage.js'
-  let { series = [], bucket = 'day', view = 'tokens' } = $props()
+  let { series = [], bucket = 'day', view = 'tokens', inventory = null } = $props()
   const providers = $derived([...new Set(series.flatMap((entry) => Object.keys(entry.providers ?? {})))].sort())
   const totals = $derived(series.map((entry) => Object.values(entry.providers ?? {}).reduce((sum, amount) => sum + measure(amount, view), 0)))
   const peak = $derived(Math.max(0, ...totals))
   // A tick under every few bars, so labels never crowd.
   const every = $derived(Math.max(1, Math.ceil(series.length / 8)))
   const describe = (entry, total) => {
-    const parts = providers.filter((provider) => entry.providers?.[provider]).map((provider) => `${providerLabel(provider)} ${measureLabel(measure(entry.providers[provider], view), view)}`)
+    const parts = providers.filter((provider) => entry.providers?.[provider]).map((provider) => `${providerLabel(provider, inventory)} ${measureLabel(measure(entry.providers[provider], view), view)}`)
     return `${bucketLabel(entry.start_ms, bucket)}: ${parts.length ? parts.join(', ') : 'none'}${parts.length > 1 ? `, ${measureLabel(total, view)} in all` : ''}`
   }
 </script>
@@ -33,7 +33,7 @@
   </div>
   {#if providers.length}
     <figcaption class="legend">
-      {#each providers as provider (provider)}<span><i style:background={providerColor(provider)}></i>{providerLabel(provider)}</span>{/each}
+      {#each providers as provider (provider)}<span><i style:background={providerColor(provider)}></i>{providerLabel(provider, inventory)}</span>{/each}
       <span class="peak">Peak {measureLabel(peak, view)}</span>
     </figcaption>
   {/if}

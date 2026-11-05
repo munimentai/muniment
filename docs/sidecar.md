@@ -97,6 +97,13 @@ conflicting bindings. Pi JSONL and its contents never cross Tauri and never
 reconstruct chat text, receipts, or provenance; the append-only run journal
 remains authoritative for those projections.
 
+A message the user sends during a run reaches Pi as a `steer` or `follow_up`
+command. Once Pi acknowledges it, the run's coordinator commits the held reply
+text and appends one `run.steered` event with the message as the user wrote it.
+The event's place in the journal is its place in the reply: thread history
+and the replicated journal project it as `steers`, each with `text`,
+`textOffset` (the reply text's length in UTF-16 code units) and `sentAt`.
+
 Startup still marks every interrupted nonterminal run `run.needs_attention`.
 The presence of a valid binding does not submit a prompt, resolve a permission
 gate, or repeat a tool effect. Automatic continuation is deliberately deferred

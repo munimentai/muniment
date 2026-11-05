@@ -3,7 +3,7 @@
   // share of the largest row, its amount and its runs.
   import ProviderLogo from '../lib/ProviderLogo.svelte'
   import { measure, measureLabel, providerColor, rowLabel } from './usage.js'
-  let { rows = [], breakdown = 'model', view = 'tokens' } = $props()
+  let { rows = [], breakdown = 'model', view = 'tokens', inventory = null } = $props()
   const peak = $derived(Math.max(0, ...rows.map((row) => measure(row, view))))
 </script>
 
@@ -12,7 +12,7 @@
     {#each rows as row (row.key)}
       {@const value = measure(row, view)}
       <li>
-        <span class="name">{#if row.provider}<ProviderLogo provider={row.provider} size={14} color />{/if}<span>{rowLabel(row, breakdown)}</span></span>
+        <span class="name">{#if row.provider}<ProviderLogo provider={row.provider} size={14} color />{/if}<span>{rowLabel(row, breakdown, inventory)}</span></span>
         <span class="bar" aria-hidden="true"><i style:width={peak ? `${(value / peak) * 100}%` : '0%'} style:background={row.provider ? providerColor(row.provider) : 'var(--muted)'}></i></span>
         <span class="value">{measureLabel(value, view)}</span>
         <span class="runs">{row.runs} {row.runs === 1 ? 'run' : 'runs'}</span>

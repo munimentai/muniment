@@ -35,6 +35,8 @@ const USAGE_TIMEOUT: Duration = Duration::from_secs(45);
 /// How long a forwarded redirect waits for Claude Code to finish and for
 /// `claude auth status` to name the account.
 const CONFIRM_TIMEOUT: Duration = Duration::from_secs(90);
+/// How long the login's output may trail its exit before the reason is read.
+const OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 const START_ERROR: &str = "The sign-in could not start. Try again.";
 const MISSING: &str =
     "Claude Code is not on this machine yet. Start a chat once so Muniment installs it, then sign in.";
@@ -193,7 +195,7 @@ pub(super) fn status(executable: &Path, folder: Option<&Path>) -> Option<Status>
 }
 
 /// The plan windows in a `get_usage` answer. `None` when the answer is not
-/// one.
+/// one, or when plan limits apply and Claude Code read no window.
 pub(super) fn parse_usage(response: &Value, now_ms: i64) -> Option<(Usage, Option<String>)> {
     let readable = response.get("rate_limits_available")?.as_bool()?;
     let plan = response
@@ -214,11 +216,13 @@ pub(super) fn parse_usage(response: &Value, now_ms: i64) -> Option<(Usage, Optio
             scope: scope.into(),
             remaining_percent: 100.0 - used,
             limit_reached: used >= 100.0,
+            // The reset is a whole second. Claude Code reports it with
+            // jitter in the milliseconds that would read as a new reading.
             resets_at_ms: window
                 .get("resets_at")
                 .and_then(Value::as_str)
                 .and_then(|text| chrono::DateTime::parse_from_rfc3339(text).ok())
-                .map(|at| at.timestamp_millis()),
+                .map(|at| (at.timestamp_millis() + 500).div_euclid(1000) * 1000),
         });
     };
     if let Some(limits) = limits {
@@ -246,6 +250,12 @@ pub(super) fn parse_usage(response: &Value, now_ms: i64) -> Option<(Usage, Optio
                 }
             }
         }
+    }
+    // Plan limits apply, yet Claude Code has no windows: its read of the
+    // usage endpoint failed, such as on a 429. That is no reading, so the
+    // held one stays rather than reading as unavailable.
+    if readable && windows.is_empty() {
+        return None;
     }
     Some((
         Usage {
@@ -328,15 +338,7 @@ pub(super) fn refresh(agent: &Path, id: &str) -> bool {
     let Some((reading, plan)) = usage(&executable, &folder) else {
         return false;
     };
-    claude_accounts::update(agent, |store| {
-        if let Some(account) = store.accounts.iter_mut().find(|account| account.id == id) {
-            account.usage = Some(reading);
-            if plan.is_some() {
-                account.plan = plan;
-            }
-        }
-    })
-    .is_ok()
+    claude_accounts::record_usage(agent, id, reading, plan).is_ok()
 }
 
 /// Reads every account's plan limits at once, or the one `id` names.
@@ -650,6 +652,8 @@ pub(super) fn start(service: &Arc<ModelService>) -> Result<Value, String> {
         }
     };
     let lines = Arc::new(Mutex::new(Vec::<String>::new()));
+    let (drained, readers_done) = std::sync::mpsc::channel::<()>();
+    let mut readers = 0;
     for pipe in [
         child
             .stdout
@@ -664,13 +668,17 @@ pub(super) fn start(service: &Arc<ModelService>) -> Result<Value, String> {
     .flatten()
     {
         let lines = Arc::clone(&lines);
+        let drained = drained.clone();
+        readers += 1;
         std::thread::spawn(move || {
             for line in BufReader::new(pipe).lines() {
                 let Ok(line) = line else { break };
                 lines.lock().unwrap_or_else(|e| e.into_inner()).push(line);
             }
+            let _ = drained.send(());
         });
     }
+    drop(drained);
     // Claude Code hands its browser the URL whose redirect comes back to its
     // own listener, and prints another whose page shows a code to paste.
     let mut deadline = Instant::now() + URL_TIMEOUT;
@@ -760,6 +768,17 @@ pub(super) fn start(service: &Arc<ModelService>) -> Result<Value, String> {
                 }
             };
             stdin.lock().unwrap_or_else(|e| e.into_inner()).take();
+            // The readers can trail a failed exit, so the reason Claude Code
+            // printed last waits for them, but never past a bound.
+            if exit.is_some_and(|exit| !exit.success()) {
+                let drain_deadline = Instant::now() + OUTPUT_DRAIN_TIMEOUT;
+                for _ in 0..readers {
+                    let left = drain_deadline.saturating_duration_since(Instant::now());
+                    if readers_done.recv_timeout(left).is_err() {
+                        break;
+                    }
+                }
+            }
             let cancelled = stop.load(Ordering::SeqCst);
             let result = match exit {
                 Some(exit) if exit.success() => finish(&app.agent, &executable, &id),
@@ -892,6 +911,21 @@ mod tests {
         let (usage, plan) = parse_usage(&key, 1).unwrap();
         assert!(!usage.readable && usage.windows.is_empty() && plan.is_none());
         assert!(parse_usage(&json!({}), 1).is_none());
+    }
+
+    #[test]
+    fn a_failed_limits_read_is_no_reading_and_a_reset_is_a_whole_second() {
+        // Claude Code answers so when its usage endpoint refused, such as on
+        // a 429: plan limits apply, and it read none.
+        let refused =
+            json!({"subscription_type": "max", "rate_limits_available": true, "rate_limits": null});
+        assert!(parse_usage(&refused, 1).is_none());
+        let answer = json!({
+            "rate_limits_available": true,
+            "rate_limits": {"seven_day": {"utilization": 13.0, "resets_at": "2026-11-01T22:00:00.381+00:00"}}
+        });
+        let (usage, _) = parse_usage(&answer, 1).unwrap();
+        assert_eq!(usage.windows[0].resets_at_ms, Some(1_793_570_400_000));
     }
 
     /// A stand-in `claude` at the bundled path. `auth login` names its

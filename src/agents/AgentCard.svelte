@@ -18,12 +18,14 @@
   import ModePicker from '../composer/ModePicker.svelte'
   import { panelScroll } from '../lib/panel-scroll.js'
   import { runActive, runLight, runStatusLabel, whenLabel } from '../lib/agent-labels.js'
+  import { minuteClock } from '../lib/relative-time.js'
+  import { runFailureText } from '../lib/run-failure.js'
   import { agentRequest, saveAgentPatch } from './agent-runtime.js'
   import InlineEdit from './InlineEdit.svelte'
   import RoutineRow from './RoutineRow.svelte'
   import RunHistory, { runIcon } from './RunHistory.svelte'
   import { agentMode, modeIcon, modePermissions } from './permission-modes.js'
-  import { isProposal, nextRunLabel } from './routine-labels.js'
+  import { CUT_SHORT_NOTE, isCutShort, isProposal, nextRunLabel } from './routine-labels.js'
 
   // `modes` is core's `permission.modes` from the agent's machine: undefined
   // while it loads, null when the machine lists none. `onopenrun` opens a
@@ -55,6 +57,7 @@
   const currentMode = $derived(agentMode(agent, modes))
   const routines = $derived((agent.routines ?? []).filter((routine) => !isProposal(routine)))
   const proposed = $derived((agent.routines ?? []).filter(isProposal).length)
+  const cutShort = $derived((agent.routines ?? []).filter(isCutShort))
 
   export function editName() { return nameField?.open() }
 
@@ -111,7 +114,7 @@
     let alive = true
     runs = { list: untrack(() => runs.list), loading: true, error: '' }
     agentRequest(tauri, agent.runtimeId, 'agent.runs', { agent_id: agent.id, limit: 20 })
-      .then((answer) => { if (alive) runs = { list: (answer?.runs ?? []).map((run) => ({ ...run, runtimeId: agent.runtimeId ?? 'local' })), loading: false, error: '' } })
+      .then((answer) => { if (alive) runs = { list: (answer?.runs ?? []).map((run) => ({ ...run, runtimeId: agent.runtimeId ?? 'local' })), complete: !answer?.next_cursor, loading: false, error: '' } })
       .catch((failure) => { if (alive) runs = { list: [], loading: false, error: String(failure?.message ?? failure) } })
     return () => { alive = false }
   })
@@ -156,19 +159,46 @@
     const rail = event.currentTarget
     void tick().then(() => rail?.querySelector('[aria-selected="true"]')?.focus())
   }
-  // A rail mark's name shows outside the card, left of its rail, so it never
-  // covers a panel's labels. The tip sits on the page, since the card clips
-  // what overflows it.
+  // A rail mark's name shows next to its icon and never over the panel's
+  // rows or the sidebar: left of the icon, outside the card, where free page
+  // lies there, else just above the icon, over the rail and the page's
+  // margin, ending where the words of the panel's rows start. The tip sits on the page,
+  // since the card clips what overflows it.
+  const TIP_GAP = 6
+  // Every panel but Model insets its headings and rows' words 8px.
+  const ROW_INSET = 8
   let card = $state()
+  let panelList = $state()
   function showTip(event, entry) {
-    const mark = event.currentTarget.getBoundingClientRect()
-    tip = { label: entry.label, top: mark.top + mark.height / 2, right: window.innerWidth - card.getBoundingClientRect().left + 6 }
+    tip = { label: entry.label, mark: event.currentTarget }
   }
-  // A card at the window's left edge shows the tip beside its right edge.
-  function onPage(node) {
+  // The nearest right edge left of the card among `nodes`, else the window's left edge.
+  function edgeLeft(box, nodes) {
+    const blockers = nodes.filter((node) => node && node !== card).map((node) => node.getBoundingClientRect())
+      .filter((other) => other.width && other.right <= box.left + 1 && other.top < box.bottom && box.top < other.bottom)
+    return Math.max(0, ...blockers.map((other) => other.right))
+  }
+  function placeTip(node, { mark }) {
+    const box = card.getBoundingClientRect()
+    const markBox = mark.getBoundingClientRect()
+    const icon = (mark.querySelector('svg') ?? mark).getBoundingClientRect()
+    const sidebar = document.getElementById('sidebar')
+    const { width, height } = node.getBoundingClientRect()
+    let left = icon.left - TIP_GAP - width
+    let top = icon.top + icon.height / 2 - height / 2
+    // A card beside this one is no free page, but the gutter and its margin are.
+    if (left < edgeLeft(box, [sidebar, ...document.querySelectorAll('[data-agent-card]')])) {
+      const rows = panelList.getBoundingClientRect().left + parseFloat(getComputedStyle(panelList).paddingLeft) + (panel === 'model' ? 0 : ROW_INSET)
+      left = Math.max(edgeLeft(box, [sidebar]), rows - width)
+      top = markBox.top - 2 - height
+      if (top < 0) top = markBox.bottom + 2
+    }
+    Object.assign(node.style, { left: `${left}px`, top: `${top}px` })
+  }
+  function onPage(node, value) {
     document.body.append(node)
-    if (node.getBoundingClientRect().left < 4) Object.assign(node.style, { right: 'auto', left: `${card.getBoundingClientRect().right + 6}px` })
-    return { destroy() { node.remove() } }
+    placeTip(node, value)
+    return { update(next) { placeTip(node, next) }, destroy() { node.remove() } }
   }
   const kebabActions = $derived([{ id: 'profile', label: 'Open profile', icon: 'user' }, ...(agent.replica ? [] : [{ id: 'export', label: 'Export', icon: 'download' }])])
 </script>
@@ -191,8 +221,8 @@
         </button>
       {/each}
     </div>
-    {#if tip}<span class="rail-tip" aria-hidden="true" use:onPage style:top="{tip.top}px" style:right="{tip.right}px">{tip.label}</span>{/if}
-    <div class="panel-list" class:fill={panel === 'model'} id={`agent-${key}-panel`} role="tabpanel" aria-labelledby={`agent-${key}-${panel}-tab`} data-panel-id={panel} use:panelScroll>
+    {#if tip}<span class="rail-tip" aria-hidden="true" use:onPage={tip}>{tip.label}</span>{/if}
+    <div class="panel-list" bind:this={panelList} class:fill={panel === 'model'} id={`agent-${key}-panel`} role="tabpanel" aria-labelledby={`agent-${key}-${panel}-tab`} data-panel-id={panel} use:panelScroll>
       {#if readOnly}<p class="note" role="note"><LucideIcon name={agent.online === false ? 'globe-off' : 'refresh-cw'} variant="action" size={12} />{readOnlyNote}</p>{/if}
       {#if error}<p class="error" role="alert">{error}</p>{/if}
       {#if panel === 'overview'}
@@ -202,8 +232,12 @@
           <div class="fact"><dt>Job title</dt><dd><InlineEdit value={agent.label ?? ''} label="Job title" placeholder="Add a job title" disabled={readOnly} onsave={(label) => saveField({ label })} /></dd></div>
           <div class="fact"><dt>Machine</dt><dd class="record signaled"><span class="words">{machine ? machineName : ''}{#if agent.replica}<span class="synced"><LucideIcon name="refresh-cw" variant="action" size={12} />Synced copy</span>{/if}</span><span class="signal" data-light={agent.online === false ? 'red' : 'green'} role="img" aria-label={machineState} data-tooltip={machineState}><LucideIcon name={kindIcon(machine)} variant="action" size={14} /></span></dd></div>
           <div class="fact"><dt>Next run</dt><dd class="record">{nextRunLabel(agent)}</dd></div>
-          <div class="fact"><dt>Last run</dt><dd class="record signaled">{#if latestRun}{@const state = runStatusLabel(latestRun.status)}<span class="words">{whenLabel(latestRun.updated_at)}</span><span class="signal" data-light={runLight(latestRun)} role="img" aria-label={state} data-tooltip={state}><LucideIcon name={runIcon(latestRun)} variant="action" size={14} /></span>{:else}<span class="words">Never</span>{/if}</dd></div>
+          <div class="fact"><dt>Last run</dt><dd class="record signaled">{#if latestRun}{@const state = runStatusLabel(latestRun.status)}<span class="words">{whenLabel(latestRun.updated_at, minuteClock())}</span><span class="signal" data-light={runLight(latestRun)} role="img" aria-label={state} data-tooltip={state}><LucideIcon name={runIcon(latestRun)} variant="action" size={14} /></span>{:else}<span class="words">Never</span>{/if}</dd></div>
         </dl>
+        {#if latestRun?.status === 'failed' && runFailureText(latestRun.error)}<p class="run-reason">{runFailureText(latestRun.error)}</p>{/if}
+        {#each cutShort as routine (routine.id)}
+          <p class="note cut-short" role="note"><LucideIcon name="triangle-alert" variant="action" size={12} /><span><strong>{routine.name}</strong> {CUT_SHORT_NOTE} <button type="button" class="note-action" aria-label={`Edit ${routine.name} in the profile`} disabled={readOnly} onclick={() => onprofile(agent)}>Edit</button></span></p>
+        {/each}
         <div class="actions">
           <Button icon="play" variant="primary" disabled={readOnly || busy || runActive(latestRun?.status)} onclick={runNow}>Run now</Button>
           <Button icon="messages-square" onclick={() => onchat(agent)}>Open chat</Button>
@@ -238,7 +272,7 @@
         {#if readOnly}<p class="empty">Runs show once {machineName} answers.</p>
         {:else if runs.loading && !runs.list.length}<p class="empty" role="status">Loading runs…</p>
         {:else if runs.error}<p class="error" role="alert">{runs.error}</p>
-        {:else}<RunHistory embedded {tauri} {agent} runs={runs.list} disabled={busy} {onrun} onopen={onopenrun} />{/if}
+        {:else}<RunHistory embedded {tauri} {agent} runs={runs.list} complete={runs.complete} disabled={busy} {onrun} onopen={onopenrun} />{/if}
       {/if}
     </div>
   </div>
@@ -257,8 +291,9 @@
   .rail-mark { position: relative; display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--muted); cursor: pointer; }
   .rail-mark:hover { background: var(--faint); color: var(--ink); }
   .rail-mark[aria-selected="true"] { background: var(--selected); color: var(--on-selected); }
-  .rail-mark[aria-selected="true"]::after { content: ''; position: absolute; top: 8px; bottom: 8px; right: -7px; width: 2px; border-radius: var(--radius-chip); background: var(--selected-edge); }
-  .rail-tip { position: fixed; z-index: 30; transform: translateY(-50%); padding: 3px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); box-shadow: var(--shadow-overlay); color: var(--ink); font: var(--text-12) var(--font-human); white-space: nowrap; pointer-events: none; }
+  /* The edge spans the picked mark and meets the rail's divider, so it reads as the tab's edge and never as a text caret. */
+  .rail-mark[aria-selected="true"]::after { content: ''; position: absolute; top: 0; bottom: 0; right: -7px; width: 2px; background: var(--selected-edge); }
+  .rail-tip { position: fixed; z-index: 30; padding: 2px 6px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); box-shadow: var(--shadow-overlay); color: var(--ink); font: var(--text-12) var(--font-human); white-space: nowrap; pointer-events: none; }
   .panel-list { flex: 1; min-width: 0; min-height: 0; padding: 6px; overflow-y: auto; }
   /* The model picker fills the panel and scrolls its own list. */
   .panel-list.fill { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
@@ -275,6 +310,7 @@
   .record { min-width: 0; overflow: hidden; color: var(--muted); font: var(--text-12) var(--font-human); text-overflow: ellipsis; white-space: nowrap; }
   /* A state row: its words at the left, its signal in one column at the row's end, in the history's stoplight colors. */
   .signaled { display: flex; align-items: center; gap: 8px; }
+  .run-reason { margin: 0; padding: 0 0 4px 88px; color: var(--muted); font-size: var(--text-12); overflow-wrap: anywhere; }
   .words { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .signal { position: relative; flex: none; display: inline-flex; color: var(--warning); }
   .signal::after { content: attr(data-tooltip); position: absolute; z-index: 2; right: -4px; bottom: calc(100% + 6px); padding: 3px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-12) var(--font-human); white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity 80ms ease; }
@@ -291,6 +327,9 @@
   .note { display: flex; align-items: flex-start; gap: 6px; margin: 2px 2px 6px; padding: 6px 8px; border-radius: var(--radius-control); background: var(--faint); color: var(--ink); font-size: var(--text-12); line-height: 1.4; }
   .note > :global(svg) { flex: none; margin-top: 2px; color: var(--warning); }
   .read-only:not(.away) .note > :global(svg) { color: var(--muted); }
+  .note.cut-short { margin: 6px 8px 0; overflow-wrap: anywhere; }
+  .note-action { padding: 0; border: 0; background: none; color: var(--ink); font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+  .note-action:disabled { color: var(--muted); cursor: default; }
   .error { margin: 2px 8px 6px; color: var(--danger); font-size: var(--text-12); line-height: 1.4; overflow-wrap: anywhere; }
   /* The picker's foot action, under a separator inset to the list's padding. */
   .foot { position: relative; display: flex; align-items: center; gap: 8px; width: 100%; min-height: 30px; margin-top: 6px; padding: 7px 8px; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--ink); font: var(--text-13) var(--font-human); text-align: left; cursor: pointer; }

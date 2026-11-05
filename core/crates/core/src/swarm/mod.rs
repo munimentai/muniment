@@ -44,6 +44,7 @@ mod credentials;
 mod directory;
 mod extensions;
 mod fleet;
+mod fleet_key;
 mod groups;
 mod hlc;
 mod keys;
@@ -463,10 +464,11 @@ impl Swarm {
         credentials::pass_now(&self.inner)
     }
 
-    /// Sets how long the worker waits between reseal passes.
+    /// Stops the worker's reseal passes, due or asked for, so only
+    /// [`Self::fleet_pass`] runs one, as a test that orders refreshes does.
     #[doc(hidden)]
-    pub fn set_fleet_interval(&self, interval: Duration) {
-        credentials::set_interval(&self.inner, interval);
+    pub fn hold_fleet_passes(&self) {
+        credentials::hold(&self.inner);
     }
 
     /// The members a secret that serves `agents` may reach.
@@ -556,6 +558,12 @@ impl Swarm {
         }
     }
 
+    /// Asks the host to start queued agent runs now instead of at its next
+    /// schedule pass.
+    pub fn kick_runs(&self) {
+        self.inner.host.kick_runs();
+    }
+
     /// When a client last used this runtime, as an RFC 3339 time.
     pub fn last_client_activity(&self) -> Option<String> {
         self.inner.store.meta("last_client_at").ok().flatten()
@@ -579,7 +587,22 @@ impl Swarm {
             Operation::SwarmJoin => link::join(inner, body),
             Operation::SwarmLeave => link::leave(inner, body),
             Operation::SwarmMembers => {
-                empty(&body)?;
+                // `{"retry_keychain": true}` is the person's retry of the
+                // secrets the keychain refused, and `{"keychain": true}`
+                // reads them. With remote access off, both answer what the
+                // keychain refused and no members.
+                let keychain = if body == json!({"retry_keychain": true}) {
+                    fleet::retry_key(inner);
+                    true
+                } else if body == json!({"keychain": true}) {
+                    true
+                } else {
+                    empty(&body)?;
+                    false
+                };
+                if keychain && inner.runtime_id().is_none() {
+                    return Ok(fleet::keychain_view(inner));
+                }
                 link::members_view(inner)
             }
             Operation::SwarmAgents => {
@@ -675,6 +698,11 @@ impl Swarm {
     /// it.
     pub fn is_replica_thread(&self, thread_id: &str) -> Option<String> {
         sync::replica_primary(&self.inner, thread_id)
+    }
+
+    /// The machine name a fleet member last announced, once it was heard.
+    pub fn member_name(&self, runtime_id: &str) -> Option<String> {
+        ops::member_name(&self.inner, runtime_id)
     }
 
     /// The runtime that runs `thread_id`: its owner when the swarm shares it,

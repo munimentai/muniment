@@ -89,6 +89,18 @@ pub fn run_runtime_with_updates(
     let instance_lock = filesystem
         .acquire_instance_lock()
         .map_err(|_| RunRuntimeError::Listener(AttachListenerError::InstanceLock))?;
+    // With the lock held, a thread extension older than an hour that no
+    // running Pi names belongs to a session that ended. The process list
+    // takes a moment, so the sweep runs beside startup.
+    let memory = directories.profile.join("memory");
+    std::thread::spawn(move || {
+        let swept = muniment_core::memory_runtime::sweep_ended_extensions(&memory);
+        if swept > 0 {
+            muniment_core::runtime_eprintln!(
+                "muniment-runtime: memory extensions swept removed={swept}"
+            );
+        }
+    });
     let transport = AttachTransport::bind(&filesystem)
         .map_err(|_| RunRuntimeError::Listener(AttachListenerError::Bind))?;
     if let Some(remote) = remote {
@@ -137,6 +149,7 @@ pub fn run_runtime_with_updates(
     )
     .map_err(RunRuntimeError::Listener);
     state.stop_remote_route();
+    state.stop_idle_processes();
     let _ = commands.send(RetentionScheduleCommand::Stop);
     retention.join().expect("retention schedule does not panic");
     result

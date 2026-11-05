@@ -1533,6 +1533,7 @@ name = "muniment-attach"
 version = "0.4.2"
 dependencies = [
  "getrandom 0.4.3",
+ "muniment-atomic-file",
  "rustls",
  "serde",
  "serde_json",
@@ -1574,6 +1575,7 @@ dependencies = [
  "muniment-atomic-file",
  "muniment-attach",
  "muniment-code-diff",
+ "muniment-core",
  "muniment-models",
  "muniment-pins",
  "muniment-router",
@@ -1583,6 +1585,7 @@ dependencies = [
  "rusqlite",
  "rustls",
  "same-file",
+ "security-framework 3.7.0",
  "serde",
  "serde_json",
  "sha2 0.11.1",

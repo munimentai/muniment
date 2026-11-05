@@ -236,6 +236,8 @@ impl RuntimeAttachState {
                 );
             }
         }
+        // The runtime stops next, so no idle process waits for a reply.
+        self.stop_idle_processes();
         outcome
     }
 

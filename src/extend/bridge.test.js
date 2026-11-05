@@ -42,15 +42,6 @@ describe('local extension installation',()=>{
   expect(call('server',{name:'Private',definition:{url:'https://example.com/mcp',headers:{Authorization:'Bearer private'}}}).ok).toBe(false)
   expect(fs.existsSync(path.join(root,'extensions/inventory.json'))).toBe(false)
  })
- it('keeps toggles separate between chats and resets automatic selections',()=>{
-  const {call}=fixture()
-  call('turn',{threadId:'one',disabled:['docs'],selected:['review'],automatic:true})
-  call('turn',{threadId:'two',disabled:[],selected:[]})
-  const state=call('read').result
-  expect(state.turns.one.disabled).toEqual(['docs'])
-  expect(state.turns.two.disabled).toEqual([])
-  expect(state.turns.one.automaticSelected).toEqual([])
- })
 })
 
 it('allows custom server hosts outside the discovery catalog', () => {

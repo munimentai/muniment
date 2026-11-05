@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { PROVIDERS, catalogProvider, connectableProviders, currentModel, currentModelAvailable, methodLabel, modelChipLabel, pickerGroups, providerName, routerHidden, searchProviders, sourceTag } from './provider-catalog.js'
+import { modelLabel } from './model-label.js'
+import { PROVIDERS, catalogProvider, connectableProviders, currentModel, currentModelAvailable, methodLabel, modelChipLabel, modelDisplayName, pickerGroups, providerName, routerHidden, searchProviders, sourceTag } from './provider-catalog.js'
 
 const inventory = {
   providers: [
@@ -94,6 +95,42 @@ describe('provider catalog', () => {
   })
 })
 
+describe("a thread's or an agent's own model in the chip", () => {
+  // The agent runs Grok 4.20 Multi Agent, which the picker hides, while Anthropic leads the picker.
+  const agentThread = {
+    providers: [
+      { id: 'anthropic', name: 'Anthropic', source: 'key', models: [{ id: 'claude-haiku-5-5' }] },
+      { id: 'xai', name: 'xAI', source: 'key', models: [{ id: 'grok-4.20-0309-reasoning' }, { id: 'grok-4.20-multi-agent-0309', name: 'Grok 4.20 Multi Agent 0309' }] },
+    ],
+    hidden: ['xai/grok-4.20-multi-agent-0309'],
+    default_provider: 'xai',
+    default_model: 'grok-4.20-multi-agent-0309',
+  }
+
+  it('names the kept model the picker hides, never the first row', () => {
+    expect(pickerGroups(agentThread).flatMap((group) => group.models).some((model) => model.id === 'grok-4.20-multi-agent-0309')).toBe(false)
+    expect(currentModel(agentThread, { kept: true })).toEqual({ provider: 'xai', model: 'grok-4.20-multi-agent-0309', label: 'Grok 4.20 Multi Agent 0309' })
+    expect(modelChipLabel(agentThread, { kept: true })).toBe('Grok 4.20 Multi Agent 0309')
+    // The default, which a run may leave, still falls back to the first shown row.
+    expect(currentModel(agentThread)).toMatchObject({ provider: 'anthropic', model: 'claude-haiku-5-5' })
+  })
+
+  it('names a kept model no provider lists by its name and marks it unavailable', () => {
+    const gone = { ...agentThread, default_provider: 'xai', default_model: 'grok-4.20-retired' }
+    expect(currentModel(gone, { kept: true })).toEqual({ provider: 'xai', model: 'grok-4.20-retired', label: modelDisplayName(gone, 'xai', 'grok-4.20-retired'), unavailable: true })
+    expect(modelChipLabel(gone, { kept: true })).toBe(`${modelDisplayName(gone, 'xai', 'grok-4.20-retired')} (unavailable)`)
+    const disconnected = { ...agentThread, default_provider: 'openai', default_model: 'gpt-6.1-sol' }
+    expect(currentModel(disconnected, { kept: true })).toMatchObject({ provider: 'openai', model: 'gpt-6.1-sol', unavailable: true })
+    expect(modelChipLabel(disconnected, { kept: true })).not.toContain('Claude')
+  })
+
+  it('names a kept model the picker shows as the picker does', () => {
+    const shown = { ...agentThread, default_model: 'grok-4.20-0309-reasoning' }
+    expect(currentModel(shown, { kept: true })).toEqual(currentModel(shown))
+    expect(currentModel(shown, { kept: true }).unavailable).toBeUndefined()
+  })
+})
+
 describe('the model router in the picker', () => {
   const routed = {
     providers: [
@@ -122,7 +159,7 @@ describe('the model router in the picker', () => {
 
   it('lists a model once under its provider and routes it through the router when two accounts serve it', () => {
     const openai = pickerGroups(routed).find((group) => group.id === 'openai-codex')
-    expect(openai.models).toEqual([{ id: 'gpt-5.5', context: '400K', label: 'GPT 5.5', provider: 'muniment-router', choice: 'fast', accounts: 2 }])
+    expect(openai.models).toEqual([{ id: 'gpt-5.5', context: '400K', label: 'GPT-5.5', provider: 'muniment-router', choice: 'fast', accounts: 2 }])
     // One pooled account still needs the native router transport.
     const single = { ...routed, router_models: [{ id: 'fast', family: 'openai', model: 'gpt-5.5', accounts: 1 }] }
     expect(pickerGroups(single).find((group) => group.id === 'openai-codex').models[0]).toMatchObject({ provider: 'muniment-router', choice: 'fast', accounts: 1 })
@@ -155,12 +192,12 @@ describe('the model router in the picker', () => {
   })
 
   it('keeps the saved default when a row still saves it, and names the row in use', () => {
-    expect(currentModel({ ...routed, default_provider: 'muniment-router', default_model: 'fast' })).toEqual({ provider: 'muniment-router', model: 'fast', label: 'GPT 5.5' })
+    expect(currentModel({ ...routed, default_provider: 'muniment-router', default_model: 'fast' })).toEqual({ provider: 'muniment-router', model: 'fast', label: 'GPT-5.5' })
     // Preserve a saved specific model when its pool becomes available.
-    expect(currentModel(routed)).toEqual({ provider: 'muniment-router', model: 'fast', label: 'GPT 5.5' })
-    expect(modelChipLabel(routed)).toBe('GPT 5.5')
+    expect(currentModel(routed)).toEqual({ provider: 'muniment-router', model: 'fast', label: 'GPT-5.5' })
+    expect(modelChipLabel(routed)).toBe('GPT-5.5')
     // With no decision model, a missing default falls back to a pooled model, never to Automatic.
-    expect(currentModel({ ...routed, router_classifier: null, default_provider: 'openai', default_model: 'gone' })).toEqual({ provider: 'muniment-router', model: 'fast', label: 'GPT 5.5' })
+    expect(currentModel({ ...routed, router_classifier: null, default_provider: 'openai', default_model: 'gone' })).toEqual({ provider: 'muniment-router', model: 'fast', label: 'GPT-5.5' })
   })
 })
 
@@ -229,7 +266,7 @@ it('names the router models the picker hides, so the router leaves them out of t
     default_provider: 'muniment-router', default_model: 'auto', hidden: ['muniment-router/openai/gpt-6-luna'], shown: [],
     router_models: ['gpt-6.1-sol', 'gpt-6-luna', 'gpt-5.6-luna', 'gpt-5.5'].map((model) => ({ id: `openai/${model}`, family: 'openai', model, accounts: 1 })),
   }
-  // GPT 5.6 Luna trails GPT 6 Luna in its family, and GPT 6 Luna is turned off.
+  // GPT-5.6 Luna trails GPT-6 Luna in its family, and GPT-6 Luna is turned off.
   expect(routerHidden(routed)).toEqual(['openai/gpt-5.6-luna', 'openai/gpt-6-luna'])
   expect(routerHidden({ ...routed, shown: ['muniment-router/openai/gpt-5.6-luna'] })).toEqual(['openai/gpt-6-luna'])
   expect(routerHidden(null)).toEqual([])
@@ -265,5 +302,77 @@ describe('model names in the picker', () => {
     }
     const labels = pickerGroups(named).flatMap((group) => group.models.map((model) => model.label))
     expect(labels).toEqual(expect.arrayContaining(['gpt-oss 20B', 'GPT-6 Astra']))
+  })
+})
+
+describe('model display names', () => {
+  const inventory = {
+    providers: [
+      { id: 'anthropic', name: 'Anthropic', source: 'oauth', models: [{ id: 'claude-fable-5-1' }] },
+      { id: 'custom-omlx', name: 'oMLX', source: 'custom', models: [{ id: 'gpt-oss-20b-MXFP4-Q8' }] },
+      { id: 'muniment-router', name: 'Router', source: 'router', models: [] },
+    ],
+    hidden: [], shown: [],
+    router_models: [{ id: 'xai/grok-4.20-multi-agent-0309', family: 'xai', model: 'grok-4.20-multi-agent-0309', name: 'Grok 4.20 Multi Agent 0309', accounts: 1 }],
+  }
+
+  it('names a model as its picker row and the composer chip do', () => {
+    expect(modelDisplayName(inventory, 'anthropic', 'claude-fable-5-1')).toBe('Claude Fable 5.1')
+    expect(modelDisplayName(inventory, 'muniment-router', 'xai/grok-4.20-multi-agent-0309')).toBe('Grok 4.20 Multi Agent 0309')
+    expect(modelDisplayName({ ...inventory, default_provider: 'anthropic', default_model: 'claude-fable-5-1' }, 'anthropic', 'claude-fable-5-1')).toBe(modelChipLabel({ ...inventory, default_provider: 'anthropic', default_model: 'claude-fable-5-1' }))
+    expect(modelDisplayName(inventory, 'custom-omlx', 'gpt-oss-20b-MXFP4-Q8')).toBe('gpt-oss-20b-MXFP4-Q8')
+  })
+
+  it('formats a model no row lists, without its provider folder', () => {
+    expect(modelDisplayName(null, 'anthropic', 'claude-fable-5-1')).toBe('Claude Fable 5.1')
+    expect(modelDisplayName(null, null, 'xai/grok-4.20-multi-agent-0309')).toBe('Grok 4.20 Multi Agent 0309')
+    expect(modelDisplayName(inventory, 'custom-omlx', 'Qwen3.6-35B-A3B-4bit')).toBe('Qwen3.6-35B-A3B-4bit')
+    expect(modelDisplayName(inventory, 'anthropic', '')).toBeNull()
+  })
+})
+
+describe('a legacy model the router leaves out of the running', () => {
+  // The router serves only the models the picker shows, as `routerHidden` tells it.
+  const routed = {
+    providers: [{ id: 'muniment-router', name: 'Model router', source: 'router', models: [] }],
+    hidden: [], shown: [],
+    default_provider: 'muniment-router',
+    default_model: 'openai/gpt-6-luna',
+    // The OpenAI models a ChatGPT account lists, older generations with them.
+    router_models: ['gpt-5.6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-6-astra', 'gpt-6-luna', 'gpt-6-sol', 'gpt-6.1-sol', 'gpt-6.1-terra']
+      .map((model) => ({ id: `openai/${model}`, family: 'openai', model, name: modelLabel(model), accounts: 1 })),
+  }
+  const rows = (inventory) => pickerGroups(inventory, '', { all: true }).flatMap((group) => group.models)
+
+  it('lists a hidden router row as no choice, and every row a pick runs on as served', () => {
+    const terra = rows(routed).find((model) => model.id === 'gpt-5.6-terra')
+    expect(terra).toMatchObject({ shown: false, served: false, provider: 'muniment-router', choice: 'openai/gpt-5.6-terra' })
+    expect(routerHidden(routed)).toContain('openai/gpt-5.6-terra')
+    // Every row the router serves is a choice, and none the router refuses.
+    for (const row of rows(routed)) expect(row.served).toBe(!routerHidden(routed).includes(row.choice))
+    expect(pickerGroups(routed).flatMap((group) => group.models).some((model) => model.id === 'gpt-5.6-terra')).toBe(false)
+  })
+
+  it('serves a legacy router row once the user shows it', () => {
+    const shown = { ...routed, shown: ['muniment-router/openai/gpt-5.6-terra'] }
+    expect(rows(shown).find((model) => model.id === 'gpt-5.6-terra')).toMatchObject({ shown: true, served: true })
+    expect(routerHidden(shown)).not.toContain('openai/gpt-5.6-terra')
+  })
+
+  it('marks an agent or thread kept on a hidden router row unavailable, as the router refuses it', () => {
+    // The chip reads the thread's model as the inventory's default, and the
+    // router's running set comes from the machine's own default.
+    const kept = { ...routed, default_model: 'openai/gpt-5.6-terra' }
+    expect(currentModel(kept, { kept: true, base: routed })).toEqual({ provider: 'muniment-router', model: 'openai/gpt-5.6-terra', label: 'GPT-5.6 Terra', unavailable: true })
+    expect(modelChipLabel(kept, { kept: true, base: routed })).toBe('GPT-5.6 Terra (unavailable)')
+    const luna = { ...routed, default_model: 'openai/gpt-6-luna' }
+    expect(currentModel(luna, { kept: true, base: routed })).toEqual({ provider: 'muniment-router', model: 'openai/gpt-6-luna', label: 'GPT-6 Luna' })
+    // The machine's own default stays served: the router keeps the saved default in the running.
+    expect(currentModel(kept, { kept: true, base: kept }).unavailable).toBeUndefined()
+  })
+
+  it('keeps a hidden row of a provider that runs its own turns a choice', () => {
+    const direct = { providers: [{ id: 'openai', name: 'OpenAI', source: 'key', models: [{ id: 'gpt-6-luna' }, { id: 'gpt-5.6-terra' }] }], hidden: ['openai/gpt-5.6-terra'], shown: [] }
+    expect(rows(direct).find((model) => model.id === 'gpt-5.6-terra')).toMatchObject({ shown: false, served: true })
   })
 })

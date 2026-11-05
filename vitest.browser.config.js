@@ -27,7 +27,9 @@ export default defineConfig({
       provider: playwright({
         contextOptions: { viewport: { width: 600, height: 800 } },
       }),
-      instances: [{ browser: 'chromium' }],
+      // The macOS app draws in WKWebView, so the dialogs a real pointer must
+      // reach run in WebKit too.
+      instances: [{ browser: 'chromium' }, { browser: 'webkit', include: ['src/lib/ModelsSection.browser.test.js'] }],
     },
     ...maxWorkers,
   },

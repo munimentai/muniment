@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -25,6 +25,7 @@ describe("WinGet stable manifest", () => {
     const root = await mkdtemp(join(tmpdir(), "muniment-winget-"));
     const file = await createWingetManifest({ release, installerBytes: new TextEncoder().encode("msi bytes"), outputRoot: root });
     const manifest = await readFile(file, "utf8");
+    await rm(root, { recursive: true, force: true });
     expect(file).toContain(join("manifests", "m", "Muniment", "Muniment", "1.2.3"));
     expect(manifest).toContain("Publisher: Muniment");
     expect(manifest).toContain("InstallScope: machine");

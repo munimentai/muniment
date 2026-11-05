@@ -1198,7 +1198,7 @@ impl<B: RunStartBoundaries + RunAttachBoundaries, I: RunStartIdempotency> Thread
         request_id: &Id,
         idempotency_key: &Id,
         companion: CompanionProvenance,
-    ) -> Result<(), ProtocolError> {
+    ) -> Result<Value, ProtocolError> {
         let canonical_input = json!({
             "workspace": workspace,
             "thread_id": thread_id.as_str(),
@@ -1212,22 +1212,31 @@ impl<B: RunStartBoundaries + RunAttachBoundaries, I: RunStartIdempotency> Thread
             body: canonical_input.clone(),
         };
         let provenance = attach_provenance(request_id, idempotency_key, &companion);
-        self.idempotency.execute(
+        let outcome = self.idempotency.execute(
             &companion.profile,
             self.client_identity.as_deref().unwrap_or_default(),
             &ledger_request,
             &canonical_input,
             || Ok(()),
             || {
-                self.boundaries
-                    .delete_thread(thread_id.as_str(), provenance)?;
-                Ok(CommittedResult {
-                    body: json!({}),
-                    cursor: None,
-                })
+                let body = match self
+                    .boundaries
+                    .delete_thread(thread_id.as_str(), provenance)?
+                {
+                    Some(folder) => json!({
+                        "folder_kept": folder,
+                        "message": crate::projects::THREAD_FOLDER_KEPT,
+                    }),
+                    None => json!({}),
+                };
+                Ok(CommittedResult { body, cursor: None })
             },
         )?;
-        Ok(())
+        Ok(match outcome {
+            IdempotencyOutcome::Committed(result) | IdempotencyOutcome::Replayed(result) => {
+                result.body
+            }
+        })
     }
 
     fn start_run(
@@ -2485,7 +2494,7 @@ mod tests {
             &self,
             thread_id: &str,
             provenance: Provenance,
-        ) -> Result<(), ProtocolError> {
+        ) -> Result<Option<std::path::PathBuf>, ProtocolError> {
             let mut journal = self
                 .journal
                 .lock()
@@ -2497,6 +2506,7 @@ mod tests {
                 "2026-01-01T00:00:01Z",
                 &provenance,
             )
+            .map(|()| None)
             .map_err(|_| ProtocolError::persistence_failed())
         }
 

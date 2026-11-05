@@ -6,7 +6,9 @@ import { agentRequest } from '../agents/agent-runtime.js'
 import { LOCAL_RUNTIME_ID } from '../runtimes/runtimes.js'
 import { routineIcon } from '../agents/routine-labels.js'
 import { markdownPlainText } from '../lib/assistant-markdown.js'
-import { formatClock, formatDate, sameDay, zoneOffsetMinutes } from '../lib/time-format.svelte.js'
+import { runFailureText } from '../lib/run-failure.js'
+import { deletedThreadIds } from '../lib/deleted-threads.svelte.js'
+import { displayZone, formatClock, formatDate, sameDay, zoneOffsetMinutes } from '../lib/time-format.svelte.js'
 
 export const NOTIFICATION_VIEWS = [
   { value: 'needs_you', label: 'Needs you' },
@@ -20,8 +22,16 @@ export const NOTIFY_KEY = 'notify'
 // when one finishes is off: a finished run waits on the page.
 export const DEFAULT_NOTIFY = Object.freeze({ needs_you: true, finished: false })
 
-export function readNotifications(tauri, machines, { view = 'all', machine = null, agent = null } = {}) {
-  const filter = { view, utc_offset_minutes: zoneOffsetMinutes() }
+// `read` maps each thread id to when this device last read it, so a failed
+// run leaves Needs you once its thread is open. A run whose thread was
+// deleted can never be opened, so `deleted` names those threads and core
+// reads their runs as read. Core starts each day at the
+// shown zone's own midnight, so a daylight saving change moves no run.
+export function readNotifications(tauri, machines, { view = 'all', machine = null, agent = null, read = null } = {}) {
+  const filter = { view, utc_offset_minutes: zoneOffsetMinutes(), time_zone: displayZone() }
+  if (read && Object.keys(read).length) filter.read = read
+  const deleted = deletedThreadIds()
+  if (deleted.length) filter.deleted = deleted
   if (machine) filter.machine = machine
   if (agent) filter.agent = agent
   return tauri.invoke('notifications_list', { machines, filter })
@@ -100,7 +110,7 @@ export function dayLabel(day) {
 export function resultLine(entry) {
   const run = entry?.run ?? {}
   const summary = markdownPlainText(run.result_summary)
-  if (entry?.status === 'failed') return run.error || 'The run failed.'
+  if (entry?.status === 'failed') return runFailureText(run.error) || 'The run failed.'
   if (entry?.status === 'needs_you') return summary || 'Waiting for your answer.'
   if (entry?.status === 'cancelled') return 'Stopped before it finished.'
   if (entry?.status === 'running') return 'Running now.'
@@ -112,10 +122,16 @@ const NEEDS = {
   approval: { icon: 'shield-alert', title: 'Approval needed' },
   input: { icon: 'message-square', title: 'Answer needed' },
   limit: { icon: 'triangle-alert', title: 'Usage limit reached' },
+  failed: { icon: 'circle-x', title: 'Run failed' },
   offline: { icon: 'globe-off', title: 'Machine offline' },
 }
 export function needsMark(kind) {
   return NEEDS[kind] ?? NEEDS.input
+}
+
+// Whether a failure names Settings → Models as the step that fixes it.
+export function pointsToModels(text) {
+  return typeof text === 'string' && /\bin Models\.\s*$/.test(text.trim())
 }
 
 // A row's time as the Time setting shows times: the clock time today, else the date.

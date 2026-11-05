@@ -94,15 +94,22 @@ export function outputLimitNote(detail) {
 
 // Offsets count UTF-16 units, as JavaScript strings do. The journal derives them
 // at tool start, so replay and streaming share the same order.
+// A message the user sent during the reply sits at the text offset where the
+// runtime took it, after the actions already shown there.
 export function responseParts(run) {
   const text = run.text ?? ''
   const parts = []
   let cursor = 0
-  for (const activity of run.toolActivity ?? []) {
-    const offset = Math.max(cursor, Math.min(text.length, activity.textOffset ?? 0))
+  const marks = [
+    ...(run.toolActivity ?? []).map((activity, order) => ({ activity, offset: activity.textOffset ?? 0, kind: 0, order })),
+    ...(run.steers ?? []).map((steer, order) => ({ steer, offset: steer.textOffset ?? text.length, kind: 1, order })),
+  ].sort((a, b) => a.offset - b.offset || a.kind - b.kind || a.order - b.order)
+  for (const mark of marks) {
+    const offset = Math.max(cursor, Math.min(text.length, mark.offset))
     if (offset > cursor) parts.push({ type: 'text', text: text.slice(cursor, offset) })
-    if (parts.at(-1)?.type === 'actions') parts.at(-1).activities.push(activity)
-    else parts.push({ type: 'actions', activities: [activity] })
+    if (mark.steer) parts.push({ type: 'steer', text: mark.steer.text })
+    else if (parts.at(-1)?.type === 'actions') parts.at(-1).activities.push(mark.activity)
+    else parts.push({ type: 'actions', activities: [mark.activity] })
     cursor = offset
   }
   if (!parts.length && !text && run.phase === 'streaming') parts.push({ type: 'text', text: '' })

@@ -159,6 +159,11 @@ pub fn command(root: &Path, action: &str, mut data: Value) -> Result<Value, Stri
         }
         return Ok(state);
     }
+    // A turn's selection is one record in the inventory, so a send writes it
+    // here and starts no helper process.
+    if action == "turn" {
+        return turn(root, &data);
+    }
     let _lock = MUTATION
         .lock()
         .map_err(|_| "Extension settings are busy.")?;
@@ -437,6 +442,32 @@ fn pi_server(definition: &Value) -> Value {
     Value::Object(server)
 }
 
+/// Saves the extensions the next run on a thread takes, and answers the
+/// inventory. A selection equal to the saved one writes nothing.
+fn turn(root: &Path, data: &Value) -> Result<Value, String> {
+    let thread = data["threadId"]
+        .as_str()
+        .filter(|thread| !thread.is_empty() && thread.len() <= 100)
+        .ok_or("Choose a thread.")?;
+    let list = |key: &str| json!(data[key].as_array().cloned().unwrap_or_default());
+    let entry = json!({
+        "disabled": list("disabled"),
+        "selected": list("selected"),
+        "automatic": data["automatic"] == true,
+        "automaticSelected": [],
+    });
+    let mut answer = Value::Null;
+    update_inventory(root, |state| {
+        let changed = state["turns"][thread] != entry;
+        if changed {
+            state["turns"][thread] = entry.clone();
+        }
+        answer = state.clone();
+        Ok(changed)
+    })?;
+    Ok(answer)
+}
+
 // Consume the pending selection once. A later run on this thread starts empty.
 fn take_turn(root: &Path, thread: &str) -> Result<Value, String> {
     let _lock = MUTATION
@@ -460,11 +491,13 @@ fn take_turn(root: &Path, thread: &str) -> Result<Value, String> {
 /// Loads one turn's capability snapshot into the launch. `agent_skills`
 /// are the skill and plugin ids the thread's agent selected; each turn picks
 /// them as an automatic pick does, so a plugin adds its skills and never its
-/// code.
+/// code. Without `list_skills` the launch lists no skill for the model to
+/// pick, and the skills the user picked still load.
 pub fn prepare(
     root: &Path,
     thread: &str,
     agent_skills: &[String],
+    list_skills: bool,
     config: &mut crate::sidecar::SidecarConfig,
     prompt: &mut String,
 ) -> Result<(), String> {
@@ -513,7 +546,12 @@ pub fn prepare(
     // Pi lists each skill by name and description and the model reads it
     // when a task needs it. A `SKILL.md` loads as its folder, so the files
     // beside it come with it.
-    for skill in snapshot["availableSkills"].as_array().into_iter().flatten() {
+    let listed = if list_skills {
+        snapshot["availableSkills"].as_array()
+    } else {
+        None
+    };
+    for skill in listed.into_iter().flatten() {
         let path = Path::new(skill["path"].as_str().unwrap_or(""));
         if !path.is_file() {
             continue;
@@ -1244,6 +1282,66 @@ fn extract_archive(source: &Path, directory: &Path) -> Result<Extracted, String>
 mod tests {
     use super::*;
     #[test]
+    fn a_send_saves_its_selection_without_a_helper_process() {
+        let root =
+            Extracted(std::env::temp_dir().join(format!("extend-turn-{}", uuid::Uuid::new_v4())));
+        // No Pi is installed under this root, so a helper process could not
+        // start: the selection saves in core.
+        fs::create_dir_all(root.0.join("extensions")).unwrap();
+        fs::write(
+            root.0.join("extensions/inventory.json"),
+            serde_json::to_vec(
+                &json!({"items":[{"id":"m","kind":"mcp","name":"Docs"}],"turns":{}}),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let started = std::time::Instant::now();
+        let state = command(
+            &root.0,
+            "turn",
+            json!({"threadId":"t","selected":["m"],"disabled":[],"automatic":true}),
+        )
+        .unwrap();
+        assert!(started.elapsed() < Duration::from_millis(100));
+        let saved = json!({"disabled":[],"selected":["m"],"automatic":true,"automaticSelected":[]});
+        assert_eq!(state["turns"]["t"], saved);
+        assert_eq!(inventory(&root.0).unwrap()["turns"]["t"], saved);
+        assert_eq!(state["items"][0]["id"], "m");
+        // The same selection again leaves the file as it was.
+        let before = fs::metadata(root.0.join("extensions/inventory.json"))
+            .unwrap()
+            .modified()
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        command(
+            &root.0,
+            "turn",
+            json!({"threadId":"t","selected":["m"],"disabled":[],"automatic":true}),
+        )
+        .unwrap();
+        let after = fs::metadata(root.0.join("extensions/inventory.json"))
+            .unwrap()
+            .modified()
+            .unwrap();
+        assert_eq!(before, after);
+        // Each thread keeps its own selection.
+        let other = command(&root.0, "turn", json!({"threadId":"u","disabled":["m"]})).unwrap();
+        assert_eq!(other["turns"]["t"], saved);
+        assert_eq!(
+            other["turns"]["u"],
+            json!({"disabled":["m"],"selected":[],"automatic":false,"automaticSelected":[]})
+        );
+        // A run takes the selection once.
+        assert_eq!(take_turn(&root.0, "t").unwrap()["turns"]["t"], saved);
+        assert_eq!(inventory(&root.0).unwrap()["turns"]["t"], Value::Null);
+        assert_eq!(
+            command(&root.0, "turn", json!({"threadId":""})).unwrap_err(),
+            "Choose a thread."
+        );
+    }
+
+    #[test]
     fn a_turn_registers_only_its_picked_servers_through_the_extension() {
         let root = Extracted(
             std::env::temp_dir().join(format!("extend-settings-{}", uuid::Uuid::new_v4())),
@@ -1266,7 +1364,7 @@ mod tests {
         )
         .unwrap();
         let mut config = crate::sidecar::SidecarConfig::new("unused");
-        prepare(&root.0, "chat", &[], &mut config, &mut String::new()).unwrap();
+        prepare(&root.0, "chat", &[], true, &mut config, &mut String::new()).unwrap();
         let generated: Value =
             serde_json::from_slice(&fs::read(&config.env["MUNIMENT_EXTEND_MCP"]).unwrap()).unwrap();
         // Pi reads `record` from the agent directory, so the turn adds only `m`.
@@ -1283,7 +1381,7 @@ mod tests {
 
         // The selection is spent, so the next turn adds nothing.
         let mut next = crate::sidecar::SidecarConfig::new("unused");
-        prepare(&root.0, "chat", &[], &mut next, &mut String::new()).unwrap();
+        prepare(&root.0, "chat", &[], true, &mut next, &mut String::new()).unwrap();
         assert!(next.args.is_empty() && !next.env.contains_key("MUNIMENT_EXTEND_MCP"));
     }
 
@@ -1323,6 +1421,7 @@ mod tests {
                     "off".into(),
                     "missing".into(),
                 ],
+                true,
                 &mut config,
                 &mut prompt,
             )
@@ -1363,7 +1462,7 @@ mod tests {
         .unwrap();
         let mut config = crate::sidecar::SidecarConfig::new("unused");
         let mut prompt = String::new();
-        prepare(&root.0, "chat", &[], &mut config, &mut prompt).unwrap();
+        prepare(&root.0, "chat", &[], true, &mut config, &mut prompt).unwrap();
         let loaded: Vec<_> = config
             .args
             .chunks(2)
@@ -1380,6 +1479,17 @@ mod tests {
         assert!(prompt.contains("picked the skill \"ship\""));
         assert!(prompt.contains(&base.join("commands/ship.md").to_string_lossy().into_owned()));
         assert!(!prompt.contains("Ship it") && !prompt.contains("Long instructions"));
+        // A compact launch lists no skill, and the picked one still loads.
+        fs::write(
+            root.0.join("extensions/inventory.json"),
+            serde_json::to_vec(&inventory).unwrap(),
+        )
+        .unwrap();
+        let mut config = crate::sidecar::SidecarConfig::new("unused");
+        let mut prompt = String::new();
+        prepare(&root.0, "chat", &[], false, &mut config, &mut prompt).unwrap();
+        assert!(!config.args.iter().any(|arg| arg == "--skill"));
+        assert!(prompt.contains("picked the skill \"ship\""));
     }
 
     #[test]

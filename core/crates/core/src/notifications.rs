@@ -4,8 +4,9 @@
 //! each agent's name, the approvals waiting anywhere in the swarm, the next
 //! scheduled runs and the time the user last marked everything read.
 //! [`merge`] joins the answers of several machines into the page: the items
-//! that need the user (approvals, questions, runs a usage limit stopped and
-//! machines that do not answer), the runs in flight, and the rest by day.
+//! that need the user (approvals, questions, runs a usage limit stopped,
+//! failed runs the user has not read and machines that do not answer), the
+//! runs in flight, and the rest by day.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -176,9 +177,22 @@ pub struct Filter {
     /// An agent id. None is every agent.
     #[serde(default)]
     pub agent: Option<String>,
-    /// The client's offset from UTC, so days start at its midnight.
+    /// The client's offset from UTC, so days start at its midnight when
+    /// `time_zone` names no zone.
     #[serde(default)]
     pub utc_offset_minutes: i32,
+    /// The client's IANA time zone. Days start at its midnight on each
+    /// date, so a daylight saving change moves no run to another day.
+    #[serde(default)]
+    pub time_zone: Option<String>,
+    /// When the client last read each thread, by thread id. A run whose
+    /// thread was read after the run ended is read.
+    #[serde(default)]
+    pub read: BTreeMap<String, String>,
+    /// The threads deleted on the client's computer. A run in one reads as
+    /// read, since nothing can open its thread to read it.
+    #[serde(default)]
+    pub deleted: BTreeSet<String>,
 }
 
 /// The machine an item belongs to.
@@ -198,7 +212,7 @@ pub struct MachineAnswer {
 /// One item that needs the user.
 #[derive(Clone, Debug, Serialize)]
 pub struct NeedsYou {
-    /// `approval`, `input`, `limit` or `offline`.
+    /// `approval`, `input`, `limit`, `failed` or `offline`.
     pub kind: String,
     pub id: String,
     pub machine: Machine,
@@ -378,10 +392,15 @@ pub fn merge(answers: Vec<MachineAnswer>, filter: &Filter, now_ms: i64) -> Page 
     }
     let read_at = page.read_at.as_deref().and_then(millis);
     let offset = Duration::minutes(i64::from(filter.utc_offset_minutes));
+    let zone = filter
+        .time_zone
+        .as_deref()
+        .and_then(|zone| crate::agent_routines::parse_time_zone(zone).ok());
     let local_day = |ms: i64| {
-        Utc.timestamp_millis_opt(ms)
-            .single()
-            .map(|at| (at + offset).date_naive())
+        Utc.timestamp_millis_opt(ms).single().map(|at| match zone {
+            Some(zone) => at.with_timezone(&zone).date_naive(),
+            None => (at + offset).date_naive(),
+        })
     };
     let today = local_day(now_ms);
     runs.sort_by(|a, b| b.1.run.updated_at.cmp(&a.1.run.updated_at));
@@ -425,11 +444,46 @@ pub fn merge(answers: Vec<MachineAnswer>, filter: &Filter, now_ms: i64) -> Page 
                 approval: None,
             });
         }
+        let thread_read = item
+            .run
+            .thread_id
+            .as_deref()
+            .and_then(|thread| filter.read.get(thread))
+            .and_then(|time| millis(time));
+        let thread_deleted = item
+            .run
+            .thread_id
+            .as_deref()
+            .is_some_and(|thread| filter.deleted.contains(thread));
+        let mut unread = read_at.is_none_or(|read| at > read)
+            && thread_read.is_none_or(|read| at > read)
+            && !thread_deleted
+            && state != "running";
+        // A failure stays unread only while it needs the user: an agent's
+        // later run supersedes it, and a usage stop leaves after its window.
+        if state == "failed" {
+            unread &= newest_of_agent && (!item.limit_stop || at >= stop_since);
+        }
+        // An agent's newest run that failed needs the user until they read it.
+        if state == "failed" && !item.limit_stop && unread {
+            page.needs_you.push(NeedsYou {
+                kind: "failed".into(),
+                id: item.run.id.clone(),
+                machine: machine.clone(),
+                agent_id: Some(item.run.agent_id.clone()),
+                agent_name: Some(item.agent_name.clone()),
+                detail: item.run.error.clone(),
+                at: item.run.updated_at.clone(),
+                resets_at_ms: None,
+                run: Some(item.run.clone()),
+                approval: None,
+            });
+        }
         let entry = Entry {
             status: state.into(),
             machine: machine.clone(),
             agent_name: item.agent_name.clone(),
-            unread: read_at.is_none_or(|read| at > read) && state != "running",
+            unread,
             run: item.run,
         };
         if state == "running" {
@@ -649,12 +703,292 @@ mod tests {
     }
 
     #[test]
+    fn an_agents_newest_failed_run_needs_the_user_until_its_thread_is_read() {
+        let hour = 60 * 60 * 1000;
+        let mut failed = run("r1", "a", RunStatus::Failed, NOW - hour);
+        failed.run.error = Some("The OpenAI sign-in expired. Sign in again in Models.".into());
+        let listing = Listing {
+            runs: vec![
+                failed,
+                run("r2", "a", RunStatus::Failed, NOW - 2 * hour),
+                run("r3", "b", RunStatus::Failed, NOW - 3 * hour),
+                run("r4", "b", RunStatus::Completed, NOW - 2 * hour),
+            ],
+            ..Listing::default()
+        };
+        let page = |filter: &Filter| {
+            merge(
+                vec![MachineAnswer {
+                    machine: machine("local"),
+                    listing: Ok(listing.clone()),
+                }],
+                filter,
+                NOW,
+            )
+        };
+        let unread = page(&Filter::default());
+        let items: Vec<(&str, &str)> = unread
+            .needs_you
+            .iter()
+            .map(|item| (item.kind.as_str(), item.id.as_str()))
+            .collect();
+        assert_eq!(items, vec![("failed", "r1")]);
+        assert_eq!(unread.counts.needs_you, 1);
+        assert_eq!(
+            unread.needs_you[0].detail.as_deref(),
+            Some("The OpenAI sign-in expired. Sign in again in Models.")
+        );
+
+        let mut read = Filter::default();
+        read.read.insert("thread-a".into(), time(NOW - hour / 2));
+        let opened = page(&read);
+        assert!(opened.needs_you.is_empty());
+        assert_eq!(opened.counts.needs_you, 0);
+        assert!(opened.days[0]
+            .entries
+            .iter()
+            .all(|entry| entry.run.agent_id != "a" || !entry.unread));
+    }
+
+    #[test]
+    fn a_failed_run_whose_thread_was_deleted_reads_as_read() {
+        let hour = 60 * 60 * 1000;
+        let listing = Listing {
+            runs: vec![
+                run("r1", "a", RunStatus::Failed, NOW - hour),
+                run("r2", "b", RunStatus::Failed, NOW - hour),
+            ],
+            ..Listing::default()
+        };
+        let mut filter = Filter::default();
+        filter.deleted.insert("thread-a".into());
+        let page = merge(
+            vec![MachineAnswer {
+                machine: machine("local"),
+                listing: Ok(listing),
+            }],
+            &filter,
+            NOW,
+        );
+        let waiting: Vec<&str> = page.needs_you.iter().map(|item| item.id.as_str()).collect();
+        assert_eq!(waiting, vec!["r2"]);
+        assert_eq!(page.counts.needs_you, 1);
+        assert_eq!(page.counts.unread, 1);
+        let gone = page.days[0]
+            .entries
+            .iter()
+            .find(|entry| entry.run.id == "r1")
+            .unwrap();
+        assert!(!gone.unread);
+        let parsed: Filter = serde_json::from_value(json!({"deleted": ["thread-a"]})).unwrap();
+        assert!(parsed.deleted.contains("thread-a"));
+    }
+
+    #[test]
+    fn a_failure_a_later_run_superseded_reads_as_read_in_the_failed_view() {
+        let hour = 60 * 60 * 1000;
+        let day = 24 * hour;
+        let mut old_stop = run("r5", "c", RunStatus::Failed, NOW - 2 * day);
+        old_stop.limit_stop = true;
+        let listing = Listing {
+            runs: vec![
+                run("r1", "a", RunStatus::Completed, NOW - hour),
+                run("r2", "a", RunStatus::Failed, NOW - day - hour),
+                run("r3", "a", RunStatus::Failed, NOW - day - 2 * hour),
+                run("r4", "b", RunStatus::Failed, NOW - 2 * hour),
+                old_stop,
+            ],
+            ..Listing::default()
+        };
+        let page = |filter: &Filter| {
+            merge(
+                vec![MachineAnswer {
+                    machine: machine("local"),
+                    listing: Ok(listing.clone()),
+                }],
+                filter,
+                NOW,
+            )
+        };
+        let failed = page(&Filter {
+            view: View::Failed,
+            ..Filter::default()
+        });
+        let unread: Vec<&str> = failed
+            .days
+            .iter()
+            .flat_map(|day| &day.entries)
+            .filter(|entry| entry.unread)
+            .map(|entry| entry.run.id.as_str())
+            .collect();
+        assert_eq!(unread, vec!["r4"]);
+        let needs: Vec<&str> = failed
+            .needs_you
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect();
+        assert_eq!(needs, vec!["r4"]);
+        assert_eq!(failed.counts.needs_you, 1);
+        assert_eq!(failed.counts.failed, 4);
+        // The newer reply stays unread, and every unread failure needs the user.
+        assert_eq!(failed.counts.unread, 2);
+
+        let mut read = Filter::default();
+        read.read.insert("thread-b".into(), time(NOW - hour));
+        let opened = page(&read);
+        assert_eq!(opened.counts.needs_you, 0);
+        assert!(opened
+            .days
+            .iter()
+            .flat_map(|day| &day.entries)
+            .all(|entry| entry.status != "failed" || !entry.unread));
+    }
+
+    #[test]
     fn the_request_takes_only_a_limit() {
         let request: Request = serde_json::from_value(json!({"limit": 5})).unwrap();
         assert_eq!(request.limit, Some(5));
         assert!(serde_json::from_value::<Request>(json!({"view": "all"})).is_err());
-        let filter: Filter =
-            serde_json::from_value(json!({"view": "needs_you", "machine": "local"})).unwrap();
+        let filter: Filter = serde_json::from_value(
+            json!({"view": "needs_you", "machine": "local", "read": {"t1": time(NOW)}}),
+        )
+        .unwrap();
         assert_eq!(filter.view, View::NeedsYou);
+        assert_eq!(filter.read.len(), 1);
+    }
+
+    fn ms(at: &str) -> i64 {
+        DateTime::parse_from_rfc3339(at).unwrap().timestamp_millis()
+    }
+
+    /// The day each run lands under, in the zone `zone` or at the offset
+    /// `offset` alone, as of `now`.
+    fn days_of(
+        runs: &[(&str, &str)],
+        zone: Option<&str>,
+        offset: i32,
+        now: &str,
+    ) -> Vec<(String, String)> {
+        let listing = Listing {
+            runs: runs
+                .iter()
+                .enumerate()
+                .map(|(index, (id, at))| {
+                    run(id, &format!("a{index}"), RunStatus::Completed, ms(at))
+                })
+                .collect(),
+            ..Listing::default()
+        };
+        let page = merge(
+            vec![MachineAnswer {
+                machine: machine("local"),
+                listing: Ok(listing),
+            }],
+            &Filter {
+                time_zone: zone.map(str::to_owned),
+                utc_offset_minutes: offset,
+                ..Filter::default()
+            },
+            ms(now),
+        );
+        page.days
+            .iter()
+            .flat_map(|day| {
+                day.entries
+                    .iter()
+                    .map(|entry| (entry.run.id.clone(), day.day.clone()))
+            })
+            .collect()
+    }
+
+    fn pairs(expected: &[(&str, &str)]) -> Vec<(String, String)> {
+        expected
+            .iter()
+            .map(|(id, day)| ((*id).to_owned(), (*day).to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn days_start_at_the_zones_own_midnight_across_a_daylight_saving_change() {
+        // New York leaves daylight time at 06:00Z on Nov 1: the day started
+        // at 04:00Z, and the offset is -300 by 10:00 EST.
+        let runs = [
+            ("late", "2026-11-01T04:44:00Z"),
+            ("early", "2026-11-01T04:10:00Z"),
+            ("before", "2026-11-01T03:50:00Z"),
+        ];
+        let now = "2026-11-01T15:00:00Z";
+        assert_eq!(
+            days_of(&runs, Some("America/New_York"), -300, now),
+            pairs(&[
+                ("late", "today"),
+                ("early", "today"),
+                ("before", "yesterday")
+            ])
+        );
+        // The offset alone puts today's first runs under yesterday.
+        assert_eq!(
+            days_of(&runs, None, -300, now),
+            pairs(&[
+                ("late", "yesterday"),
+                ("early", "yesterday"),
+                ("before", "yesterday")
+            ])
+        );
+        // New York enters daylight time at 07:00Z on Mar 8: 23:30 EST on
+        // Mar 7 is yesterday at 23:30 EDT on Mar 8.
+        assert_eq!(
+            days_of(
+                &[
+                    ("today", "2026-03-08T05:10:00Z"),
+                    ("yesterday", "2026-03-08T04:30:00Z")
+                ],
+                Some("America/New_York"),
+                -240,
+                "2026-03-09T03:30:00Z",
+            ),
+            pairs(&[("today", "today"), ("yesterday", "yesterday")])
+        );
+        // Sydney leaves daylight time at 16:00Z on Apr 4: Apr 5 started at
+        // 13:00Z, under the +11 offset.
+        assert_eq!(
+            days_of(
+                &[
+                    ("today", "2026-04-04T13:30:00Z"),
+                    ("yesterday", "2026-04-04T12:50:00Z")
+                ],
+                Some("Australia/Sydney"),
+                600,
+                "2026-04-05T02:00:00Z",
+            ),
+            pairs(&[("today", "today"), ("yesterday", "yesterday")])
+        );
+        // Sydney enters daylight time at 16:00Z on Oct 3: Oct 4 started at
+        // 14:00Z, under the +10 offset.
+        assert_eq!(
+            days_of(
+                &[
+                    ("today", "2026-10-03T14:10:00Z"),
+                    ("yesterday", "2026-10-03T13:30:00Z")
+                ],
+                Some("Australia/Sydney"),
+                660,
+                "2026-10-04T12:30:00Z",
+            ),
+            pairs(&[("today", "today"), ("yesterday", "yesterday")])
+        );
+    }
+
+    #[test]
+    fn an_unknown_zone_falls_back_to_the_offset() {
+        assert_eq!(
+            days_of(
+                &[("early", "2026-11-01T04:10:00Z")],
+                Some("Mars/Base"),
+                -240,
+                "2026-11-01T15:00:00Z"
+            ),
+            pairs(&[("early", "today")])
+        );
     }
 }

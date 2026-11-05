@@ -48,7 +48,7 @@ describe('runtime notice', () => {
     ['approved', 'The runtime registration has approval.'],
     ['notFound', 'The runtime registration found no service.'],
     ['registrationFailed', 'The runtime registration failed.'],
-    ['childStarted', 'The runtime service did not start, so the desktop runs the runtime itself.'],
+    ['childStarted', 'The desktop runs the runtime while the background service is off.'],
     ['stopped', 'The runtime stopped.'],
     ['stopFailed', 'The runtime stop failed.'],
   ])('names the last event %s in one sentence', (event, text) => {
@@ -56,6 +56,18 @@ describe('runtime notice', () => {
     expect(notice.text).toBe(text)
     expect(text.split('.').filter(Boolean)).toHaveLength(1)
     expect(notice.control).toBe(event === 'requiresApproval' ? 'Open Login Items' : 'Start runtime')
+  })
+
+  it('keeps the reconnect to a child non-blocking and speaks with the Login Items notice', () => {
+    for (const lastEvent of ['disconnected', 'childStarted']) {
+      const notice = runtimeNotice({ ...snapshot(1, lastEvent, false), reconnecting: true, foregroundOnly: true })
+      expect(notice).toEqual(expect.objectContaining({ visible: false, reconnecting: true }))
+      expect(notice.foregroundOnly.text).toBe('Scheduled agents run only while Muniment is open.')
+    }
+    const child = runtimeNotice({ ...snapshot(1, 'childStarted'), foregroundOnly: true })
+    expect(child).toEqual(expect.objectContaining({ text: 'Scheduled agents run only while Muniment is open.', control: 'Open Login Items', command: 'open_login_items', reconnecting: false }))
+    expect(runtimeNotice({ ...snapshot(2, 'connected', false), reconnecting: true }).reconnecting).toBe(true)
+    expect(runtimeNotice({ ...snapshot(3, 'startFailed'), reconnecting: true }).reconnecting).toBe(false)
   })
 
   it('covers exit, restart and recovery for two windows', async () => {

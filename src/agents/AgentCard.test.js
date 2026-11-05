@@ -3,7 +3,9 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import '@testing-library/jest-dom/vitest'
 import AgentCard from './AgentCard.svelte'
 import { saveTimeSetting } from '../lib/time-format.svelte.js'
+import { forgetDeletedThreads, rememberDeletedThreads } from '../lib/deleted-threads.svelte.js'
 afterEach(cleanup)
+afterEach(forgetDeletedThreads)
 // Times read in one zone on a 24-hour clock, whatever the computer uses.
 beforeEach(() => saveTimeSetting(null, { zone: 'UTC', clock: '24h' }))
 afterEach(() => saveTimeSetting(null, { zone: '', clock: '' }))
@@ -50,6 +52,8 @@ it('renames the agent in place: Enter saves through agent.save, Escape cancels',
   show({ tauri: machineCore.tauri, onchange })
   await fireEvent.click(screen.getByRole('button', { name: 'Edit agent name: Scout' }))
   const field = screen.getByRole('textbox', { name: 'Agent name' })
+  // macOS autocorrect and spelling never change a name as it is typed.
+  for (const [name, value] of [['spellcheck', 'false'], ['autocorrect', 'off'], ['autocapitalize', 'off'], ['autocomplete', 'off']]) expect(field).toHaveAttribute(name, value)
   await fireEvent.input(field, { target: { value: 'Not this' } })
   await fireEvent.keyDown(field, { key: 'Escape' })
   expect(screen.queryByRole('textbox', { name: 'Agent name' })).not.toBeInTheDocument()
@@ -129,12 +133,19 @@ it('shows each state in words with its stoplight signal at the row end', () => {
   expect(runSignal.querySelector('svg')).toHaveAttribute('data-icon', 'circle-check')
   expect(lastRow.lastElementChild).toBe(runSignal)
 
-  view.rerender({ agent: { ...agent, online: false }, latestRun: { id: 'r2', status: 'failed', updated_at: new Date().toISOString() } })
+  view.rerender({ agent: { ...agent, online: false }, latestRun: { id: 'r2', status: 'failed', error: 'The thread was not found.', updated_at: new Date().toISOString() } })
   return Promise.resolve().then(() => {
     expect(within(fact('Machine')).getByRole('img', { name: 'Offline' })).toHaveAttribute('data-light', 'red')
     const failed = within(fact('Last run')).getByRole('img', { name: 'Failed' })
     expect(failed).toHaveAttribute('data-light', 'red')
     expect(failed.querySelector('svg')).toHaveAttribute('data-icon', 'circle-x')
+    // The card names why the last run failed.
+    expect(screen.getByText('The thread was not found.')).toBeInTheDocument()
+    // An old stored failure reads as its thread reply does.
+    view.rerender({ agent: { ...agent, online: false }, latestRun: { id: 'r3', status: 'failed', error: '{ "error": { "message": "Your authentication token has expir…', updated_at: new Date().toISOString() } })
+  }).then(() => {
+    expect(screen.getByText('The sign-in expired. Sign in again in Models.')).toBeInTheDocument()
+    expect(document.body).not.toHaveTextContent('{ "error"')
   })
 })
 
@@ -207,6 +218,29 @@ it('picks a permission mode from the composer mode menu through agent.save, with
   expect(machineCore.requests).toHaveLength(saves)
 })
 
+it('stops Escape at the open permission mode list, so the page under the card stays', async () => {
+  // The shell's page keys listen on the document, as App's do.
+  const page = vi.fn()
+  document.addEventListener('keydown', page)
+  try {
+    const machineCore = core()
+    show({ tauri: machineCore.tauri, modes })
+    await fireEvent.click(screen.getByRole('tab', { name: 'Permissions' }))
+    const button = screen.getByRole('button', { name: 'Permissions: Ask before changes' })
+    await fireEvent.click(button)
+    const menu = screen.getByRole('menu', { name: 'Modes' })
+    await waitFor(() => expect(menu.contains(document.activeElement)).toBe(true))
+    await fireEvent.keyDown(document.activeElement, { key: 'Escape' })
+    expect(screen.queryByRole('menu', { name: 'Modes' })).not.toBeInTheDocument()
+    expect(page).not.toHaveBeenCalled()
+    // With the list closed, Escape reaches the page again.
+    await fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(page).toHaveBeenCalledTimes(1)
+  } finally {
+    document.removeEventListener('keydown', page)
+  }
+})
+
 it('marks the default mode of an agent that chose none, and names a refused change', async () => {
   const machineCore = core({ refuse: 'The agent settings are invalid.' })
   show({ tauri: machineCore.tauri, modes, agent: { ...agent, permissions: {} } })
@@ -242,20 +276,81 @@ it('lists routines as the profile does and turns one on and off through routine.
   expect(onprofile).toHaveBeenCalledWith(agent)
 })
 
+it('asks for an edit of a routine whose instruction was cut short, on the overview and its row', async () => {
+  const machineCore = core()
+  const onprofile = vi.fn()
+  const cut = { id: 'cut', name: 'Search for recent Tauri news and deliver a…', enabled: true, cut_short: true, prompt: 'Search for recent Tauri news and deliver a three-bullet-poin.', trigger: { kind: 'cron', expr: '0 8 * * 1-5', tz: 'UTC' } }
+  const marked = { ...agent, routines: [...agent.routines, cut] }
+  show({ agent: marked, tauri: machineCore.tauri, onprofile })
+  const note = screen.getByRole('note')
+  expect(note).toHaveTextContent("This routine's instruction was cut short. Edit it to restore the full request.")
+  expect(note).toHaveTextContent(cut.name)
+  await fireEvent.click(within(note).getByRole('button', { name: `Edit ${cut.name} in the profile` }))
+  expect(onprofile).toHaveBeenCalledWith(marked)
+  await fireEvent.click(screen.getByRole('tab', { name: 'Routines' }))
+  const row = screen.getByRole('group', { name: cut.name })
+  expect(within(row).getByRole('note')).toHaveTextContent('Edit it to restore the full request.')
+  await fireEvent.click(within(row).getByRole('button', { name: `Edit the instruction of ${cut.name}` }))
+  expect(onprofile).toHaveBeenCalledTimes(2)
+  // A routine without the mark shows no note.
+  expect(within(screen.getByRole('group', { name: 'Daily brief' })).queryByRole('note')).toBeNull()
+})
+
 it('lists runs in its History as the profile does and opens a run\'s conversation', async () => {
   const machineCore = core()
-  const run = { id: 'r1', agent_id: 'scout', thread_id: 't1', status: 'failed', trigger: { kind: 'cron', routine_id: 'daily' }, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+  const run = { id: 'r1', agent_id: 'scout', thread_id: 't1', status: 'failed', error: 'The thread was not found.', trigger: { kind: 'cron', routine_id: 'daily' }, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
   const invoke = machineCore.tauri.invoke
-  machineCore.tauri.invoke = vi.fn(async (command, args) => command === 'agent_request' && args.operation === 'agent.runs' ? { runs: [run], next_cursor: null } : invoke(command, args))
+  const expired = { ...run, id: 'r0', thread_id: 't0', error: '{ "error": { "message": "Your authentication token has expir…', created_at: new Date(Date.now() - 60_000).toISOString() }
+  machineCore.tauri.invoke = vi.fn(async (command, args) => command === 'agent_request' && args.operation === 'agent.runs' ? { runs: [run, expired], next_cursor: null } : invoke(command, args))
   const onopenrun = vi.fn()
   show({ tauri: machineCore.tauri, onopenrun })
   await fireEvent.click(screen.getByRole('tab', { name: 'History' }))
   const history = await screen.findByRole('region', { name: 'History' })
-  const row = await within(history).findByRole('button', { name: /^Daily brief, Today at / })
+  const rows = await within(history).findAllByRole('button', { name: /^Daily brief, / })
+  const row = rows[0]
+  expect(row).toHaveAccessibleName(/^Daily brief, Today at /)
   expect(row.closest('li')).toHaveAttribute('data-light', 'red')
+  expect(row).toHaveTextContent('The thread was not found.')
+  // An old stored failure reads as its thread reply does.
+  expect(rows[1]).toHaveTextContent(/The sign-in expired\. Sign in again in Models\.$/)
+  expect(history).not.toHaveTextContent('{ "error"')
   expect(machineCore.tauri.invoke).toHaveBeenCalledWith('agent_request', { runtime: 'box', operation: 'agent.runs', body: { agent_id: 'scout', limit: 20 } })
   await fireEvent.click(row)
   expect(onopenrun).toHaveBeenCalledWith(expect.objectContaining({ id: 'r1', thread_id: 't1', runtimeId: 'box' }))
+  // A run whose thread was deleted says so and opens nothing.
+  rememberDeletedThreads(['t0'])
+  await waitFor(() => expect(rows[1]).toBeDisabled())
+  expect(rows[1]).toHaveTextContent("This run's thread was deleted.")
+  expect(rows[1]).toHaveAccessibleName(/This run's thread was deleted\.$/)
+})
+
+it('pages its History: Show older reads the runs before the oldest one listed', async () => {
+  const machineCore = core()
+  const invoke = machineCore.tauri.invoke
+  // Run ids sort by time, newest highest, as core's are.
+  const made = (index) => ({ id: `r${String(index).padStart(2, '0')}`, agent_id: 'scout', thread_id: `t${index}`, status: 'completed', trigger: { kind: 'cron', routine_id: 'daily' }, created_at: new Date(Date.now() - (30 - index) * 60_000).toISOString() })
+  const all = Array.from({ length: 25 }, (_, index) => made(index)).reverse()
+  machineCore.tauri.invoke = vi.fn(async (command, args) => {
+    if (command !== 'agent_request' || args.operation !== 'agent.runs') return invoke(command, args)
+    const page = all.filter((run) => !args.body.cursor || run.id < args.body.cursor).slice(0, args.body.limit)
+    return { runs: page, next_cursor: page.length === args.body.limit && page.at(-1) !== all.at(-1) ? page.at(-1).id : null }
+  })
+  show({ tauri: machineCore.tauri })
+  await fireEvent.click(screen.getByRole('tab', { name: 'History' }))
+  const history = await screen.findByRole('region', { name: 'History' })
+  await waitFor(() => expect(within(history).getAllByRole('button', { name: /^Daily brief, / })).toHaveLength(20))
+  await fireEvent.click(within(history).getByRole('button', { name: 'Show older' }))
+  await waitFor(() => expect(within(history).getAllByRole('button', { name: /^Daily brief, / })).toHaveLength(25))
+  expect(machineCore.tauri.invoke).toHaveBeenCalledWith('agent_request', { runtime: 'box', operation: 'agent.runs', body: { agent_id: 'scout', limit: 20, cursor: 'r05' } })
+  expect(within(history).queryByRole('button', { name: 'Show older' })).toBeNull()
+})
+
+it('offers no Show older when the machine listed every run', async () => {
+  show({ tauri: core().tauri })
+  await fireEvent.click(screen.getByRole('tab', { name: 'History' }))
+  const history = await screen.findByRole('region', { name: 'History' })
+  await within(history).findByText('No runs yet.')
+  expect(within(history).queryByRole('button', { name: 'Show older' })).toBeNull()
 })
 
 it('shows an agent whose machine is offline read only, with a note', async () => {

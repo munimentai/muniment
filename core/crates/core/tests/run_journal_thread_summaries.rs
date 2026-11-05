@@ -61,7 +61,7 @@ fn provenance() -> Provenance {
 }
 
 fn journal_file() -> PathBuf {
-    std::env::temp_dir().join(format!(
+    muniment_core::state_root::test_root().join(format!(
         "muniment-thread-summaries-{}.sqlite3",
         Uuid::new_v4()
     ))

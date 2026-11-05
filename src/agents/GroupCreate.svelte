@@ -43,7 +43,7 @@
 </script>
 
 <AgentDialog title="New group" panel="group" {busy} {onclose}>
-  <label>Name<input bind:value={name} maxlength="80" placeholder="Launch room" disabled={busy} /></label>
+  <label>Name<input bind:value={name} maxlength="80" placeholder="Launch room" spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" disabled={busy} /></label>
   <fieldset>
     <legend>Agents <span class="count">{members.length} of {MAX_MEMBERS}</span></legend>
     <ul class="members">

@@ -30,5 +30,7 @@ ureq = { version = "2", default-features = false }
 libc = "0.2"
 
 [dev-dependencies]
+# Marks the core as a test build, so no test writes the owner's runtime logs.
+muniment-core = { path = "../core", features = ["test-build"] }
 # The release tests sign their own releases with a key made for each test.
 minisign = "0.10"

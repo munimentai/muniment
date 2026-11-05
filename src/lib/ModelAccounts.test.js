@@ -54,6 +54,75 @@ describe('Hold sign-in here', () => {
   })
 })
 
+describe('Sign-in', () => {
+  it('offers only a fresh sign-in after a cancelled one, never its stale page', async () => {
+    let emit
+    const listen = (_event, handler) => { emit = handler; return Promise.resolve(() => {}) }
+    const invoke = vi.fn(async () => null)
+    const plans = { ...settings, subscriptions: [{ provider: 'openai-codex', family: 'openai', label: 'ChatGPT Plus or Pro' }] }
+    render(ModelAccounts, { tauri: { invoke }, listen, settings: plans, family: 'openai', fleet: null })
+    await fireEvent.click(screen.getByRole('button', { name: 'Add another ChatGPT Plus or Pro account' }))
+    await waitFor(() => expect(emit).toBeTypeOf('function'))
+    emit({ payload: { provider: 'openai-codex', stage: 'event', event: { type: 'auth_url', url: 'https://auth.example/login' } } })
+    expect(await screen.findByRole('button', { name: 'Open again' })).toBeInTheDocument()
+    emit({ payload: { provider: 'openai-codex', stage: 'cancelled' } })
+    expect(await screen.findByText('The sign-in was cancelled.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Open again' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Copy sign-in link' })).toBeNull()
+    invoke.mockClear()
+    await fireEvent.click(screen.getByRole('button', { name: 'Sign in again' }))
+    expect(invoke).toHaveBeenCalledWith('model_router_subscription_start', { provider: 'openai-codex', runtime: 'local' })
+  })
+})
+
+describe('Disconnect', () => {
+  it('asks in the app dialog before it removes a key, and keeps the key on Cancel', async () => {
+    const key = { ...subscription('k1', 'invalid-test'), source: 'key' }
+    const invoke = vi.fn(async () => ({ ...settings, accounts: [] }))
+    render(ModelAccounts, { tauri: { invoke }, settings: { ...settings, accounts: [key] }, family: 'openai', fleet: null, onsettings: vi.fn() })
+    await fireEvent.click(screen.getByRole('button', { name: 'Disconnect invalid-test' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Disconnect the OpenAI key invalid-test?' })
+    expect(dialog).toHaveTextContent('Muniment deletes this key.')
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    expect(invoke).not.toHaveBeenCalled()
+    await fireEvent.click(screen.getByRole('button', { name: 'Disconnect invalid-test' }))
+    await fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Disconnect' }))
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('model_router_remove_account', { id: 'k1' }))
+  })
+
+  it('names the provider of a sign-in whose email another provider shares', async () => {
+    const shared = { ...subscription('s1', 'support@example.test'), source: 'subscription' }
+    render(ModelAccounts, { tauri: { invoke: vi.fn() }, settings: { ...settings, accounts: [shared] }, family: 'openai', fleet: null })
+    await fireEvent.click(screen.getByRole('button', { name: 'Disconnect support@example.test' }))
+    expect(await screen.findByRole('dialog', { name: 'Disconnect the OpenAI account support@example.test?' })).toBeInTheDocument()
+  })
+
+  it('keeps a key name as typed, with no automatic capital', async () => {
+    render(ModelAccounts, { tauri: { invoke: vi.fn() }, settings, family: 'openai', fleet: null })
+    await fireEvent.click(screen.getByRole('button', { name: 'Add a key' }))
+    const name = screen.getByLabelText('Name')
+    expect(name).toHaveAttribute('autocapitalize', 'off')
+    expect(name).toHaveAttribute('spellcheck', 'false')
+  })
+})
+
+describe('the sign-in location', () => {
+  it('names a Claude Code account this machine holds as signed in here, like a shared one', () => {
+    const claude = { ...subscription('c1', 'me@example.test'), family: 'anthropic', pi_provider: 'claude-bridge' }
+    render(ModelAccounts, { tauri: { invoke: vi.fn() }, settings: { ...settings, accounts: [claude], families: [{ id: 'anthropic', name: 'Anthropic' }] }, family: 'anthropic', fleet })
+    expect(within(card('me@example.test')).getByText('Signed in here')).toBeInTheDocument()
+  })
+})
+
+describe('a refused sign-in', () => {
+  it('says the sign-in expired in place of a rate limit until a turn succeeds', () => {
+    const expired = { ...subscription('work', 'Work'), credential_refused: true, cooldown_until_ms: Date.now() + 60_000 }
+    render(ModelAccounts, { tauri: { invoke: vi.fn() }, settings: { ...settings, accounts: [expired] }, family: 'openai', fleet: null })
+    expect(within(card('Work')).getByText('Sign-in expired. Sign in again to use this account.')).toBeInTheDocument()
+    expect(within(card('Work')).queryByText(/Rate limited/)).toBeNull()
+  })
+})
+
 describe('sign-ins on other machines', () => {
   it('lists each sign-in another machine holds that this machine cannot use yet, with no hold control', async () => {
     const inventory = { providers: [], hidden: [] }

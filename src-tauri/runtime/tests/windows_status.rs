@@ -37,7 +37,9 @@ fn startup_causes_reach_the_owner_only_log() {
     )
     .unwrap();
     let path = root.join("ai.muniment.desktop/logs/runtime.log");
-    let text = fs::read_to_string(&path).unwrap();
+    let text = muniment_core::runtime_diagnostics::without_record_times(
+        &fs::read_to_string(&path).unwrap(),
+    );
     assert_eq!(
         text,
         format!(
@@ -112,7 +114,9 @@ fn a_failed_windows_activation_records_the_failure() {
         .unwrap()
         .starts_with("failure="));
     assert_eq!(
-        fs::read_to_string(root.join("ai.muniment.desktop/logs/runtime.log")).unwrap(),
+        muniment_core::runtime_diagnostics::without_record_times(
+            &fs::read_to_string(root.join("ai.muniment.desktop/logs/runtime.log")).unwrap()
+        ),
         "event=activation_failed message=runtime activation failed\n"
     );
 
@@ -138,7 +142,9 @@ fn the_fifth_failed_windows_activation_stops_the_restart_loop() {
         fs::read_to_string(state.join("windows-starts")).unwrap(),
         "needs_attention=true\n"
     );
-    let log = fs::read_to_string(root.join("ai.muniment.desktop/logs/runtime.log")).unwrap();
+    let log = muniment_core::runtime_diagnostics::without_record_times(
+        &fs::read_to_string(root.join("ai.muniment.desktop/logs/runtime.log")).unwrap(),
+    );
     assert_eq!(log.matches("event=activation_failed").count(), 4);
     assert_eq!(log.matches("event=restart_loop_stopped").count(), 1);
 
@@ -163,7 +169,9 @@ fn a_stop_decision_skips_windows_activation() {
     );
     assert!(!activated.load(Ordering::Relaxed));
     assert_eq!(
-        fs::read_to_string(root.join("ai.muniment.desktop/logs/runtime.log")).unwrap(),
+        muniment_core::runtime_diagnostics::without_record_times(
+            &fs::read_to_string(root.join("ai.muniment.desktop/logs/runtime.log")).unwrap()
+        ),
         "event=restart_loop_stopped message=runtime restart limit reached\n"
     );
 
@@ -184,7 +192,9 @@ fn an_orderly_windows_exit_record_failure_returns_failure() {
         1
     );
     assert_eq!(
-        fs::read_to_string(root.join("ai.muniment.desktop/logs/runtime.log")).unwrap(),
+        muniment_core::runtime_diagnostics::without_record_times(
+            &fs::read_to_string(root.join("ai.muniment.desktop/logs/runtime.log")).unwrap()
+        ),
         "event=start_record_failed message=start record update failed\n"
     );
 
@@ -205,7 +215,9 @@ fn a_failed_windows_exit_record_failure_returns_failure() {
         1
     );
     assert_eq!(
-        fs::read_to_string(root.join("ai.muniment.desktop/logs/runtime.log")).unwrap(),
+        muniment_core::runtime_diagnostics::without_record_times(
+            &fs::read_to_string(root.join("ai.muniment.desktop/logs/runtime.log")).unwrap()
+        ),
         "event=start_record_failed message=start record update failed\n"
     );
 
@@ -228,7 +240,9 @@ fn a_windows_start_record_failure_returns_failure() {
     );
     assert!(!activated.load(Ordering::Relaxed));
     assert_eq!(
-        fs::read_to_string(root.join("ai.muniment.desktop/logs/runtime.log")).unwrap(),
+        muniment_core::runtime_diagnostics::without_record_times(
+            &fs::read_to_string(root.join("ai.muniment.desktop/logs/runtime.log")).unwrap()
+        ),
         "event=start_record_failed message=start record update failed\n"
     );
 
@@ -342,7 +356,7 @@ fn creates_owner_only_windows_logs_with_fixed_records() {
         0o600
     );
     assert_eq!(
-        fs::read_to_string(log).unwrap(),
+        muniment_core::runtime_diagnostics::without_record_times(&fs::read_to_string(log).unwrap()),
         concat!(
             "event=activation_failed message=runtime activation failed\n",
             "event=arguments_invalid message=runtime arguments invalid\n",
@@ -370,7 +384,12 @@ fn resets_the_windows_log_only_when_the_next_record_crosses_the_limit() {
     let record = b"event=restart_loop_stopped message=runtime restart limit reached\n";
     fs::write(
         &log,
-        vec![b'x'; WINDOWS_RUNTIME_LOG_MAX_BYTES as usize - record.len()],
+        vec![
+            b'x';
+            WINDOWS_RUNTIME_LOG_MAX_BYTES as usize
+                - record.len()
+                - muniment_core::runtime_diagnostics::RECORD_TIME_BYTES
+        ],
     )
     .unwrap();
     fs::set_permissions(&log, fs::Permissions::from_mode(0o600)).unwrap();
@@ -381,7 +400,13 @@ fn resets_the_windows_log_only_when_the_next_record_crosses_the_limit() {
         WINDOWS_RUNTIME_LOG_MAX_BYTES
     );
     write_windows_diagnostic(&root, WindowsDiagnosticEvent::RestartLoopStopped).unwrap();
-    assert_eq!(fs::read(&log).unwrap(), record);
+    assert_eq!(
+        muniment_core::runtime_diagnostics::without_record_times(
+            &fs::read_to_string(&log).unwrap()
+        )
+        .as_bytes(),
+        record
+    );
     fs::remove_dir_all(root).unwrap();
 }
 

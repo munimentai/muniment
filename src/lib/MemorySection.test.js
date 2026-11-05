@@ -46,13 +46,38 @@ it('shows one compact row per fact and opens its details in place', async () => 
   await fireEvent.click(row)
   expect(row).toHaveAttribute('aria-expanded', 'true')
   const detail = document.getElementById(row.getAttribute('aria-controls'))
-  expect(within(detail).getByText('thread:t2 run:r2')).toBeInTheDocument()
+  // A source written before origins reads in words, with no raw thread or run id.
+  expect(within(detail).getByText('Added in a chat')).toBeInTheDocument()
+  expect(within(detail).queryByText(/thread:t2/)).toBeNull()
   expect(within(detail).getByText('Saved from a chat')).toBeInTheDocument()
   expect(within(detail).getByRole('button', { name: 'Edit' })).toBeInTheDocument()
   expect(within(detail).getByRole('button', { name: 'Delete' })).toBeInTheDocument()
   await fireEvent.click(row)
   expect(row).toHaveAttribute('aria-expanded', 'false')
   expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument()
+})
+
+it('names the thread a memory came from by its title and opens it', async () => {
+  const fact = { id: 'f1', title: 'Fact 1', content: 'Content.', source: 'thread:01a19320-a5a6 run:01a19320-b6b6', trust: 'conversation', origin: { kind: 'chat', thread_id: '01a19320-a5a6', run_id: '01a19320-b6b6' }, origin_label: 'Added in a chat' }
+  const invoke = vi.fn(async (cmd, args) => {
+    if (cmd === 'memory_profile_read') return ''
+    if (cmd === 'memory_facts') return [fact]
+    if (cmd === 'chat_thread_summaries') return args.cursor ? { summaries: [{ threadId: '01a19320-a5a6', title: 'Quarterly taxes' }], nextCursor: null } : { summaries: [{ threadId: 'other', title: 'Other' }], nextCursor: 'next' }
+    return null
+  })
+  const opened = vi.fn()
+  window.addEventListener('muniment:open-thread', opened)
+  render(MemorySection, { tauri: { invoke }, part: 'memory' })
+  await fireEvent.click(await screen.findByRole('button', { name: /^Fact 1/ }))
+  const link = await screen.findByRole('button', { name: 'Open Quarterly taxes' })
+  const source = link.closest('dd')
+  expect(source).toHaveTextContent('Added in a chat · Quarterly taxes')
+  expect(source).not.toHaveTextContent(/thread:|run:|01a19320/)
+  expect(invoke).toHaveBeenCalledWith('chat_thread_summaries', { limit: 100, cursor: 'next' })
+  await fireEvent.click(link)
+  expect(opened).toHaveBeenCalledTimes(1)
+  expect(opened.mock.calls[0][0].detail).toEqual({ threadId: '01a19320-a5a6' })
+  window.removeEventListener('muniment:open-thread', opened)
 })
 
 it('marks only external facts and explains them', async () => {
@@ -151,6 +176,8 @@ it('deletes an unconfirmed fact from its icon after the confirm step', async () 
   await fireEvent.click(within(quick('Fact 3')).getByRole('button', { name: 'Delete memory' }))
   expect(screen.getByRole('button', { name: 'Fact 3 Unconfirmed' })).toHaveAttribute('aria-expanded', 'true')
   expect(invoke).not.toHaveBeenCalledWith('memory_fact_delete', expect.anything())
+  // The confirm takes the danger style every destructive confirm shares.
+  expect(screen.getByRole('button', { name: 'Confirm delete' })).toHaveAttribute('data-variant', 'danger')
   await fireEvent.click(screen.getByRole('button', { name: 'Confirm delete' }))
   await waitFor(() => expect(invoke).toHaveBeenCalledWith('memory_fact_delete', { id: 'f3' }))
   await waitFor(() => expect(screen.queryByRole('button', { name: 'Fact 3 Unconfirmed' })).not.toBeInTheDocument())
@@ -282,7 +309,7 @@ it('lists one compact row per suggested change and opens its details', async () 
   expect(within(update).getByText('Content of fact 1.')).toBeInTheDocument()
   expect(within(update).getByText('After')).toBeInTheDocument()
   expect(within(update).getByText('Revised fact 1.')).toBeInTheDocument()
-  expect(within(update).getByText('thread:t8 run:r8')).toBeInTheDocument()
+  expect(within(update).getByText('Added in a chat')).toBeInTheDocument()
   expect(within(update).getByRole('button', { name: 'Apply' })).toBeInTheDocument()
   expect(within(update).getByRole('button', { name: 'Dismiss' })).toBeInTheDocument()
   const removal = await open('Delete Fact 2')
@@ -347,4 +374,43 @@ it('reviews an agent memory change through the agent command', async () => {
   expect(invoke).toHaveBeenCalledWith('agent_memory', expect.objectContaining({ id: 'scout', action: 'memory_pending' }))
   expect(await screen.findByRole('button', { name: 'Standup time Saved from a chat' })).toBeInTheDocument()
   await waitFor(() => expect(screen.queryByText(/suggested change/)).not.toBeInTheDocument())
+})
+
+function setupReach({ providers = [], accounts = [], learn = true } = {}) {
+  const invoke = vi.fn(async (cmd) => {
+    if (cmd === 'memory_profile_read') return ''
+    if (cmd === 'memory_facts') return []
+    if (cmd === 'memory_recall_settings') return { learn, use: true, ask: false }
+    if (cmd === 'local_mode_provider_inventory') return { providers }
+    if (cmd === 'model_router_settings') return { accounts }
+    return null
+  })
+  render(MemorySection, { tauri: { invoke }, part: 'memory' })
+  return invoke
+}
+
+it('says under Save facts from chats when no model can save facts', async () => {
+  const invoke = setupReach()
+  const recall = await screen.findByRole('region', { name: 'Recall' })
+  expect(await within(recall).findByText('No model can save facts. Connect one in Models.')).toBeInTheDocument()
+  expect(invoke).toHaveBeenCalledWith('local_mode_provider_inventory', { cached: true })
+})
+
+it('shows no model notice when a provider or a routing account can save facts', async () => {
+  for (const reach of [{ providers: [{ id: 'openai' }] }, { accounts: [{ id: 'a', enabled: true }] }]) {
+    const invoke = setupReach(reach)
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('model_router_settings'))
+    const recall = await screen.findByRole('region', { name: 'Recall' })
+    await waitFor(() => expect(within(recall).getByRole('switch', { name: 'Save facts from chats' })).toBeEnabled())
+    expect(within(recall).queryByText(/No model can save facts/)).not.toBeInTheDocument()
+    cleanup()
+  }
+})
+
+it('shows no model notice while Save facts from chats is off', async () => {
+  const invoke = setupReach({ learn: false })
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('model_router_settings'))
+  const recall = await screen.findByRole('region', { name: 'Recall' })
+  await waitFor(() => expect(within(recall).getByRole('switch', { name: 'Save facts from chats' })).toHaveAttribute('aria-checked', 'false'))
+  expect(within(recall).queryByText(/No model can save facts/)).not.toBeInTheDocument()
 })

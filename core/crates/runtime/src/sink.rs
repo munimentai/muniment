@@ -454,6 +454,8 @@ pub struct RuntimeChatEventSink {
     /// The run this sink serves, when known. The agent run queue names the
     /// trigger of its runs by this id.
     run_id: Option<String>,
+    /// Called when an agent run this sink serves stops replying.
+    agent_run_ended: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl RuntimeChatEventSink {
@@ -507,7 +509,16 @@ impl RuntimeChatEventSink {
             earlier_models: Vec::new(),
             project_context: String::new(),
             run_id: None,
+            agent_run_ended: None,
         }
+    }
+
+    /// Calls `ended` when the run stops replying and the agent run queue
+    /// holds it as unfinished, so its record ends without waiting for the
+    /// queue's next pass.
+    pub fn with_agent_run_ended(mut self, ended: Option<Arc<dyn Fn() + Send + Sync>>) -> Self {
+        self.agent_run_ended = ended;
+        self
     }
 
     /// The run this sink serves.
@@ -608,6 +619,28 @@ impl PiLaunchBoundaries for RuntimeChatEventSink {
         Some(self.memory_runtime.agent_extension_path(&self.thread_id))
     }
 
+    fn prepare_thread_launch(
+        &self,
+        grant: &ChatGrant,
+    ) -> Option<muniment_core::pi_execution::LaunchFiles> {
+        let written = self.memory_runtime.write_thread_extension(
+            &self.thread_id,
+            muniment_core::memory_index::ModelMemoryCapability {
+                minimum_cacheable_prefix_characters: grant.minimum_cacheable_prefix_characters,
+            },
+        );
+        match written {
+            Ok(hold) => Some(Box::new(hold)),
+            Err(error) => {
+                muniment_core::runtime_eprintln!(
+                    "muniment-runtime: thread_extension failed thread_id={} error={error:?}",
+                    self.thread_id
+                );
+                None
+            }
+        }
+    }
+
     fn project_context(&self) -> Option<&str> {
         (!self.project_context.is_empty()).then_some(self.project_context.as_str())
     }
@@ -626,6 +659,39 @@ impl PiLaunchBoundaries for RuntimeChatEventSink {
             instructions.push_str(&format!("\nCreation thread: {}\nGoal: {}\nSpecified output: {}\nBuild it from the user's message now. Use creation-plan to retain user-approved refinements. Continue in this dedicated thread.",plan.kind,plan.goal,plan.output));
         }
         Ok((!instructions.is_empty()).then_some(instructions))
+    }
+
+    fn run_ended(&self, run_id: &str) {
+        let Some(ended) = &self.agent_run_ended else {
+            return;
+        };
+        let sessions = self.profile.pi_session_root();
+        let Some(profile) = sessions.parent() else {
+            return;
+        };
+        let queued = muniment_core::agent_runs::RunStore::read(profile)
+            .ok()
+            .flatten()
+            .and_then(|store| store.get(run_id).ok().flatten())
+            .is_some_and(|run| run.status.is_active());
+        if queued {
+            ended();
+        }
+    }
+
+    fn name_thread_folder(&self, title: &str) -> Option<PathBuf> {
+        let sessions = self.profile.pi_session_root();
+        let profile = sessions.parent()?;
+        muniment_core::projects::name_thread_workspace(
+            profile,
+            self.memory_runtime.config_directory(),
+            &self.thread_id,
+            title,
+        )
+        .unwrap_or_else(|error| {
+            eprintln!("muniment-runtime: thread_folder name_failed error={error}");
+            None
+        })
     }
 
     fn project_directory(&self) -> Result<Option<PathBuf>, PiLaunchError> {
@@ -653,13 +719,18 @@ impl PiLaunchBoundaries for RuntimeChatEventSink {
         let default = muniment_core::state_root::state_directory()
             .map(|state| muniment_core::state_root::agent_directory(&state))
             .and_then(|agent| muniment_core::launch_facts::read_local_default_model(&agent));
-        let agent = self.agent_launch().and_then(|agent| agent.model);
+        // The agent's own runs answer with its model; a user's message in
+        // its thread answers with the thread's pick.
+        let launch = self.agent_launch();
+        let agent_run = launch.as_ref().is_some_and(|launch| launch.agent_run);
+        let agent = launch.and_then(|agent| agent.model);
         match self.profile_directory() {
             Ok(profile) => muniment_core::thread_settings::run_model(
                 &profile,
                 &self.thread_id,
                 agent.as_ref(),
                 default.as_deref(),
+                agent_run,
             ),
             Err(_) => agent
                 .map(|model| format!("{}/{}", model.provider, model.id))
@@ -691,9 +762,9 @@ impl PiLaunchBoundaries for RuntimeChatEventSink {
                 .get(run_id)
                 .ok()
                 .flatten()
-                .map(|run| run.trigger.kind)
+                .map(|run| run.trigger)
         });
-        match muniment_core::agents::thread_launch(&profile, &self.thread_id, trigger) {
+        match muniment_core::agents::thread_launch(&profile, &self.thread_id, trigger.as_ref()) {
             Ok(launch) => launch,
             Err(error) => {
                 eprintln!("muniment-runtime: agent settings unreadable error={error}");
@@ -711,6 +782,7 @@ mod tests {
         ChatEvent {
             run_id: "run-1".into(),
             thread_id: None,
+            started_at: None,
             phase: phase.into(),
             text: "hello".into(),
             prompt_accepted: false,

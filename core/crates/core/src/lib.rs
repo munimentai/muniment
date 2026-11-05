@@ -54,6 +54,7 @@ pub mod model_install;
 pub mod model_install_native;
 pub use muniment_models as models;
 pub use muniment_router as model_router;
+pub mod disk_full;
 pub mod onnx_runtime;
 pub mod owned_threads;
 pub mod permission_gate;
@@ -104,6 +105,8 @@ pub mod write_plan;
 pub use chrono;
 #[cfg(feature = "keyring")]
 pub use keyring;
+#[cfg(feature = "keyring")]
+pub mod keychain_refusal;
 pub use serde;
 pub use serde_json;
 pub use sha2;

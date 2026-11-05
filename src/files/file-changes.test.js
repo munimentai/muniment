@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest'
-import { changedFiles, createChangedFiles, ranCommands } from './file-changes.js'
+import { changedFiles, createChangedFiles, folderKey, ranCommands } from './file-changes.js'
 import { HIGHLIGHT_LIMIT_BYTES, highlightFile } from './file-highlight.js'
 it('counts applied diff summaries once and omits failed tool edits', () => {
   const applied = { effectId: 'one', summary: { files: [{ newPath: 'src/a.js', status: 'modified', binary: false, additions: 1, deletions: 1 }], truncated: false } }
@@ -53,4 +53,43 @@ it('knows a turn ran a command, whose changes only its checkpoint holds', () => 
   expect(ranCommands({ toolActivity: [{ displayName: 'shell', presentation: { kind: 'command' } }] })).toBe(true)
   expect(ranCommands({ toolActivity: [{ displayName: 'read' }, { displayName: 'web_search' }] })).toBe(false)
   expect(ranCommands({})).toBe(false)
+})
+it('lists a file once from core turn changes across a renamed folder and with its line counts', () => {
+  // Turn one wrote then edited the file in the untitled folder, turn two
+  // edited it after the folder took the thread's title.
+  const write = { displayName: 'write', status: 'completed', input: '{"path":"/home/sessions/Untitled-c3fa5c5a/live36.txt","content":"one\\n"}' }
+  const edit = { displayName: 'edit', status: 'completed', input: '{"path":"live36.txt","edits":[{"oldText":"one","newText":"one\\ntwo"}]}' }
+  const later = { displayName: 'edit', status: 'completed', input: '{"path":"/home/sessions/Live36-c3fa5c5a/live36.txt","edits":[{"oldText":"two","newText":"three"}]}' }
+  const messages = [{ run: { id: 'r1', toolActivity: [write, edit] } }, { run: { id: 'r2', toolActivity: [later] } }]
+  expect(changedFiles(messages).map((file) => file.name)).toEqual(['live36.txt', 'live36.txt', 'live36.txt'])
+  const folder = '/home/sessions/Live36-c3fa5c5a'
+  const saved = {
+    r1: { available: true, folder, more: 0, files: [{ path: 'live36.txt', status: 'added', additions: 2, deletions: 0, binary: false }] },
+    r2: { available: true, folder, more: 0, files: [{ path: 'live36.txt', status: 'modified', additions: 1, deletions: 1, binary: false }] },
+  }
+  expect(changedFiles(messages, saved)).toEqual([{ path: `${folder}/live36.txt`, name: 'live36.txt', additions: 3, deletions: 1, incomplete: false, deleted: false }])
+  // A turn core has not answered for keeps its tool calls.
+  expect(changedFiles(messages, { r2: { available: false } })).toHaveLength(3)
+  const read = createChangedFiles()
+  expect(read(messages, {})).toHaveLength(3)
+  expect(read(messages, saved)).toHaveLength(1)
+})
+it('lists a file once when a turn answer names the thread folder before it took its title', () => {
+  // Turn one's answer was read before the folder took its title.
+  const messages = [{ run: { id: 'r1' } }, { run: { id: 'r2' } }]
+  const titled = '/home/sessions/Live38-c3fa5c5a'
+  const saved = {
+    r1: { available: true, folder: '/home/sessions/New_thread-c3fa5c5a', more: 0, files: [{ path: 'live38-a.txt', status: 'added', additions: 1, deletions: 0, binary: false }] },
+    r2: { available: true, folder: titled, more: 0, files: [{ path: 'live38-a.txt', status: 'modified', additions: 2, deletions: 1, binary: false }] },
+  }
+  expect(changedFiles(messages, saved)).toEqual([{ path: `${titled}/live38-a.txt`, name: 'live38-a.txt', additions: 3, deletions: 1, incomplete: false, deleted: false }])
+  // A folder outside Home's sessions keeps its own path.
+  const project = { ...saved, r1: { ...saved.r1, folder: '/work/a-c3fa5c5a' }, r2: { ...saved.r2, folder: '/work/b-c3fa5c5a' } }
+  expect(changedFiles(messages, project)).toHaveLength(2)
+  expect(folderKey('/home/sessions/Untitled-c3fa5c5a/')).toBe(folderKey(titled))
+  expect(folderKey('/home/sessions/Live38-c3fa5c5a-thread-1234-c3fa5c5a')).toBe(folderKey(titled))
+})
+it('counts the replacements of a Pi edit', () => {
+  const edit = { displayName: 'edit', status: 'completed', input: '{"path":"a.txt","edits":[{"oldText":"a","newText":"b\\nc"},{"oldText":"d\\ne","newText":"f"}]}' }
+  expect(changedFiles([{ run: { toolActivity: [edit] } }])).toMatchObject([{ path: 'a.txt', additions: 3, deletions: 3, incomplete: false }])
 })

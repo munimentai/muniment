@@ -1,3 +1,4 @@
+#[cfg(any(test, not(feature = "local-runtime")))]
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -6,17 +7,24 @@ use std::path::{Path, PathBuf};
 const RUNTIME_AGENT_PLIST: &str = "ai.muniment.runtime.plist";
 /// The profile file that names the runtime signature the running
 /// registration was made under.
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(feature = "local-runtime")))]
 const RUNTIME_SIGNATURE_RECORD: &str = "runtime-service-signature";
 const MACOS_RUNTIME_LOG_MAX_BYTES: u64 = 256 * 1024;
+#[cfg(any(test, not(feature = "local-runtime")))]
 const RUNTIME_SERVICE_NOT_FOUND_RECORD: &[u8] =
     b"event=runtime_service_not_found message=runtime service not found\n";
+#[cfg(any(test, not(feature = "local-runtime")))]
 const RUNTIME_SERVICE_REGISTRATION_FAILED_RECORD: &[u8] =
     b"event=runtime_service_registration_failed message=runtime service registration failed\n";
+#[cfg(any(test, not(feature = "local-runtime")))]
 const RUNTIME_SERVICE_START_FAILED_RECORD: &[u8] =
     b"event=runtime_service_start_failed message=runtime service start failed\n";
+#[cfg(any(test, not(feature = "local-runtime")))]
+const RUNTIME_SERVICE_REQUIRES_APPROVAL_RECORD: &[u8] =
+    b"event=runtime_service_requires_approval message=runtime service requires approval\n";
 
 /// What the start path did after a kickstart of an enabled service failed.
+#[cfg(any(test, not(feature = "local-runtime")))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum StartRecovery {
     None,
@@ -24,6 +32,7 @@ enum StartRecovery {
     Failed,
 }
 
+#[cfg(any(test, not(feature = "local-runtime")))]
 impl fmt::Display for StartRecovery {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
@@ -34,6 +43,7 @@ impl fmt::Display for StartRecovery {
     }
 }
 
+#[cfg(any(test, not(feature = "local-runtime")))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimeStartOutcome {
     SkippedActivation,
@@ -45,6 +55,7 @@ enum RuntimeStartOutcome {
     JobInactive,
 }
 
+#[cfg(any(test, not(feature = "local-runtime")))]
 impl fmt::Display for RuntimeStartOutcome {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
@@ -58,6 +69,7 @@ impl fmt::Display for RuntimeStartOutcome {
     }
 }
 
+#[cfg(any(test, not(feature = "local-runtime")))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum RuntimeServiceActivation {
@@ -76,6 +88,7 @@ pub(crate) fn open_login_items() {
     unsafe { SMAppService::openSystemSettingsLoginItems() };
 }
 
+#[cfg(any(test, not(feature = "local-runtime")))]
 impl fmt::Display for RuntimeServiceActivation {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
@@ -95,6 +108,7 @@ enum ServiceStatus {
     NotFound,
 }
 
+#[cfg(any(test, not(feature = "local-runtime")))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RegistrationError {
     Denied,
@@ -103,15 +117,19 @@ enum RegistrationError {
 
 trait RuntimeServiceAdapter {
     fn status(&self) -> Result<ServiceStatus, ()>;
+    #[cfg(any(test, not(feature = "local-runtime")))]
     fn register(&self) -> Result<(), RegistrationError>;
+    #[cfg(any(test, not(feature = "local-runtime")))]
     fn unregister(&self) -> Result<(), ()> {
         Err(())
     }
+    #[cfg(any(test, not(feature = "local-runtime")))]
     fn registration_diagnostic_written(&self) -> bool {
         false
     }
 }
 
+#[cfg(any(test, not(feature = "local-runtime")))]
 trait RuntimeStartAdapter {
     fn endpoint_exists(&self) -> Result<bool, ()>;
     fn request_start(&self) -> Result<(), ()>;
@@ -134,6 +152,7 @@ trait RuntimeStartAdapter {
 // SMAppService can report Enabled while launchd holds no job, for example
 // after the bundle changed under the same path. A failed kickstart then means
 // the registration must be made again before a second start request.
+#[cfg(any(test, not(feature = "local-runtime")))]
 fn start_enabled_runtime_with_recovery(
     service: &impl RuntimeServiceAdapter,
     start: &impl RuntimeStartAdapter,
@@ -157,6 +176,7 @@ fn start_enabled_runtime_with_recovery(
 // A registered job that launchd cannot keep up, a launch constraint or a
 // configuration exit, answers the start request and never serves the endpoint.
 // The desktop then runs the bundled runtime as its child instead of waiting.
+#[cfg(any(test, not(feature = "local-runtime")))]
 fn confirm_requested_start(
     outcome: RuntimeStartOutcome,
     adapter: &impl RuntimeStartAdapter,
@@ -169,6 +189,7 @@ fn confirm_requested_start(
 
 /// The service's own state line from `launchctl print`, the one at a single
 /// tab of indentation. Nested endpoint states sit deeper and are not the job.
+#[cfg(any(test, not(feature = "local-runtime")))]
 fn launchctl_job_state(output: &str) -> Option<&str> {
     output.lines().find_map(|line| {
         line.strip_prefix("\tstate = ")
@@ -176,6 +197,7 @@ fn launchctl_job_state(output: &str) -> Option<&str> {
     })
 }
 
+#[cfg(any(test, not(feature = "local-runtime")))]
 fn request_enabled_runtime_start(
     activation: RuntimeServiceActivation,
     adapter: &impl RuntimeStartAdapter,
@@ -198,6 +220,7 @@ fn activate_runtime_service(adapter: &impl RuntimeServiceAdapter) -> RuntimeServ
     activate_for_signature(adapter, false).0
 }
 
+#[cfg(any(test, not(feature = "local-runtime")))]
 fn register_and_recheck(adapter: &impl RuntimeServiceAdapter) -> RuntimeServiceActivation {
     let registration = adapter.register();
     let rechecked_status = adapter.status();
@@ -214,6 +237,7 @@ fn register_and_recheck(adapter: &impl RuntimeServiceAdapter) -> RuntimeServiceA
 /// made under another code signature of the runtime is made again first,
 /// because launchd checks each spawn against the signature it holds for the
 /// registration. The flag is true when this launch made the registration.
+#[cfg(any(test, not(feature = "local-runtime")))]
 fn activate_for_signature(
     adapter: &impl RuntimeServiceAdapter,
     signature_changed: bool,
@@ -238,6 +262,7 @@ fn activate_and_diagnose_runtime_service(
     activate_and_diagnose_for_signature(adapter, false, log_directory).0
 }
 
+#[cfg(any(test, not(feature = "local-runtime")))]
 fn activate_and_diagnose_for_signature(
     adapter: &impl RuntimeServiceAdapter,
     signature_changed: bool,
@@ -255,6 +280,7 @@ fn activate_and_diagnose_for_signature(
 
 /// The runtime's code signature as launchd checks it at each spawn: its
 /// team, signing identifier and code directory hash.
+#[cfg(any(test, not(feature = "local-runtime")))]
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct Signatures {
     /// The signature recorded when the running registration was made.
@@ -263,6 +289,7 @@ struct Signatures {
     current: Option<String>,
 }
 
+#[cfg(any(test, not(feature = "local-runtime")))]
 impl Signatures {
     /// A registration with no record, or a record of another signature,
     /// predates the runtime the bundle carries now. An unreadable current
@@ -278,6 +305,7 @@ impl Signatures {
 
 /// The signature line from `codesign -dvvv` output, or None when the output
 /// names no code directory hash.
+#[cfg(any(test, not(feature = "local-runtime")))]
 fn code_signature(codesign_output: &str) -> Option<String> {
     let field = |name: &str| {
         codesign_output
@@ -295,6 +323,7 @@ fn code_signature(codesign_output: &str) -> Option<String> {
 }
 
 /// What a launch does when the job it started did not stay running.
+#[cfg(any(test, not(feature = "local-runtime")))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum InactiveJobStep {
     /// Make the registration again once and start the job once more.
@@ -307,6 +336,7 @@ enum InactiveJobStep {
 /// from an older signature of the runtime, so a constraint failure makes it
 /// again once. A registration this launch made is already fresh, and its
 /// failure falls back at once.
+#[cfg(any(test, not(feature = "local-runtime")))]
 fn after_inactive_job(constraint_violation: bool, registered_this_launch: bool) -> InactiveJobStep {
     if constraint_violation && !registered_this_launch {
         InactiveJobStep::Reregister
@@ -315,6 +345,7 @@ fn after_inactive_job(constraint_violation: bool, registered_this_launch: bool) 
     }
 }
 
+#[cfg(any(test, not(feature = "local-runtime")))]
 fn map_status(status: Result<ServiceStatus, ()>) -> RuntimeServiceActivation {
     match status {
         Ok(ServiceStatus::Enabled) => RuntimeServiceActivation::Enabled,
@@ -324,14 +355,17 @@ fn map_status(status: Result<ServiceStatus, ()>) -> RuntimeServiceActivation {
     }
 }
 
+#[cfg(any(test, not(feature = "local-runtime")))]
 fn diagnostic_record(activation: RuntimeServiceActivation) -> Option<&'static [u8]> {
     match activation {
         RuntimeServiceActivation::NotFound => Some(RUNTIME_SERVICE_NOT_FOUND_RECORD),
         RuntimeServiceActivation::Failed => Some(RUNTIME_SERVICE_REGISTRATION_FAILED_RECORD),
-        RuntimeServiceActivation::Enabled | RuntimeServiceActivation::RequiresApproval => None,
+        RuntimeServiceActivation::RequiresApproval => Some(RUNTIME_SERVICE_REQUIRES_APPROVAL_RECORD),
+        RuntimeServiceActivation::Enabled => None,
     }
 }
 
+#[cfg(any(test, not(feature = "local-runtime")))]
 fn write_activation_diagnostic(
     log_directory: &Path,
     activation: RuntimeServiceActivation,
@@ -347,6 +381,7 @@ fn write_activation_diagnostic(
     )
 }
 
+#[cfg(any(test, not(feature = "local-runtime")))]
 fn write_registration_diagnostic(
     log_directory: &Path,
     domain: &str,
@@ -372,6 +407,7 @@ fn write_registration_diagnostic(
     )
 }
 
+#[cfg(any(test, not(feature = "local-runtime")))]
 fn write_start_diagnostic(log_directory: &Path, outcome: RuntimeStartOutcome) -> io::Result<()> {
     if !matches!(
         outcome,
@@ -387,6 +423,7 @@ fn write_start_diagnostic(log_directory: &Path, outcome: RuntimeStartOutcome) ->
     )
 }
 
+#[cfg(any(test, not(feature = "local-runtime")))]
 fn write_start_detail(
     log_directory: &Path,
     outcome: RuntimeStartOutcome,
@@ -431,6 +468,7 @@ fn process_profile_runtime() -> Result<bool, ()> {
     )
 }
 
+#[cfg(any(test, not(feature = "local-runtime")))]
 fn start_scoped_runtime<T>(
     profile: Result<bool, ()>,
     child: impl FnOnce() -> T,
@@ -439,7 +477,7 @@ fn start_scoped_runtime<T>(
     Ok(if profile? { child() } else { login_service() })
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(feature = "local-runtime")))]
 pub(crate) fn start(
     owner: &crate::runtime_owner::RuntimeOwner,
 ) -> crate::runtime_owner::RuntimeEvent {
@@ -451,7 +489,7 @@ pub(crate) fn start(
     .unwrap_or(crate::runtime_owner::RuntimeEvent::StartFailed)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(feature = "local-runtime")))]
 fn start_login_service() -> crate::runtime_owner::RuntimeEvent {
     let log_directory = muniment_core::user_diagnostics::effective_user_home()
         .ok()
@@ -503,9 +541,9 @@ fn start_login_service() -> crate::runtime_owner::RuntimeEvent {
 }
 
 /// The shell's event for a start through the login service. A service the
-/// user turned off in Login Items needs approval, so the notice names Login
-/// Items, and only a job that never stays running falls back to the child.
-#[cfg(target_os = "macos")]
+/// user turned off in Login Items needs approval. The owner then runs the
+/// runtime as the desktop's child, and the notice names Login Items.
+#[cfg(all(target_os = "macos", any(test, not(feature = "local-runtime"))))]
 fn login_service_event(start: LoginServiceStart) -> crate::runtime_owner::RuntimeEvent {
     use crate::runtime_owner::RuntimeEvent;
     match start {
@@ -523,6 +561,7 @@ fn login_service_event(start: LoginServiceStart) -> crate::runtime_owner::Runtim
 }
 
 /// Where a start through the login service ended.
+#[cfg(any(test, not(feature = "local-runtime")))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum LoginServiceStart {
     /// The service is not enabled, so no start request went out.
@@ -533,6 +572,7 @@ enum LoginServiceStart {
 /// Registers the login service when it is not registered and asks launchd to
 /// start it. A job launchd cannot keep running is unregistered again, so the
 /// desktop's child runtime runs alone and the next launch registers it anew.
+#[cfg(any(test, not(feature = "local-runtime")))]
 fn start_login_service_with(
     service: &impl RuntimeServiceAdapter,
     start: Option<&impl RuntimeStartAdapter>,
@@ -613,7 +653,7 @@ fn bundled_runtime_executable(desktop_executable: &Path) -> Option<PathBuf> {
 
 /// Reads the bundled runtime's signature with `codesign`, which prints it to
 /// standard error.
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(feature = "local-runtime")))]
 fn read_code_signature(executable: &Path) -> Option<String> {
     use std::process::{Command, Stdio};
     let output = Command::new("/usr/bin/codesign")
@@ -630,7 +670,7 @@ fn read_code_signature(executable: &Path) -> Option<String> {
     code_signature(&String::from_utf8_lossy(&output.stderr))
 }
 
-fn write_child_diagnostic(log_directory: &Path, record: &str) -> io::Result<()> {
+pub(crate) fn write_child_diagnostic(log_directory: &Path, record: &str) -> io::Result<()> {
     muniment_core::user_diagnostics::append_owner_only_record(
         log_directory,
         c"runtime.log",
@@ -701,13 +741,17 @@ pub(crate) fn start_child(
     }
 }
 
+/// Whether the service is off: the user turned it off in Login Items, or it
+/// is not registered. Answers false for an enabled service, and nothing for a
+/// status it cannot read, a runtime the profile override runs, or a
+/// local-runtime build, which never uses the service.
 #[cfg(target_os = "macos")]
-pub(crate) fn requires_approval() -> Option<bool> {
-    if process_profile_runtime() != Ok(false) {
+pub(crate) fn service_off() -> Option<bool> {
+    if cfg!(feature = "local-runtime") || process_profile_runtime() != Ok(false) {
         return None;
     }
     match MacosRuntimeServiceAdapter::new().status() {
-        Ok(ServiceStatus::RequiresApproval) => Some(true),
+        Ok(ServiceStatus::RequiresApproval | ServiceStatus::NotRegistered) => Some(true),
         Ok(ServiceStatus::Enabled) => Some(false),
         _ => None,
     }
@@ -725,6 +769,7 @@ pub(crate) fn stop() -> Result<(), ()> {
 }
 
 // launchctl can wait indefinitely when a registered job cannot spawn.
+#[cfg(any(test, not(feature = "local-runtime")))]
 fn wait_for_start_command(
     mut child: std::process::Child,
     timeout: std::time::Duration,
@@ -751,6 +796,12 @@ fn wait_for_start_command(
     }
 }
 
+/// Records that the desktop stopped its child so the service the user turned
+/// on in Login Items runs the runtime.
+pub(crate) fn record_handover(log_directory: &Path) {
+    let _ = write_child_diagnostic(log_directory, "event=runtime_service_handover\n");
+}
+
 // A socket file can remain after a killed runtime. Only a listener proves activity.
 // This readiness connection closes without a handshake. macOS can report ENOTCONN
 // when the listener reads its peer PID. The desktop client uses a separate connection.
@@ -758,6 +809,7 @@ fn runtime_endpoint_accepts_connections(endpoint: &Path) -> bool {
     std::os::unix::net::UnixStream::connect(endpoint).is_ok()
 }
 
+#[cfg(any(test, not(feature = "local-runtime")))]
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 struct MacosRuntimeStartAdapter {
     endpoint: PathBuf,
@@ -769,6 +821,7 @@ struct MacosRuntimeStartAdapter {
     constraint_violation: std::cell::Cell<bool>,
 }
 
+#[cfg(any(test, not(feature = "local-runtime")))]
 impl MacosRuntimeStartAdapter {
     fn new(profile_directory: PathBuf) -> Self {
         Self {
@@ -782,7 +835,7 @@ impl MacosRuntimeStartAdapter {
 
     /// Whether the endpoint accepts a connection within `attempts` checks
     /// spaced 200 milliseconds apart.
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", any(test, not(feature = "local-runtime"))))]
     fn endpoint_answers_within(&self, attempts: u32) -> bool {
         for _ in 0..attempts {
             std::thread::sleep(std::time::Duration::from_millis(200));
@@ -797,6 +850,7 @@ impl MacosRuntimeStartAdapter {
 /// Whether `launchctl print` output shows a job that launchd refused to
 /// spawn: not running, with exit code 78, EX_CONFIG, which a launch
 /// constraint violation leaves.
+#[cfg(any(test, not(feature = "local-runtime")))]
 fn launchctl_constraint_violation(output: &str) -> bool {
     launchctl_job_state(output).is_some_and(|state| state != "running")
         && output.lines().any(|line| {
@@ -806,7 +860,7 @@ fn launchctl_constraint_violation(output: &str) -> bool {
         })
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", any(test, not(feature = "local-runtime"))))]
 impl RuntimeStartAdapter for MacosRuntimeStartAdapter {
     fn endpoint_exists(&self) -> Result<bool, ()> {
         if self.force_request {
@@ -914,6 +968,7 @@ impl RuntimeStartAdapter for MacosRuntimeStartAdapter {
 #[cfg(target_os = "macos")]
 struct MacosRuntimeServiceAdapter {
     service: objc2::rc::Retained<objc2_service_management::SMAppService>,
+    #[cfg(any(test, not(feature = "local-runtime")))]
     registration_diagnostic_written: std::cell::Cell<bool>,
 }
 
@@ -927,6 +982,7 @@ impl MacosRuntimeServiceAdapter {
         Self {
             // SAFETY: The plist name is a valid NSString and names a bundled LaunchAgent.
             service: unsafe { SMAppService::agentServiceWithPlistName(&plist) },
+            #[cfg(any(test, not(feature = "local-runtime")))]
             registration_diagnostic_written: std::cell::Cell::new(false),
         }
     }
@@ -947,6 +1003,7 @@ impl RuntimeServiceAdapter for MacosRuntimeServiceAdapter {
         }
     }
 
+    #[cfg(any(test, not(feature = "local-runtime")))]
     fn register(&self) -> Result<(), RegistrationError> {
         use objc2_service_management::kSMErrorLaunchDeniedByUser;
 
@@ -972,11 +1029,13 @@ impl RuntimeServiceAdapter for MacosRuntimeServiceAdapter {
         })
     }
 
+    #[cfg(any(test, not(feature = "local-runtime")))]
     fn unregister(&self) -> Result<(), ()> {
         // SAFETY: The service comes from agentServiceWithPlistName and remains retained.
         unsafe { self.service.unregisterAndReturnError() }.map_err(|_| ())
     }
 
+    #[cfg(any(test, not(feature = "local-runtime")))]
     fn registration_diagnostic_written(&self) -> bool {
         self.registration_diagnostic_written.get()
     }
@@ -1027,9 +1086,40 @@ mod tests {
         let listener = UnixListener::bind(&endpoint).unwrap();
         assert!(runtime_endpoint_accepts_connections(&endpoint));
         drop(listener);
-        assert!(endpoint.exists());
-        assert!(!runtime_endpoint_accepts_connections(&endpoint));
+        // A stale endpoint is a bound socket file with no listener behind it.
+        // The test binds one that never listens: on macOS the standard library
+        // marks a new socket close-on-exec only after it exists, so a child
+        // another test spawns in that gap keeps a dropped listener accepting.
+        let stale = directory.join("stale.sock");
+        bind_without_listening(&stale);
+        assert!(stale.exists());
+        assert!(!runtime_endpoint_accepts_connections(&stale));
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// Binds a stream socket to `path` and closes it without a listen.
+    fn bind_without_listening(path: &Path) {
+        use std::os::unix::ffi::OsStrExt;
+        let bytes = path.as_os_str().as_bytes();
+        // SAFETY: the address is a zeroed `sockaddr_un` whose path fits with
+        // its terminating zero, and the descriptor is closed exactly once.
+        unsafe {
+            let mut address: libc::sockaddr_un = std::mem::zeroed();
+            assert!(bytes.len() < address.sun_path.len());
+            address.sun_family = libc::AF_UNIX as libc::sa_family_t;
+            for (slot, byte) in address.sun_path.iter_mut().zip(bytes) {
+                *slot = *byte as libc::c_char;
+            }
+            let descriptor = libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0);
+            assert!(descriptor >= 0);
+            let bound = libc::bind(
+                descriptor,
+                (&address as *const libc::sockaddr_un).cast::<libc::sockaddr>(),
+                std::mem::size_of::<libc::sockaddr_un>() as libc::socklen_t,
+            );
+            libc::close(descriptor);
+            assert_eq!(bound, 0);
+        }
     }
 
     struct FakeAdapter {
@@ -1197,7 +1287,7 @@ mod tests {
             assert!(!service.registered.get());
         }
         assert_eq!(
-            fs::read_to_string(logs.join("runtime.log")).unwrap(),
+            runtime_log(&logs),
             "event=runtime_service_job_inactive unregistered=true\n".repeat(2)
         );
         // A launch whose job stays up keeps the registration.
@@ -1345,6 +1435,13 @@ mod tests {
         }
     }
 
+    /// The runtime log's records without the time each starts with.
+    fn runtime_log(logs: &Path) -> String {
+        muniment_core::runtime_diagnostics::without_record_times(
+            &fs::read_to_string(logs.join("runtime.log")).unwrap(),
+        )
+    }
+
     fn directory() -> PathBuf {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         std::env::temp_dir().join(format!(
@@ -1378,7 +1475,7 @@ mod tests {
             "event=runtime_service_child_started pid=7 executable=\"/a b/muniment-runtime\"\n",
         )
         .unwrap();
-        let log = fs::read_to_string(directory.join("runtime.log")).unwrap();
+        let log = runtime_log(&directory);
         assert!(log.starts_with("event=runtime_service_child_started pid=7 executable="));
         assert!(log.ends_with("\n"));
         fs::remove_dir_all(directory).unwrap();
@@ -1540,7 +1637,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            fs::read_to_string(logs.join("runtime.log")).unwrap(),
+            runtime_log(&logs),
             "event=runtime_service_start_detail outcome=requestFailed recovery=failed request_error=\"launchctl kickstart gui/501/ai.muniment.runtime exit=Some(113) stderr=Could not find service\"\n\
              event=runtime_service_start_detail outcome=requested recovery=reregistered request_error=\"\"\n"
         );
@@ -1689,11 +1786,25 @@ mod tests {
                     .as_slice()
             )
         );
-        assert_eq!(diagnostic_record(RuntimeServiceActivation::Enabled), None);
         assert_eq!(
             diagnostic_record(RuntimeServiceActivation::RequiresApproval),
-            None
+            Some(
+                b"event=runtime_service_requires_approval message=runtime service requires approval\n"
+                    .as_slice()
+            )
         );
+        assert_eq!(diagnostic_record(RuntimeServiceActivation::Enabled), None);
+    }
+
+    #[test]
+    fn a_handover_records_itself() {
+        let root = directory();
+        let logs = root.join("Library/Logs/Muniment");
+        fs::create_dir_all(root.join("Library/Logs")).unwrap();
+        fs::set_permissions(root.join("Library/Logs"), fs::Permissions::from_mode(0o700)).unwrap();
+        record_handover(&logs);
+        assert!(runtime_log(&logs).ends_with("event=runtime_service_handover\n"));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1704,16 +1815,17 @@ mod tests {
         fs::set_permissions(root.join("Library/Logs"), fs::Permissions::from_mode(0o700)).unwrap();
 
         write_activation_diagnostic(&logs, RuntimeServiceActivation::Enabled).unwrap();
-        write_activation_diagnostic(&logs, RuntimeServiceActivation::RequiresApproval).unwrap();
         assert!(!logs.exists());
 
+        write_activation_diagnostic(&logs, RuntimeServiceActivation::RequiresApproval).unwrap();
         write_activation_diagnostic(&logs, RuntimeServiceActivation::NotFound).unwrap();
         write_activation_diagnostic(&logs, RuntimeServiceActivation::Failed).unwrap();
         write_start_diagnostic(&logs, RuntimeStartOutcome::Requested).unwrap();
         write_start_diagnostic(&logs, RuntimeStartOutcome::RequestFailed).unwrap();
         assert_eq!(
-            fs::read(logs.join("runtime.log")).unwrap(),
+            runtime_log(&logs).as_bytes(),
             [
+                RUNTIME_SERVICE_REQUIRES_APPROVAL_RECORD,
                 RUNTIME_SERVICE_NOT_FOUND_RECORD,
                 RUNTIME_SERVICE_REGISTRATION_FAILED_RECORD,
                 RUNTIME_SERVICE_START_FAILED_RECORD,
@@ -1736,7 +1848,7 @@ mod tests {
         .unwrap();
         write_activation_diagnostic(&logs, RuntimeServiceActivation::NotFound).unwrap();
         assert_eq!(
-            fs::read(logs.join("runtime.log")).unwrap(),
+            runtime_log(&logs).as_bytes(),
             RUNTIME_SERVICE_NOT_FOUND_RECORD
         );
         fs::remove_dir_all(root).unwrap();
@@ -1750,7 +1862,7 @@ mod tests {
         let logs = root.join("logs");
         let description = "The plist \"ai.muniment.runtime\" is invalid.\nCheck BundleProgram.\r\t";
         write_registration_diagnostic(&logs, "SMAppServiceErrorDomain", -108, description).unwrap();
-        let record = fs::read_to_string(logs.join("runtime.log")).unwrap();
+        let record = runtime_log(&logs);
         assert_eq!(record.lines().count(), 1);
         assert!(record.starts_with(
             "event=runtime_service_registration_failed domain=\"SMAppServiceErrorDomain\" code=-108 truncated=false description="
@@ -1775,13 +1887,13 @@ mod tests {
         )
         .unwrap();
         write_registration_diagnostic(&logs, "", 0, "").unwrap();
-        assert_eq!(fs::read_to_string(logs.join("runtime.log")).unwrap(),
+        assert_eq!(runtime_log(&logs),
             "event=runtime_service_registration_failed domain=\"\" code=0 truncated=false description=\"\"\n");
 
         fs::write(logs.join("runtime.log"), []).unwrap();
         write_registration_diagnostic(&logs, &"\0".repeat(5000), isize::MAX, &"é\n".repeat(5000))
             .unwrap();
-        let record = fs::read_to_string(logs.join("runtime.log")).unwrap();
+        let record = runtime_log(&logs);
         assert!(record.len() < MACOS_RUNTIME_LOG_MAX_BYTES as usize);
         assert_eq!(record.lines().count(), 1);
         assert!(record.contains("truncated=true"));
@@ -1801,6 +1913,9 @@ mod tests {
         let logs = root.join("logs");
         let log = logs.join("runtime.log");
         let record = b"event=runtime_service_registration_failed domain=\"SMAppServiceErrorDomain\" code=-108 truncated=false description=\"The plist is invalid.\"\n";
+        // Each record takes its time and a space in the log as well.
+        let time = muniment_core::runtime_diagnostics::RECORD_TIME_BYTES;
+        let stamped = record.len() + time;
 
         for status in [ServiceStatus::NotFound, ServiceStatus::NotRegistered] {
             for (error, expected) in [
@@ -1812,11 +1927,11 @@ mod tests {
             ] {
                 for remaining in [
                     0,
-                    record.len() - 1,
-                    record.len(),
-                    record.len() + 1,
-                    record.len() + RUNTIME_SERVICE_REGISTRATION_FAILED_RECORD.len() - 1,
-                    record.len() + RUNTIME_SERVICE_REGISTRATION_FAILED_RECORD.len(),
+                    stamped - 1,
+                    stamped,
+                    stamped + 1,
+                    stamped + RUNTIME_SERVICE_REGISTRATION_FAILED_RECORD.len() + time - 1,
+                    stamped + RUNTIME_SERVICE_REGISTRATION_FAILED_RECORD.len() + time,
                     MACOS_RUNTIME_LOG_MAX_BYTES as usize,
                 ] {
                     write_activation_diagnostic(&logs, RuntimeServiceActivation::Failed).unwrap();
@@ -1836,12 +1951,17 @@ mod tests {
                     assert_eq!(adapter.registration_calls.get(), 1);
                     assert_eq!(adapter.status_calls.get(), 2);
                     assert!(adapter.registration_diagnostic_written());
-                    let expected_log = if remaining < record.len() {
-                        record.to_vec()
+                    let contents = fs::read_to_string(&log).unwrap();
+                    let kept = if remaining < stamped {
+                        contents.as_str()
                     } else {
-                        [prefix.as_slice(), record].concat()
+                        assert!(contents.as_bytes().starts_with(&prefix));
+                        &contents[prefix.len()..]
                     };
-                    assert_eq!(fs::read(&log).unwrap(), expected_log);
+                    assert_eq!(
+                        muniment_core::runtime_diagnostics::without_record_times(kept).as_bytes(),
+                        record
+                    );
                 }
             }
         }
@@ -1865,7 +1985,7 @@ mod tests {
         );
         assert!(!adapter.registration_diagnostic_written());
         assert_eq!(
-            fs::read(logs.join("runtime.log")).unwrap(),
+            runtime_log(&logs).as_bytes(),
             RUNTIME_SERVICE_REGISTRATION_FAILED_RECORD
         );
         fs::remove_dir_all(root).unwrap();
@@ -2006,7 +2126,7 @@ mod tests {
         assert!(service.registered.get());
         assert_eq!(start.request_calls.get(), 1);
         assert_eq!(
-            fs::read_to_string(logs.join("runtime.log")).unwrap(),
+            runtime_log(&logs),
             "event=runtime_service_signature_changed\n"
         );
         // The same signature keeps the registration as it is.
@@ -2096,7 +2216,7 @@ mod tests {
     }
 
     #[test]
-    fn a_service_the_user_turned_off_asks_for_login_items_and_starts_no_child() {
+    fn a_service_the_user_turned_off_asks_for_login_items_and_requests_no_service_start() {
         // macOS reports a registration the user turned off in Login Items as
         // requiring approval, and a new registration as denied by the user.
         for (statuses, registration) in [
@@ -2108,16 +2228,28 @@ mod tests {
         ] {
             let service = FakeAdapter::new(statuses, registration);
             let start = ConstraintJobAdapter::new([]);
+            let root = directory();
+            let logs = root.join("Library/Logs/Muniment");
+            fs::create_dir_all(root.join("Library/Logs")).unwrap();
+            fs::set_permissions(root.join("Library/Logs"), fs::Permissions::from_mode(0o700))
+                .unwrap();
             let result = start_login_service_with(
                 &service,
                 Some(&start),
                 &signatures(Some(AD_HOC), Some(DEVELOPER_ID)),
-                None,
+                Some(&logs),
             );
             assert_eq!(
                 result,
                 LoginServiceStart::Inactive(RuntimeServiceActivation::RequiresApproval)
             );
+            // The start that follows the switch, at launch or while the desktop
+            // is open, records the state before the desktop runs its child.
+            assert_eq!(
+                runtime_log(&logs),
+                "event=runtime_service_requires_approval message=runtime service requires approval\n"
+            );
+            fs::remove_dir_all(root).unwrap();
             assert_eq!(start.request_calls.get(), 0);
             assert_eq!(service.unregister_calls.get(), 0);
             #[cfg(target_os = "macos")]

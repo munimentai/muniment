@@ -15,6 +15,7 @@ const swarm = { self: { local: 'core-laptop' }, members: [{ runtime_id: 'core-la
 function agentBridge(answers) {
   const invoke = vi.fn(async (command, payload) => {
     if (command === 'project_list') return { projects: { mine: 'Taxes' }, remote: { p1: { name: 'Launch', ownerRuntime: 'core-studio' } }, threads: {} }
+    if (command === 'model_router_settings' && command in answers) return answers[command]
     if (command !== 'agent_request') throw new Error(`unexpected command: ${command}`)
     const answer = answers[payload.operation]
     if (answer instanceof Error) throw answer
@@ -123,6 +124,27 @@ describe('the fleet log', () => {
     expect(role).toHaveTextContent('Changed a role')
     expect(role).toHaveTextContent('This computer → Studio')
     expect(role).toHaveTextContent('full to worker')
+  })
+
+  it('names the secret and the connections an entry carries, with no raw id', async () => {
+    const opened = { id: 'core-laptop:0192c', at: '2026-01-01T14:09:00Z', kind: 'opened', actor_runtime: 'core-laptop', runtime_id: 'core-studio', record: { secret_id: 'models:core-studio', recipients: ['core-laptop'], keys: ['router:w1'] } }
+    const tauri = agentBridge({ 'fleet.audit': { entries: [opened], more: false }, 'swarm.members': swarm, 'fleet.sync_status': { state: 'synced', classes: [] }, 'fleet.credentials': { accounts: [{ name: 'router:w1', label: 'Work', provider: 'openai-codex' }] } })
+    render(AuditLog, { tauri })
+    const [row] = within(await screen.findByRole('list', { name: 'Machine log' })).getAllByRole('listitem')
+    await waitFor(() => expect(row.querySelector('.detail')).toHaveTextContent('Model connections of Studio · Work · 1 recipient'))
+    // The time and the event are separate cells, so the time never runs into the event.
+    expect(row.querySelector('time')).toHaveAttribute('datetime', '2026-01-01T14:09:00Z')
+    expect(row.querySelector('.what')).toHaveTextContent(/^Opened a secret$/)
+    expect(row).not.toHaveTextContent(/models:|router:/)
+  })
+
+  it('names a decision model key by the model, and in words when the router lists none', async () => {
+    const sealed = { id: 'core-laptop:0192d', at: '2026-01-01T14:10:00Z', kind: 'sealed', actor_runtime: 'core-laptop', runtime_id: null, record: { secret_id: 'keys:core-laptop', keys: ['decision:01a17921-b66d-77e8-bc7e-815e81b4df15', 'decision:01a17921-0000-7000-8000-000000000000', 'search:exa'] } }
+    const tauri = agentBridge({ 'fleet.audit': { entries: [sealed], more: false }, 'swarm.members': swarm, 'fleet.sync_status': { state: 'synced', classes: [] }, model_router_settings: { accounts: [], classifier_connections: [{ id: '01a17921-b66d-77e8-bc7e-815e81b4df15', name: 'Jev · TypeSafe API' }] } })
+    render(AuditLog, { tauri })
+    const [row] = within(await screen.findByRole('list', { name: 'Machine log' })).getAllByRole('listitem')
+    await waitFor(() => expect(row.querySelector('.detail')).toHaveTextContent('Keys of This computer · Jev · TypeSafe API, a decision model, Exa search key'))
+    expect(row).not.toHaveTextContent(/decision:|search:|01a17921/)
   })
 
   it('raises the limit for Show more and stops at the most core answers', async () => {

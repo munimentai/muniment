@@ -1260,9 +1260,15 @@ pub(crate) fn complete(
         session.failures = failures.min(100);
     }
     let started = std::time::Instant::now();
-    state
-        .progress
-        .stage(progress, "choosing-model", (state.now_ms)());
+    let requested = wire::requested_model(request).unwrap_or(config::AUTO_MODEL);
+    // A turn that names its model runs no routing, so it reports no routing
+    // stage until it falls back to another account.
+    let routed = requested == config::AUTO_MODEL;
+    if routed {
+        state
+            .progress
+            .stage(progress, "choosing-model", (state.now_ms)());
+    }
     let run_budget = match hooks.budget() {
         Ok(budget) => budget,
         Err((status, body)) => {
@@ -1284,7 +1290,6 @@ pub(crate) fn complete(
         );
         return;
     }
-    let requested = wire::requested_model(request).unwrap_or(config::AUTO_MODEL);
     // Endpoint, capability, context and budget limits run before any
     // classifier or model receives text.
     let config = super::constraints::filter(
@@ -1443,6 +1448,8 @@ pub(crate) fn complete(
     );
     let (_, exclusions) = route_availability(&config, &state.ledger(), (state.now_ms)());
     let mut refusals: Vec<String> = Vec::new();
+    // Accounts whose refused access token this turn already traded once.
+    let mut renewed = std::collections::HashSet::new();
     let mut routes = super::options(&config);
     // Prefer the configured fallback, then another provider, then remaining models.
     routes.sort_by_key(|route| {
@@ -1464,7 +1471,10 @@ pub(crate) fn complete(
     if requested != config::AUTO_MODEL || thread.is_some() {
         routes.truncate(1);
     }
-    let mut last_failure = (503, "No eligible model served this turn.".to_owned());
+    let mut last_failure = (503, String::new());
+    // Each failed attempt's plain refusal sentence, `None` for any other failure.
+    // The turn names the refusal only when every attempt gave the same one.
+    let mut causes: Vec<Option<String>> = Vec::new();
     let mut attempted = false;
     // A stall moves the turn to the model's next account, so every connected
     // account of the provider gets one try. Once they all stalled, the turn ends
@@ -1510,7 +1520,7 @@ pub(crate) fn complete(
                 )
             {
                 state.progress.stage(progress, "fallback", (state.now_ms)());
-            } else {
+            } else if routed {
                 state
                     .progress
                     .stage(progress, "waiting-for-account", (state.now_ms)());
@@ -1559,6 +1569,7 @@ pub(crate) fn complete(
             let prepared = match transport::prepare(&account, request, &route.model) {
                 Ok(prepared) => prepared,
                 Err(message) => {
+                    causes.push(None);
                     last_failure = (400, message);
                     break;
                 }
@@ -1682,6 +1693,7 @@ pub(crate) fn complete(
                     let message = stalled(state.stall.first_output);
                     state.record_error(&account.id, &message, false);
                     refusals.push(format!("{} stopped answering.", account.label));
+                    causes.push(None);
                     last_failure = (504, message.clone());
                     stall = Some(message);
                     route_stalled = true;
@@ -1765,11 +1777,13 @@ pub(crate) fn complete(
                         }
                         Err(Unserved::Failed(message)) => {
                             settle(None, false, None);
+                            causes.push(None);
                             last_failure = (502, message);
                         }
                         Err(Unserved::Stalled(message)) => {
                             settle(None, false, None);
                             refusals.push(format!("{} stopped answering.", account.label));
+                            causes.push(None);
                             last_failure = (504, message.clone());
                             stall = Some(message);
                             route_stalled = true;
@@ -1807,6 +1821,33 @@ pub(crate) fn complete(
                     let detail = response
                         .into_string()
                         .unwrap_or_else(|_| format!("The provider answered {status}."));
+                    // An upstream can refuse an access token before the expiry the
+                    // account records. The refresh token is traded once, and the
+                    // turn tries the account again on the fresh credential.
+                    if usage::credential_refused(status, &detail)
+                        && !account.id.starts_with(super::config::SHARED_ACCOUNT_PREFIX)
+                        && renewed.insert(account.id.clone())
+                    {
+                        match native_auth::refresh_refused_account_in(
+                            &state.backend,
+                            &account.id,
+                            &account.credential,
+                            now,
+                            REFRESH_TIMEOUT,
+                        ) {
+                            Some(Ok(_)) => {
+                                if let Some(candidate) =
+                                    candidates.accounts.iter_mut().find(|a| a.id == account.id)
+                                {
+                                    candidate.enabled = true;
+                                }
+                                tried -= 1;
+                                continue;
+                            }
+                            Some(Err(message)) => refusals.push(message),
+                            None => {}
+                        }
+                    }
                     let cools = usage::status_cools(status);
                     state.record_error(
                         &account.id,
@@ -1853,10 +1894,34 @@ pub(crate) fn complete(
                             "The plan of {} does not offer {}.",
                             account.label, route.model
                         ));
+                        causes.push(None);
                         last_failure = (status, String::new());
                         continue;
                     }
-                    last_failure = (status, detail);
+                    // A refused sign-in or key reads as the step that fixes
+                    // it, and the provider's own answer follows for the log.
+                    if usage::credential_refused(status, &detail) {
+                        let provider = account
+                            .family()
+                            .map_or_else(|| account.family.clone(), |family| family.name.into());
+                        let hint = match account.credential {
+                            config::Credential::Subscription { .. } => usage::SIGN_IN_EXPIRED,
+                            config::Credential::ApiKey { .. } => usage::KEY_REFUSED,
+                        };
+                        causes.push(None);
+                        last_failure = (status, format!("The {provider}{hint} {detail}"));
+                    } else {
+                        // A provider that refused the model for good reads as
+                        // that cause, and its own answer follows for the log.
+                        causes.push(usage::provider_refusal(status, &detail).map(|cause| {
+                            let provider = account.family().map_or_else(
+                                || account.family.clone(),
+                                |family| family.name.into(),
+                            );
+                            format!("{provider}{}{cause}.", usage::MODEL_REFUSED)
+                        }));
+                        last_failure = (status, detail);
+                    }
                     refusals.push(format!("{} answered {status}.", account.label));
                     if !cools {
                         // Another model may accept the request, but repeating it on
@@ -1875,6 +1940,7 @@ pub(crate) fn complete(
                         );
                     }
                     state.record_error(&account.id, &error.to_string(), true);
+                    causes.push(None);
                     refusals.push(format!("{} did not answer.", account.label));
                 }
             }
@@ -1888,8 +1954,15 @@ pub(crate) fn complete(
         return;
     }
     let refusals = refusals.join(" ");
+    let refusal = causes
+        .first()
+        .cloned()
+        .flatten()
+        .filter(|first| causes.iter().all(|cause| cause.as_ref() == Some(first)))
+        .unwrap_or_default();
     let message = [
         "No eligible model served this turn.",
+        &refusal,
         &last_failure.1,
         &refusals,
     ]
@@ -2335,8 +2408,8 @@ mod tests {
     }
 
     fn agent_dir() -> PathBuf {
-        let path =
-            std::env::temp_dir().join(format!("muniment-router-server-{}", uuid::Uuid::now_v7()));
+        let path = muniment_atomic_file::test_root::test_root()
+            .join(format!("muniment-router-server-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir_all(&path).unwrap();
         path
     }
@@ -2516,6 +2589,29 @@ mod tests {
     }
 
     #[test]
+    fn a_turn_that_names_its_model_reports_no_routing_stage() {
+        let agent = agent_dir();
+        let (url, _) = upstream(vec![(200, answer("hello", 1, 1), false)]);
+        config::save(&agent, &config(vec![account("a", &url)])).unwrap();
+        let handle = start_with_clock(agent, fixed_clock).unwrap();
+        let endpoint = handle.endpoint();
+        let id = uuid::Uuid::new_v4().to_string();
+        ureq::post(&format!("{}/chat/completions", endpoint.base_url()))
+            .set("authorization", &format!("Bearer {}", endpoint.token))
+            .set("x-muniment-routing-id", &id)
+            .send_json(turn("fast", false))
+            .unwrap()
+            .into_string()
+            .unwrap();
+        let path = format!("/v1/routing-progress/{id}");
+        let (status, body) = call(endpoint, "GET", &path, None, &endpoint.token);
+        assert_eq!(status, 200);
+        let snapshot: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(snapshot["stages"], json!(["thinking"]));
+        assert_eq!(snapshot["done"], true);
+    }
+
+    #[test]
     fn progress_endpoint_reports_real_fallback_and_requires_authentication() {
         let agent = agent_dir();
         let (url, _) = upstream(vec![
@@ -2614,6 +2710,76 @@ mod tests {
         assert_eq!(ledger.account("s1").unwrap().errors, 1);
         assert_eq!(ledger.account("s2").unwrap().input_tokens, 11);
         assert_eq!(ledger.account("s2").unwrap().requests, 1);
+    }
+
+    #[test]
+    fn a_token_the_upstream_calls_expired_is_refreshed_once_and_the_turn_retried() {
+        let agent = agent_dir();
+        let expired = json!({
+            "error": {
+                "message": "Your authentication token has expired. Please try refreshing it.",
+                "code": "token_expired"
+            },
+            "status": 401
+        })
+        .to_string();
+        let payload = [
+            json!({"type":"response.output_text.delta","delta":"morning"}),
+            json!({"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":1}}}),
+        ].iter().map(|event| format!("data: {event}\n\n")).collect::<String>();
+        let (url, seen) = upstream(vec![(401, expired, false), (200, payload, true)]);
+        let fresh = json!({"access_token":"fresh-access","refresh_token":"fresh-refresh","expires_in":864000});
+        let (token_url, refreshes) = upstream(vec![(200, fresh.to_string(), false)]);
+        native_auth::set_refresh_endpoint_for_tests(Some(token_url));
+        let mut saved = account("s1", &url);
+        // The recorded expiry is far ahead, so only the refusal can start the trade.
+        saved.credential = Credential::Subscription {
+            provider: "openai-codex".into(),
+            access: "stale-access".into(),
+            refresh: Some("stale-refresh".into()),
+            expires_ms: Some(i64::MAX / 2),
+            account_id: Some("s1".into()),
+            email: Some("pat@example.com".into()),
+            plan: Some("pro".into()),
+            renews_at_ms: None,
+        };
+        config::save(&agent, &config(vec![saved])).unwrap();
+        let handle = start_with_clock(agent.clone(), fixed_clock).unwrap();
+        let (status, body) = call(
+            handle.endpoint(),
+            "POST",
+            "/v1/chat/completions",
+            Some(&turn("auto", true)),
+            &handle.endpoint().token,
+        );
+        native_auth::set_refresh_endpoint_for_tests(None);
+        assert_eq!(status, 200, "{body}");
+        assert!(body.contains("morning"), "{body}");
+        assert_eq!(refreshes.try_iter().count(), 1);
+        let bearers: Vec<String> = seen
+            .try_iter()
+            .map(|request| request["__authorization"].as_str().unwrap().to_owned())
+            .collect();
+        assert_eq!(bearers, ["Bearer stale-access", "Bearer fresh-access"]);
+        let kept = config::load(&agent).unwrap();
+        let Credential::Subscription {
+            access,
+            refresh,
+            email,
+            ..
+        } = &kept.accounts[0].credential
+        else {
+            panic!("The account lost its subscription.");
+        };
+        assert_eq!(access, "fresh-access");
+        assert_eq!(refresh.as_deref(), Some("fresh-refresh"));
+        assert_eq!(email.as_deref(), Some("pat@example.com"));
+        assert!(usage::load(&agent)
+            .account("s1")
+            .unwrap()
+            .last_error
+            .is_none());
+        std::fs::remove_dir_all(agent).unwrap();
     }
 
     #[test]
@@ -3887,6 +4053,109 @@ mod tests {
         );
         assert_eq!(seen_first.try_iter().count(), 0);
         assert_eq!(seen_second.try_iter().count(), 0);
+        std::fs::remove_dir_all(agent).unwrap();
+    }
+
+    #[test]
+    fn a_refused_key_reads_as_the_step_that_fixes_it_once() {
+        let agent = agent_dir();
+        let expired = json!({
+            "error": {
+                "message": "Your authentication token has expired.",
+                "code": "token_expired"
+            },
+            "status": 401
+        })
+        .to_string();
+        let (url, _) = upstream(vec![(401, expired, false)]);
+        config::save(&agent, &config(vec![account("a1", &url)])).unwrap();
+        let handle = start_with_clock(agent.clone(), fixed_clock).unwrap();
+        let (status, body) = call(
+            handle.endpoint(),
+            "POST",
+            "/v1/chat/completions",
+            Some(&turn("fast", false)),
+            &handle.endpoint().token,
+        );
+        assert_eq!(status, 401, "{body}");
+        let message = serde_json::from_str::<Value>(&body).unwrap()["error"]["message"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(
+            message.starts_with(
+                "No eligible model served this turn. The OpenAI key was refused. Check it in Models. {"
+            ),
+            "{message}"
+        );
+        assert!(message.contains("token_expired"), "{message}");
+        assert_eq!(message.matches("No eligible model").count(), 1, "{message}");
+        let ledger = usage::load(&agent);
+        assert!(usage::last_error_refused_credential(
+            ledger.account("a1").unwrap().last_error.as_deref().unwrap()
+        ));
+        std::fs::remove_dir_all(agent).unwrap();
+    }
+
+    #[test]
+    fn a_provider_refusal_names_its_cause_and_keeps_the_body() {
+        let agent = agent_dir();
+        let body = r#"{"code":"invalid-argument","error":"Client-side tools for multi-agent models require beta access"}"#;
+        let (url, _) = upstream(vec![(400, body.into(), false)]);
+        let mut xai = account("a1", &url);
+        xai.family = "xai".into();
+        xai.models = vec!["grok-test".into()];
+        let mut configuration = config(vec![xai]);
+        configuration.routes[0].family = "xai".into();
+        configuration.routes[0].model = "grok-test".into();
+        config::save(&agent, &configuration).unwrap();
+        let handle = start_with_clock(agent.clone(), fixed_clock).unwrap();
+        let (status, answer) = call(
+            handle.endpoint(),
+            "POST",
+            "/v1/chat/completions",
+            Some(&turn("fast", false)),
+            &handle.endpoint().token,
+        );
+        assert_eq!(status, 400, "{answer}");
+        let message = serde_json::from_str::<Value>(&answer).unwrap()["error"]["message"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(
+            message.starts_with(
+                "No eligible model served this turn. xAI refused this model: it requires beta access. {"
+            ),
+            "{message}"
+        );
+        assert!(message.contains(body), "{message}");
+        assert_eq!(
+            usage::model_refusal_sentence(&message).as_deref(),
+            Some("xAI refused this model: it requires beta access.")
+        );
+        std::fs::remove_dir_all(agent).unwrap();
+    }
+
+    #[test]
+    fn mixed_failures_name_no_single_refusal() {
+        let agent = agent_dir();
+        let refused = r#"{"error":{"message":"Bad request shape."}}"#;
+        let (first, _) = upstream(vec![(400, refused.into(), false)]);
+        let (second, _) = upstream(vec![(500, "boom".into(), false)]);
+        config::save(
+            &agent,
+            &config(vec![account("a1", &second), account("a2", &first)]),
+        )
+        .unwrap();
+        let handle = start_with_clock(agent.clone(), fixed_clock).unwrap();
+        let (_, answer) = call(
+            handle.endpoint(),
+            "POST",
+            "/v1/chat/completions",
+            Some(&turn("fast", false)),
+            &handle.endpoint().token,
+        );
+        assert!(!answer.contains(usage::MODEL_REFUSED), "{answer}");
         std::fs::remove_dir_all(agent).unwrap();
     }
 

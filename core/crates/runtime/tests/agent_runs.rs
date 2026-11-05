@@ -359,23 +359,31 @@ fn a_routine_run_that_replies_no_response_posts_nothing() {
         proposed: false,
         last_poll: None,
         next_fire_at: None,
+        cut_short: false,
+        default_time: false,
     });
     let agent = agents::save(setup.profile(), agent).unwrap();
     setup.tick();
     let next = agents::state(setup.profile()).unwrap().routines[&agent.id]["check"].next_fire_at;
     assert!(next.is_some_and(|next| next > agent_runs::now()));
-    agents::with_state(setup.profile(), |state| {
-        state
-            .routines
-            .get_mut(&agent.id)
-            .unwrap()
-            .get_mut("check")
-            .unwrap()
-            .next_fire_at = Some(agent_runs::now() - 30);
-        Ok(())
-    })
-    .unwrap();
+    let fire_at = |at: i64| {
+        agents::with_state(setup.profile(), |state| {
+            state
+                .routines
+                .get_mut(&agent.id)
+                .unwrap()
+                .get_mut("check")
+                .unwrap()
+                .next_fire_at = Some(at);
+            Ok(())
+        })
+        .unwrap();
+    };
+    fire_at(agent_runs::now() - 30);
     setup.tick();
+    // The routine fires once. A later tick that crosses the next five-minute
+    // mark would fire it again into the same thread.
+    fire_at(agent_runs::now() + 3600);
     let routine_run = setup.store().latest(&agent.id).unwrap().unwrap();
     assert_eq!(routine_run.trigger.kind, TriggerKind::Cron);
     assert_eq!(routine_run.trigger.routine_id.as_deref(), Some("check"));
@@ -562,6 +570,93 @@ fn an_agent_runs_on_its_model_and_thinking_with_every_tool_behind_its_gate() {
     .unwrap();
     let verdict: Value = serde_json::from_str(answer["value"].as_str().unwrap()).unwrap();
     assert_eq!(verdict["decision"], "allow");
+}
+
+#[test]
+fn an_agents_own_runs_use_its_model_while_user_messages_use_the_threads_pick() {
+    let _environment = ENVIRONMENT
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let setup = Setup::new("agent-runs-model-source", true, RuntimeHost::default());
+    let args = setup.temporary.root.join("args.txt");
+    std::env::set_var("PI_RESUME_STUB_ARGS", &args);
+    let agent: Agent = serde_json::from_value(json!({
+        "name": "Reporter",
+        "instructions": "Report.",
+        "model": {"provider": "stub", "id": "stub-model"}
+    }))
+    .unwrap();
+    let agent = agents::save(setup.profile(), agent).unwrap();
+    let model = || {
+        let args = std::fs::read_to_string(&args).unwrap();
+        let mut pairs = args.lines().collect::<Vec<_>>().into_iter();
+        let mut chosen = None;
+        while let Some(arg) = pairs.next() {
+            if arg == "--model" {
+                chosen = pairs.next().map(str::to_owned);
+            }
+        }
+        chosen
+    };
+    let finish = |run: &Run| {
+        setup.tick();
+        assert!(wait(|| setup.live() == 0));
+        setup.tick();
+        let run = setup.run(&run.id);
+        assert_eq!(run.status, RunStatus::Completed, "{:?}", run.error);
+        run
+    };
+
+    // Run now opens the agent's thread on its model.
+    let first = finish(&enqueue(&setup.store(), &agent.id, TriggerKind::Manual));
+    assert_eq!(model().as_deref(), Some("stub-model"));
+    let thread = first.thread_id.clone().unwrap();
+
+    // The user picks another model in the agent's thread. A message the
+    // user sends there, here relayed by another machine, runs on the pick.
+    muniment_core::thread_settings::set_model(
+        setup.profile(),
+        &thread,
+        Some(muniment_core::projects::DefaultModel {
+            provider: "picked".into(),
+            model: "picked-model".into(),
+        }),
+    )
+    .unwrap();
+    let relayed = setup
+        .store()
+        .enqueue(NewRun {
+            agent_id: agent.id.clone(),
+            thread_id: Some(thread.clone()),
+            trigger: RunTrigger {
+                kind: TriggerKind::Manual,
+                routine_id: None,
+                source: Some("swarm:member".into()),
+            },
+            prompt: "What changed?".into(),
+            hop: 0,
+            origin_run_id: None,
+        })
+        .unwrap();
+    finish(&relayed);
+    assert_eq!(model().as_deref(), Some("picked-model"));
+
+    // The agent's scheduled, triggered and Run now runs keep its model.
+    for kind in [TriggerKind::Cron, TriggerKind::Webhook, TriggerKind::Manual] {
+        let _ = std::fs::remove_file(&args);
+        let run = finish(&enqueue(&setup.store(), &agent.id, kind));
+        assert_eq!(run.thread_id.as_deref(), Some(thread.as_str()));
+        // The first leaves the pick's process, and the next ones may take
+        // the idle process that already runs the agent's model.
+        if kind == TriggerKind::Cron {
+            assert!(args.exists());
+        }
+        if args.exists() {
+            assert_eq!(model().as_deref(), Some("stub-model"), "{kind:?}");
+        }
+    }
+    let threads = muniment_core::thread_settings::read(setup.profile(), &thread).unwrap();
+    assert_eq!(threads.model.unwrap().model, "picked-model");
 }
 
 #[test]
@@ -1194,4 +1289,245 @@ fn nobody_answers_an_unattended_gate_so_its_action_is_denied_and_the_run_pauses(
     assert_eq!(answered.len(), 1, "{answered:?}");
     assert_eq!(answered[0]["cancelled"], true);
     assert!(answered[0].get("confirmed").is_none());
+}
+
+#[test]
+fn an_agent_whose_primary_thread_was_deleted_runs_in_a_new_primary_thread() {
+    use muniment_core::journal::thread_mutation::{
+        append_thread_delete_now, delete_thread_with_creation_now,
+    };
+    let _environment = ENVIRONMENT
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let setup = Setup::new("agent-runs-deleted-primary", true, RuntimeHost::default());
+    let agent = setup.agent("Morning");
+    let provenance = muniment_core::journal::Provenance {
+        source: "test".into(),
+        source_version: "1".into(),
+        actor_id: None,
+        device_id: None,
+        rpc_request_id: None,
+        capability_versions: None,
+        extra: Default::default(),
+    };
+    let run_once = || {
+        agents::queue_run(setup.profile(), &agent.id).unwrap();
+        let run = setup.store().latest(&agent.id).unwrap().unwrap();
+        setup.tick();
+        let started = setup.run(&run.id);
+        assert_eq!(started.status, RunStatus::Running, "{started:?}");
+        setup.finish(&run.id);
+        setup.tick();
+        assert_eq!(setup.run(&run.id).status, RunStatus::Completed);
+        started.thread_id.unwrap()
+    };
+    let primary = || agents::state(setup.profile()).unwrap().primary_threads[&agent.id].clone();
+
+    let first = run_once();
+    assert_eq!(primary(), first);
+    // The journal deletes the thread and the agent state still names it, as
+    // a delete before the state repair left it.
+    {
+        let storage = open_profile_storage(setup.profile()).unwrap();
+        append_thread_delete_now(
+            &mut storage.lock().unwrap().journal,
+            None,
+            &first,
+            &provenance,
+        )
+        .unwrap();
+    }
+    assert_eq!(primary(), first);
+
+    // The next run starts a new primary thread instead of `ThreadNotFound`.
+    let second = run_once();
+    assert_ne!(second, first);
+    assert_eq!(primary(), second);
+    assert!(!agents::state(setup.profile())
+        .unwrap()
+        .threads
+        .contains_key(&first));
+
+    // A thread delete drops the primary thread from the agent state at once.
+    {
+        let storage = open_profile_storage(setup.profile()).unwrap();
+        delete_thread_with_creation_now(
+            &mut storage.lock().unwrap().journal,
+            setup.profile(),
+            None,
+            &second,
+            &provenance,
+        )
+        .unwrap();
+    }
+    assert!(!agents::state(setup.profile())
+        .unwrap()
+        .primary_threads
+        .contains_key(&agent.id));
+    let third = run_once();
+    assert_ne!(third, second);
+    assert_eq!(primary(), third);
+}
+
+#[test]
+fn run_now_starts_the_run_without_waiting_for_the_next_schedule_pass() {
+    let _environment = ENVIRONMENT
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let setup = Setup::new("agent-run-now-kick", true, RuntimeHost::default());
+    setup.state.use_pi_artifact(setup.artifact);
+    setup.state.bind_swarm();
+    let agent = setup.agent("Prompt");
+    // No schedule pass runs in this test, so only the request itself can
+    // start the queued run.
+    let answer = permission_operation(&setup, "agent.run_now", json!({"id": agent.id})).unwrap();
+    let run_id = answer["run"]["id"].as_str().unwrap().to_owned();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && setup.run(&run_id).status == RunStatus::Queued {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert_ne!(setup.run(&run_id).status, RunStatus::Queued);
+}
+
+#[test]
+fn a_run_now_reply_ends_its_record_without_waiting_for_the_next_schedule_pass() {
+    let _environment = ENVIRONMENT
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let setup = Setup::new("agent-run-ended-kick", true, RuntimeHost::default());
+    setup.state.use_pi_artifact(setup.artifact);
+    setup.state.bind_swarm();
+    let events = agent_runs::subscribe(setup.profile());
+    let agent = setup.agent("Prompt");
+    // No schedule pass runs in this test, so only the end of the reply can
+    // end the run's record.
+    let answer = permission_operation(&setup, "agent.run_now", json!({"id": agent.id})).unwrap();
+    let run_id = answer["run"]["id"].as_str().unwrap().to_owned();
+    assert!(
+        wait(|| setup.run(&run_id).status == RunStatus::Completed),
+        "{:?}",
+        setup.run(&run_id)
+    );
+    let run = setup.run(&run_id);
+    assert!(run.lease_owner.is_none());
+    assert!(run.result_summary.is_some());
+    assert_eq!(
+        agents::state(setup.profile()).unwrap().runs[&agent.id].status,
+        "completed"
+    );
+    let completed = events
+        .try_iter()
+        .any(|event| event["id"] == run_id.as_str() && event["status"] == "completed");
+    assert!(completed, "the card hears the run ended");
+}
+
+/// A thread created long ago that holds only its creation, as an agent's
+/// creation chat holds when its messages live in its creation record.
+fn bare_thread(profile: &Path) -> String {
+    let mut journal =
+        muniment_core::journal::RunJournal::open(profile.join("runs.sqlite3")).unwrap();
+    let mut extra = std::collections::BTreeMap::new();
+    extra.insert("attach_profile".to_owned(), json!("desktop-owner"));
+    journal
+        .create_thread(
+            "local",
+            "2026-08-06T12:34:56Z",
+            muniment_core::journal::Provenance {
+                source: "muniment-runtime".into(),
+                source_version: "test".into(),
+                actor_id: None,
+                device_id: None,
+                rpc_request_id: None,
+                capability_versions: None,
+                extra,
+            },
+        )
+        .unwrap()
+}
+
+fn creation_chat(profile: &Path, thread_id: &str, agent: &str) {
+    muniment_core::creations::save(
+        profile,
+        muniment_core::creations::Creation {
+            thread_id: thread_id.to_owned(),
+            kind: "agent".into(),
+            goal: "Watch the deploys".into(),
+            output: "A saved agent".into(),
+            result_id: Some(agent.to_owned()),
+            turns: Vec::new(),
+            title: None,
+            created_at: None,
+        },
+    )
+    .unwrap();
+}
+
+fn thread_deleted(profile: &Path, thread_id: &str) -> bool {
+    muniment_core::journal::RunJournal::open(profile.join("runs.sqlite3"))
+        .unwrap()
+        .thread_events(thread_id)
+        .unwrap()
+        .iter()
+        .any(|event| event.event_type == "thread.deleted")
+}
+
+#[test]
+fn deleting_an_agent_deletes_its_creation_chat() {
+    let _environment = ENVIRONMENT
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let setup = Setup::new("agent-delete-creation", true, RuntimeHost::default());
+    let agent = setup.agent("Deploy watcher");
+    let chat = bare_thread(setup.profile());
+    creation_chat(setup.profile(), &chat, &agent.id);
+    let unrelated = bare_thread(setup.profile());
+
+    permission_operation(
+        &setup,
+        "agent.delete",
+        json!({"id": agent.id, "remove_memory": false}),
+    )
+    .unwrap();
+    assert!(thread_deleted(setup.profile(), &chat));
+    assert!(muniment_core::creations::read(setup.profile(), &chat)
+        .unwrap()
+        .is_none());
+    assert!(!thread_deleted(setup.profile(), &unrelated));
+}
+
+#[test]
+fn the_runtime_start_deletes_the_creation_chats_deleted_agents_left() {
+    let _environment = ENVIRONMENT
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let temporary = TemporaryProfile::new("creation-sweep", false);
+    let profile = &temporary.profile;
+    muniment_core::home::confirm_home(profile, &temporary.root.join("muniment")).unwrap();
+    let left = bare_thread(profile);
+    let recorded = bare_thread(profile);
+    creation_chat(profile, &recorded, &uuid::Uuid::new_v4().to_string());
+    let open = bare_thread(profile);
+    muniment_core::creations::save(
+        profile,
+        muniment_core::creations::Creation {
+            thread_id: open.clone(),
+            kind: "agent".into(),
+            goal: "Watch the deploys".into(),
+            output: "A saved agent".into(),
+            result_id: None,
+            turns: Vec::new(),
+            title: None,
+            created_at: None,
+        },
+    )
+    .unwrap();
+
+    let _state = RuntimeAttachState::open(RuntimeHost::default(), profile, profile).unwrap();
+    assert!(thread_deleted(profile, &left));
+    assert!(thread_deleted(profile, &recorded));
+    assert!(muniment_core::creations::read(profile, &recorded)
+        .unwrap()
+        .is_none());
+    // A creation chat that has not saved its agent yet stays.
+    assert!(!thread_deleted(profile, &open));
 }

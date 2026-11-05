@@ -238,9 +238,52 @@ fn root(profile: &Path) -> Result<PathBuf, String> {
     fs::create_dir_all(&root).map_err(|_| "The agents folder is unavailable.")?;
     Ok(root)
 }
+/// Where an agent's folder is, found without a write.
+enum Location {
+    /// The folder the name index records.
+    Recorded(PathBuf),
+    /// A folder whose `agent.md` holds the agent, which no save recorded
+    /// yet, with the agent's name.
+    Unrecorded(PathBuf, String),
+    Missing,
+}
+fn locate(profile: &Path, id: &str) -> Result<Location, String> {
+    let root = crate::memory_files::home(profile)?.join("agents");
+    if let Some(name) = crate::workspace_names::recorded(profile, &root, id)? {
+        return Ok(Location::Recorded(root.join(name)));
+    }
+    let Ok(entries) = fs::read_dir(&root) else {
+        return Ok(Location::Missing);
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_symlink() {
+            continue;
+        }
+        if let Ok(agent) = read_file(&path.join("agent.md"), Some(id)) {
+            return Ok(Location::Unrecorded(path, agent.name));
+        }
+    }
+    Ok(Location::Missing)
+}
+/// An agent's folder for a write. A folder no save recorded yet is recorded
+/// under its agent's name. An agent no folder holds, such as one a delete
+/// removed, has no folder: a write for it would make an `Untitled-` folder
+/// that no agent owns.
 pub fn folder(profile: &Path, id: &str) -> Result<PathBuf, String> {
     uuid::Uuid::parse_str(id).map_err(|_| "The agent identifier is invalid.")?;
-    let folder = crate::workspace_names::resolve(profile, &root(profile)?, id, None, None)?;
+    let (name, legacy) = match locate(profile, id)? {
+        Location::Unrecorded(folder, name) => (Some(name), Some(folder)),
+        Location::Recorded(_) => (None, None),
+        Location::Missing => return Err("The agent is unavailable.".into()),
+    };
+    let folder = crate::workspace_names::resolve(
+        profile,
+        &root(profile)?,
+        id,
+        name.as_deref(),
+        legacy.as_deref(),
+    )?;
     if folder.is_symlink() {
         return Err("The agent folder must not be a symbolic link.".into());
     }
@@ -278,6 +321,10 @@ fn write_with(
     result
 }
 fn write_error(step: &str, error: std::io::Error) -> String {
+    use crate::disk_full::DiskFull;
+    if error.is_disk_full() {
+        return crate::disk_full::DISK_FULL_MESSAGE.into();
+    }
     let code = error
         .raw_os_error()
         .map(|code| code.to_string())
@@ -303,12 +350,25 @@ pub fn persist_state(profile: &Path, state: &State) -> Result<(), String> {
         &serde_json::to_vec(state).map_err(|_| "Agent state cannot be saved.")?,
     )
 }
+/// Reads one agent. A read writes nothing: it finds a folder no save
+/// recorded yet and records none.
 pub fn get(profile: &Path, id: &str) -> Result<Agent, String> {
-    let path = folder(profile, id)?.join("agent.md");
+    uuid::Uuid::parse_str(id).map_err(|_| "The agent identifier is invalid.")?;
+    let folder = match locate(profile, id)? {
+        Location::Recorded(folder) | Location::Unrecorded(folder, _) => folder,
+        Location::Missing => return Err("The agent is unavailable.".into()),
+    };
+    if folder.is_symlink() {
+        return Err("The agent folder must not be a symbolic link.".into());
+    }
+    read_file(&folder.join("agent.md"), Some(id))
+}
+/// Reads one `agent.md`. With `id`, the file must hold that agent.
+fn read_file(path: &Path, id: Option<&str>) -> Result<Agent, String> {
     if path.is_symlink() {
         return Err("The agent file must not be a symbolic link.".into());
     }
-    if fs::metadata(&path)
+    if fs::metadata(path)
         .map_err(|_| "The agent is unavailable.")?
         .len()
         > 128 * 1024
@@ -325,9 +385,10 @@ pub fn get(profile: &Path, id: &str) -> Result<Agent, String> {
         .ok_or("The agent format is invalid.")?;
     let mut agent: Agent =
         serde_json::from_str(metadata).map_err(|_| "The agent settings are invalid.")?;
-    if agent.id != id {
+    if id.is_some_and(|id| agent.id != id) {
         return Err("The agent identifier does not match its folder.".into());
     }
+    uuid::Uuid::parse_str(&agent.id).map_err(|_| "The agent identifier is invalid.")?;
     agent.instructions = instructions.trim_end().into();
     migrate(&mut agent)?;
     validate(&agent)?;
@@ -335,8 +396,13 @@ pub fn get(profile: &Path, id: &str) -> Result<Agent, String> {
     Ok(agent)
 }
 /// Reads a v1 `schedule` as the cron routine it becomes, and fills the
-/// `schedule` a v1 client reads from that routine.
+/// `schedule` a v1 client reads from that routine. A routine an older
+/// extraction cut at its name limit gets its full prompt back when the
+/// instructions still hold it.
 fn migrate(agent: &mut Agent) -> Result<(), String> {
+    for routine in &mut agent.routines {
+        crate::agent_extract::mend_cut_routine(routine, &agent.instructions);
+    }
     let existing = agent
         .routines
         .iter()
@@ -399,34 +465,41 @@ fn apply_schedule(agent: &mut Agent) -> Result<(), String> {
     Ok(())
 }
 /// Lists every agent. A folder whose `agent.md` does not load is left out
-/// and named in `errors`.
+/// and named in `errors`. A list only reads: it renames no folder and saves
+/// no state, so it answers on a full or read-only disk. [`mend`] makes the
+/// repairs a list would need.
 pub fn list(profile: &Path) -> Result<AgentList, String> {
     let mut agents = Vec::new();
     let mut errors = Vec::new();
-    for entry in fs::read_dir(root(profile)?).map_err(|_| "The agents could not be read.")? {
-        let Ok(entry) = entry else {
-            continue;
-        };
-        let path = entry.path().join("agent.md");
-        if entry.path().is_symlink() || !path.is_file() {
-            continue;
-        }
-        let folder = entry.file_name().to_string_lossy().into_owned();
-        match load_entry(profile, &entry.path(), &path) {
-            Ok(Some(agent)) => agents.push(agent),
-            Ok(None) => {}
-            Err(error) => errors.push(AgentLoadError { folder, error }),
+    let root = crate::memory_files::home(profile)?.join("agents");
+    if root.is_symlink() {
+        return Err("The agents folder must not be a symbolic link.".into());
+    }
+    if root.is_dir() {
+        // A save renames the folder first, so the scan waits for it and
+        // never sees an agent in neither folder.
+        let _lock = read_lock(profile)?;
+        for entry in fs::read_dir(&root).map_err(|_| "The agents could not be read.")? {
+            let Ok(entry) = entry else {
+                continue;
+            };
+            let path = entry.path().join("agent.md");
+            if entry.path().is_symlink() || !path.is_file() {
+                continue;
+            }
+            let folder = entry.file_name().to_string_lossy().into_owned();
+            match read_file(&path, None) {
+                Ok(agent) => agents.push(agent),
+                Err(error) => errors.push(AgentLoadError { folder, error }),
+            }
         }
     }
     agents.sort_by(|a, b| a.name.cmp(&b.name));
     errors.sort_by(|a, b| a.folder.cmp(&b.folder));
-    with_state(profile, |state| {
-        for agent in &agents {
-            ensure_primary(state, &agent.id);
-        }
-        Ok(())
-    })?;
-    let state = state(profile)?;
+    let mut state = state(profile)?;
+    for agent in &agents {
+        ensure_primary(&mut state, &agent.id);
+    }
     for agent in &mut agents {
         apply_routine_state(agent, &state);
     }
@@ -436,24 +509,67 @@ pub fn list(profile: &Path) -> Result<AgentList, String> {
         errors,
     })
 }
-fn load_entry(profile: &Path, folder: &Path, path: &Path) -> Result<Option<Agent>, String> {
-    let text = fs::read_to_string(path).map_err(|_| "The agent file could not be read.")?;
-    let Some(metadata) = text
-        .strip_prefix("```json\n")
-        .and_then(|s| s.split_once("\n```\n\n").map(|(m, _)| m))
-    else {
-        return Err("The agent format is invalid.".into());
+/// The agents lock for a reader: the lock a save holds, when one exists. A
+/// profile no save has touched has no lock file, and a read creates none.
+fn read_lock(profile: &Path) -> Result<Option<fs::File>, String> {
+    let file = match fs::File::open(profile.join("agents.lock")) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err("Agent settings are unavailable.".into()),
     };
-    let agent: Agent =
-        serde_json::from_str(metadata).map_err(|_| "The agent settings are invalid.")?;
-    crate::workspace_names::resolve(
-        profile,
-        &root(profile)?,
-        &agent.id,
-        Some(&agent.name),
-        Some(folder),
-    )?;
-    get(profile, &agent.id).map(Some)
+    file.lock_shared().map_err(|_| "Agent settings are busy.")?;
+    Ok(Some(file))
+}
+/// Makes the repairs a list leaves undone: names each agent's folder after
+/// the name in its file, records a folder the name index lacks, and saves
+/// each agent's primary thread once. A consistent profile writes nothing.
+/// The schedule pass runs it and logs a failure, so a full disk delays a
+/// repair and fails no read.
+pub fn mend(profile: &Path) -> Result<(), String> {
+    let root = crate::memory_files::home(profile)?.join("agents");
+    if root.is_symlink() || !root.is_dir() {
+        return Ok(());
+    }
+    let mut ids = Vec::new();
+    {
+        // Each entry names its folder after the name in its file. A save
+        // renames the folder first, so the pass waits for it and never reads
+        // the old name back into the folder.
+        let _lock = lock(profile)?;
+        for entry in fs::read_dir(&root).map_err(|_| "The agents could not be read.")? {
+            let Ok(entry) = entry else {
+                continue;
+            };
+            let path = entry.path().join("agent.md");
+            if entry.path().is_symlink() || !path.is_file() {
+                continue;
+            }
+            let Ok(agent) = read_file(&path, None) else {
+                continue;
+            };
+            crate::workspace_names::resolve(
+                profile,
+                &root,
+                &agent.id,
+                Some(&agent.name),
+                Some(&entry.path()),
+            )?;
+            ids.push(agent.id);
+        }
+    }
+    let mut pinned = state(profile)?;
+    let unpinned = ids.iter().any(|id| {
+        !pinned.primary_threads.contains_key(id) && ensure_primary(&mut pinned, id).is_some()
+    });
+    if unpinned {
+        with_state(profile, |state| {
+            for id in &ids {
+                ensure_primary(state, id);
+            }
+            Ok(())
+        })?;
+    }
+    Ok(())
 }
 /// Fills each routine's last fire time, result, poll and next fire time
 /// from the runtime's state.
@@ -669,10 +785,28 @@ pub(crate) fn save_definition(
                     });
             }
         }
+        // A cut prompt stays marked until a save changes it. The mark comes
+        // from the saved routine, never from the client.
+        routine.cut_short = previous
+            .into_iter()
+            .flat_map(|previous| &previous.routines)
+            .any(|saved| {
+                saved.id == routine.id && saved.cut_short && saved.prompt == routine.prompt
+            });
         // An enabled routine is not a proposal.
         if routine.enabled {
             routine.proposed = false;
         }
+        // A picked time stays marked while the routine stays the same
+        // proposal. The mark comes from the saved routine, never from the
+        // client, so accepting or editing a proposal clears it.
+        routine.default_time = routine.proposed
+            && previous
+                .into_iter()
+                .flat_map(|previous| &previous.routines)
+                .any(|saved| {
+                    saved.id == routine.id && saved.default_time && saved.trigger == routine.trigger
+                });
         // The runtime keeps fire times, results and polls; a save never sets them.
         routine.last_fired_at = None;
         routine.last_result = None;
@@ -724,12 +858,22 @@ pub(crate) fn save_definition(
             ),
         });
     }
+    // A folder no save recorded yet, such as a hand-written one, becomes
+    // this agent's folder instead of a second one.
+    let legacy = if creating {
+        None
+    } else {
+        match locate(profile, &agent.id)? {
+            Location::Unrecorded(folder, _) => Some(folder),
+            _ => None,
+        }
+    };
     let directory = crate::workspace_names::resolve(
         profile,
         &root(profile)?,
         &agent.id,
         Some(&agent.name),
-        None,
+        legacy.as_deref(),
     )?;
     fs::create_dir_all(&directory).map_err(|_| "The agent folder could not be created.")?;
     let mut metadata = agent.clone();
@@ -754,9 +898,38 @@ pub(crate) fn save_definition(
     run.next_run = next_routine_fire(&agent, chrono::Utc::now());
     let saved = state.routines.entry(agent.id.clone()).or_default();
     saved.retain(|id, _| agent.routines.iter().any(|routine| &routine.id == id));
+    plan_cron_fires(&agent, saved, chrono::Utc::now());
     persist_state(profile, &state)?;
     apply_routine_state(&mut agent, &state);
     Ok(agent)
+}
+/// Sets each cron routine's next fire time as the run queue's pass does, so
+/// the save and the next list name it at once. A routine turned off has
+/// none. A new or changed schedule fires next after `now`, and an unchanged
+/// one keeps its due time. A paused agent or one with a primary machine
+/// waits for the pass, which knows the machine it runs on.
+fn plan_cron_fires(
+    agent: &Agent,
+    saved: &mut BTreeMap<String, RoutineState>,
+    now: chrono::DateTime<chrono::Utc>,
+) {
+    let here = agent.paused_reason.is_none() && agent.primary_runtime.is_none();
+    for routine in &agent.routines {
+        let Trigger::Cron(schedule) = &routine.trigger else {
+            continue;
+        };
+        let key = crate::agent_routines::schedule_key(routine);
+        let fire = saved.entry(routine.id.clone()).or_default();
+        if !routine.enabled {
+            fire.next_fire_at = None;
+            fire.key = key;
+        } else if here && (fire.key != key || fire.next_fire_at.is_none()) {
+            fire.next_fire_at = crate::agent_routines::next_cron_after(schedule, now)
+                .ok()
+                .map(|time| time.timestamp());
+            fire.key = key;
+        }
+    }
 }
 /// The earliest next fire of an agent's enabled cron routines.
 pub fn next_routine_fire(agent: &Agent, after: chrono::DateTime<chrono::Utc>) -> Option<i64> {
@@ -886,12 +1059,31 @@ pub fn ensure_primary(state: &mut State, id: &str) -> Option<String> {
     }
     thread
 }
+/// Drops a thread the journal no longer holds from every agent, so the
+/// agent's next run starts a new primary thread. Answers the agents whose
+/// primary thread it was.
+pub fn forget_thread(state: &mut State, thread: &str) -> Vec<String> {
+    state.threads.remove(thread);
+    let agents: Vec<String> = state
+        .primary_threads
+        .iter()
+        .filter(|(_, primary)| primary.as_str() == thread)
+        .map(|(agent, _)| agent.clone())
+        .collect();
+    for agent in &agents {
+        state.primary_threads.remove(agent);
+    }
+    agents
+}
+/// Runs `action` on the agent state under the agents lock and saves the
+/// state only when its bytes changed.
 pub fn with_state<T>(
     profile: &Path,
     action: impl FnOnce(&mut State) -> Result<T, String>,
 ) -> Result<T, String> {
     let _lock = lock(profile)?;
     let mut current = state(profile)?;
+    let before = serde_json::to_vec(&current).map_err(|_| "Agent state cannot be saved.")?;
     let result = action(&mut current)?;
     for (id, run) in &current.runs {
         if let Some(run_id) = &run.run_id {
@@ -910,7 +1102,12 @@ pub fn with_state<T>(
         let excess = history.len().saturating_sub(MAX_STATE_HISTORY);
         history.drain(..excess);
     }
-    persist_state(profile, &current)?;
+    // A pass that changes nothing writes nothing, so an idle schedule pass
+    // leaves the file and a full disk alone.
+    let after = serde_json::to_vec(&current).map_err(|_| "Agent state cannot be saved.")?;
+    if after != before {
+        write(&profile.join("agent-state.json"), &after)?;
+    }
     Ok(result)
 }
 /// Queues a manual run of an agent: a person asked it to run now. An agent
@@ -1029,19 +1226,184 @@ pub fn update_run(profile: &Path, id: &str, run: RunState) -> Result<(), String>
     state.runs.insert(id.into(), run);
     persist_state(profile, &state)
 }
-/// Removing an agent keeps outputs, its memory and existing thread history.
+/// Removing an agent keeps its memory, the user's files in its folder and
+/// existing thread history.
 pub fn delete(profile: &Path, id: &str) -> Result<(), String> {
-    delete_agent(profile, id, false)
+    delete_agent(profile, id, false).map(drop)
 }
-/// Removes an agent, its routines and its run history. With
-/// `remove_memory`, its private memory folder goes too; the user confirms
-/// that first, since the memory cannot be recovered.
-pub fn delete_agent(profile: &Path, id: &str, remove_memory: bool) -> Result<(), String> {
-    remove_agent(profile, id, remove_memory)?;
+/// What a delete left in place.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Deleted {
+    /// The agent's folder, kept because it holds the user's files.
+    pub folder_kept: Option<PathBuf>,
+}
+/// The folder Muniment keeps its own files in, inside an agent's folder.
+const INTERNAL_FOLDER: &str = ".muniment";
+/// The folder at an agent's top that the workspace onboarding writes its
+/// memory scaffold in.
+const SCAFFOLD_FOLDER: &str = "memory";
+/// Whether `folder` holds only what Muniment and the system write there: the
+/// `.muniment` folder at its top, the onboarding's memory scaffold files with
+/// the bytes it wrote, Finder's `.DS_Store` and empty folders. A link, a
+/// scaffold file the user changed or any other file is the user's.
+fn holds_only_internals(folder: &Path, top: bool) -> bool {
+    holds_only(folder, top, false)
+}
+fn is_unchanged_scaffold_file(path: &Path, name: &std::ffi::OsStr) -> bool {
+    muniment_attach::WORKSPACE_MEMORY_SCAFFOLD
+        .iter()
+        .any(|(scaffold, contents)| {
+            name == *scaffold
+                && fs::symlink_metadata(path)
+                    .is_ok_and(|metadata| metadata.len() == contents.len() as u64)
+                && fs::read(path).is_ok_and(|bytes| bytes == *contents)
+        })
+}
+fn holds_only(folder: &Path, top: bool, scaffold: bool) -> bool {
+    let Ok(entries) = fs::read_dir(folder) else {
+        return false;
+    };
+    entries.into_iter().all(|entry| {
+        let Ok(entry) = entry else {
+            return false;
+        };
+        let Ok(kind) = entry.file_type() else {
+            return false;
+        };
+        let name = entry.file_name();
+        if kind.is_symlink() {
+            false
+        } else if kind.is_dir() {
+            (top && name == INTERNAL_FOLDER)
+                || holds_only(&entry.path(), false, top && name == SCAFFOLD_FOLDER)
+        } else {
+            kind.is_file()
+                && (name == ".DS_Store"
+                    || (scaffold && is_unchanged_scaffold_file(&entry.path(), &name)))
+        }
+    })
+}
+/// Removes an agent's or a thread's folder that holds only Muniment's own
+/// files. Answers the folder when it stays.
+pub(crate) fn remove_folder(folder: &Path) -> Option<PathBuf> {
+    if folder.is_symlink() || !folder.exists() {
+        return None;
+    }
+    if holds_only_internals(folder, true) && fs::remove_dir_all(folder).is_ok() {
+        return None;
+    }
+    Some(folder.to_path_buf())
+}
+/// Removes each folder under the agents folder that the name index records,
+/// that no agent holds, and that holds only Muniment's own files, as an
+/// agent delete leaves when the folder held run output. A folder with any
+/// other file stays. Answers the names of the removed folders.
+pub fn remove_deleted_folders(profile: &Path) -> Result<Vec<String>, String> {
+    let Some(home) = crate::home::configured_home(profile).map_err(|e| e.to_string())? else {
+        return Ok(Vec::new());
+    };
+    let root = home.join("agents");
+    if !root.is_dir() || root.is_symlink() {
+        return Ok(Vec::new());
+    }
+    let recorded = crate::workspace_names::recorded_names(profile, &root)?;
+    // A save writes `agent.md` under this lock, so a folder without one
+    // holds no agent while the sweep runs.
+    let _lock = lock(profile)?;
+    let mut removed = Vec::new();
+    for entry in fs::read_dir(&root).map_err(|_| "The agents could not be read.")? {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let path = entry.path();
+        if !entry.file_type().is_ok_and(|kind| kind.is_dir())
+            || !recorded.contains(&name)
+            || path.join("agent.md").exists()
+            || path.join("agent.md").is_symlink()
+        {
+            continue;
+        }
+        if remove_folder(&path).is_none() {
+            removed.push(name);
+        }
+    }
+    Ok(removed)
+}
+/// The files an agent's private memory folder holds that its facts rebuild:
+/// the search index and the record of chats already read for facts.
+const MEMORY_INDEX_FILES: [&str; 5] = [
+    "memory-index.sqlite3",
+    "memory-index.sqlite3-wal",
+    "memory-index.sqlite3-shm",
+    "memory-index.sqlite3-journal",
+    "memory-extracted.json",
+];
+/// Removes the index files from the private memory folder of agent `id`
+/// under `memory`, then the folder when nothing else stays in it. Deleted
+/// facts under it stay restorable. Answers whether the folder went.
+fn remove_memory_index(memory: &Path, id: &str) -> bool {
+    let folder = memory.join(id);
+    if memory.is_symlink() || folder.is_symlink() || !folder.is_dir() {
+        return false;
+    }
+    for name in MEMORY_INDEX_FILES {
+        let file = folder.join(name);
+        if file.is_file() && !file.is_symlink() {
+            let _ = fs::remove_file(file);
+        }
+    }
+    fs::remove_dir(&folder).is_ok()
+}
+/// Removes the index files, and the folder when nothing else stays, of each
+/// private memory folder under `agent-memory` whose agent no longer exists,
+/// as a delete that kept the memory or an older version leaves. A folder
+/// whose agent's folder or name cannot be read stays. Deleted facts stay
+/// restorable, and the shared memory outside `agent-memory` is never read.
+/// Answers the agent ids whose folders went.
+pub fn remove_deleted_memory(profile: &Path) -> Result<Vec<String>, String> {
+    let memory = profile.join("agent-memory");
+    if memory.is_symlink() || !memory.is_dir() {
+        return Ok(Vec::new());
+    }
+    // A save writes `agent.md` under this lock, so an agent cannot appear
+    // while the sweep runs.
+    let _lock = lock(profile)?;
+    let mut removed = Vec::new();
+    for entry in fs::read_dir(&memory).map_err(|_| "The agent memory could not be read.")? {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let id = entry.file_name().to_string_lossy().into_owned();
+        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) || uuid::Uuid::parse_str(&id).is_err()
+        {
+            continue;
+        }
+        let gone = match locate(profile, &id) {
+            Ok(Location::Missing) => true,
+            Ok(Location::Recorded(folder) | Location::Unrecorded(folder, _)) => {
+                let file = folder.join("agent.md");
+                !file.exists() && !file.is_symlink()
+            }
+            Err(_) => false,
+        };
+        if gone && remove_memory_index(&memory, &id) {
+            removed.push(id);
+        }
+    }
+    Ok(removed)
+}
+/// Removes an agent, its routines and its run history, and its folder when
+/// that holds only Muniment's own files. A folder with the user's files
+/// stays, and the answer names it. With `remove_memory`, its private memory
+/// folder and the facts its memory holds in its folder go too; the user
+/// confirms that first, since the memory cannot be recovered.
+pub fn delete_agent(profile: &Path, id: &str, remove_memory: bool) -> Result<Deleted, String> {
+    let deleted = remove_agent(profile, id, remove_memory)?;
     forget_in_messaging(profile, id);
-    Ok(())
+    Ok(deleted)
 }
-fn remove_agent(profile: &Path, id: &str, remove_memory: bool) -> Result<(), String> {
+fn remove_agent(profile: &Path, id: &str, remove_memory: bool) -> Result<Deleted, String> {
     let _lock = lock(profile)?;
     let store = RunStore::open(profile)?;
     if store.active()?.iter().any(|run| run.agent_id == id) {
@@ -1054,7 +1416,15 @@ fn remove_agent(profile: &Path, id: &str, remove_memory: bool) -> Result<(), Str
     }
     fs::remove_file(directory.join("agent.md")).map_err(|_| "The agent could not be deleted.")?;
     crate::agent_replays::remove_all(profile, id)?;
-    let _ = fs::remove_dir(directory);
+    if remove_memory && !directory.is_symlink() {
+        // The facts the memory store wrote are the agent's memory, so they
+        // go before the folder rule reads the folder.
+        crate::memory_files::remove_store_written_in(&directory);
+    }
+    // The folder's name record goes with the folder, so the index never
+    // names a folder that is gone. A kept folder keeps its record.
+    let folder_kept =
+        crate::workspace_names::remove_recorded(profile, &root(profile)?, id, remove_folder)?;
     if remove_memory {
         match fs::remove_dir_all(memory.join(id)) {
             Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
@@ -1062,6 +1432,9 @@ fn remove_agent(profile: &Path, id: &str, remove_memory: bool) -> Result<(), Str
             }
             _ => {}
         }
+    } else {
+        // The agent's index goes with it. Its deleted facts stay restorable.
+        remove_memory_index(&memory, id);
     }
     store.delete_agent(id)?;
     let mut state = state(profile)?;
@@ -1080,7 +1453,33 @@ fn remove_agent(profile: &Path, id: &str, remove_memory: bool) -> Result<(), Str
             let _ = crate::creations::remove(profile, &creation.thread_id);
         }
     }
-    Ok(())
+    Ok(Deleted { folder_kept })
+}
+/// The creation chats of one agent: the threads whose creation record
+/// made it, each with the time it became one. Read them before
+/// [`delete_agent`], which removes the records.
+pub fn creation_threads(profile: &Path, id: &str) -> Vec<crate::creations::CreationChat> {
+    crate::creations::list(profile)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|creation| creation.kind == "agent" && creation.result_id.as_deref() == Some(id))
+        .map(|creation| crate::creations::CreationChat {
+            started_at: creation.started_at(),
+            thread_id: creation.thread_id,
+        })
+        .collect()
+}
+/// Whether an agent exists: its folder holds its `agent.md`. An agent this
+/// cannot tell exists.
+pub fn exists(profile: &Path, id: &str) -> bool {
+    match locate(profile, id) {
+        Ok(Location::Missing) => false,
+        Ok(Location::Recorded(folder) | Location::Unrecorded(folder, _)) => {
+            let file = folder.join("agent.md");
+            file.exists() || file.is_symlink()
+        }
+        Err(_) => true,
+    }
 }
 /// Drops a deleted agent from the agents that named it in their messaging
 /// list, so a list naming only that agent does not read as empty. An agent
@@ -1131,13 +1530,17 @@ pub struct AgentLaunch {
     pub skills: Vec<String>,
     /// The run's permission gate. Every agent run loads it.
     pub permissions: Option<crate::permission_gate::RunPermissions>,
+    /// The agent started the run itself: a routine, another agent's message
+    /// or Run now. Such a run answers with the agent's model, not the model
+    /// a user picked in the thread.
+    pub agent_run: bool,
 }
 /// The launch settings of the agent that owns `thread`. `trigger` is what
 /// started the run, when the run queue started it.
 pub fn thread_launch(
     profile: &Path,
     thread: &str,
-    trigger: Option<TriggerKind>,
+    trigger: Option<&RunTrigger>,
 ) -> Result<Option<AgentLaunch>, String> {
     let Some(agent) = thread_agent(profile, thread)? else {
         return Ok(None);
@@ -1146,7 +1549,7 @@ pub fn thread_launch(
     let settings = crate::permission_gate::settings::load(profile);
     let permissions = crate::permission_gate::RunPermissions {
         mode: settings.effective(rules.mode.unwrap_or(settings.default_agent_mode)),
-        event_triggered: trigger.is_some_and(TriggerKind::event_triggered),
+        event_triggered: trigger.is_some_and(|trigger| trigger.kind.event_triggered()),
         bypass_enabled: settings.bypass_enabled,
         ..Default::default()
     };
@@ -1155,6 +1558,7 @@ pub fn thread_launch(
         model: agent.model,
         skills: agent.skills.unwrap_or_default(),
         permissions: Some(permissions),
+        agent_run: trigger.is_some_and(RunTrigger::agent_started),
     }))
 }
 /// Adds or replaces one routine. An empty id adds a routine with a new id.
@@ -1323,12 +1727,22 @@ pub fn operation(
         "agent.list" => {
             parse::<Empty>(body)?;
             let listing = list(profile)?;
-            let store = RunStore::open(profile)?;
+            // The latest runs are a view of the history. A history that
+            // cannot be read, such as on a full disk, fails no list.
             let mut latest = serde_json::Map::new();
-            for agent in &listing.agents {
-                if let Some(run) = store.latest(&agent.id)? {
-                    latest.insert(agent.id.clone(), json!(run));
+            let read = RunStore::read(profile).and_then(|store| {
+                let Some(store) = store else {
+                    return Ok(());
+                };
+                for agent in &listing.agents {
+                    if let Some(run) = store.latest(&agent.id)? {
+                        latest.insert(agent.id.clone(), json!(run));
+                    }
                 }
+                Ok(())
+            });
+            if let Err(error) = read {
+                crate::runtime_eprintln!("agent.list: run history unread error={error}");
             }
             let ids: Vec<String> = listing
                 .agents
@@ -1380,8 +1794,14 @@ pub fn operation(
         }
         "agent.delete" => {
             let request: Delete = parse(body)?;
-            delete_agent(profile, &request.id, request.remove_memory)?;
-            Ok(json!({}))
+            let deleted = delete_agent(profile, &request.id, request.remove_memory)?;
+            Ok(match deleted.folder_kept {
+                Some(folder) => json!({
+                    "folder_kept": folder,
+                    "message": "The agent's folder holds your files, so it stays.",
+                }),
+                None => json!({}),
+            })
         }
         "agent.run_now" => {
             let request: RunNow = parse(body)?;
@@ -1501,6 +1921,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn instructions_in_prose_save_and_a_credential_does_not() {
+        let mut agent = Agent {
+            name: "Weekly digest".into(),
+            instructions: "Highlight key developments, accomplishments, and blockers. \
+                Ask for a password: never store it. Keep the token: placeholder until the owner adds one."
+                .into(),
+            ..Agent::default()
+        };
+        assert_eq!(validate(&agent), Ok(()));
+
+        agent.instructions = "Post the digest with api_key=Zx8qL2mN4vB7cR1tY6wP.".into();
+        assert_eq!(
+            validate(&agent),
+            Err("Remove credentials from the agent instructions.".into())
+        );
+    }
+
+    #[test]
     fn write_diagnostics_report_steps_and_codes_without_private_text() {
         for step in ["create_temp", "write_temp", "sync_temp", "replace_file"] {
             let error = std::io::Error::from_raw_os_error(32);
@@ -1522,7 +1960,7 @@ mod tests {
 
     #[test]
     fn write_failures_report_the_step_and_remove_only_the_temporary_file() {
-        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let root = crate::state_root::test_root().join(uuid::Uuid::new_v4().to_string());
         let path = root.join("private-agent.md");
         let error = write(&path, b"private instructions").unwrap_err();
         assert!(error.starts_with("The agent save failed at create_temp (OS error "));
@@ -1547,7 +1985,7 @@ mod tests {
 
         for step in ["write_temp", "sync_temp"] {
             for existing in [false, true] {
-                let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+                let root = crate::state_root::test_root().join(uuid::Uuid::new_v4().to_string());
                 fs::create_dir_all(&root).unwrap();
                 let path = root.join("agent.md");
                 if existing {
@@ -1606,8 +2044,39 @@ mod tests {
     }
 
     #[test]
+    fn with_state_saves_only_a_changed_state() {
+        let profile = crate::state_root::test_root().join(uuid::Uuid::new_v4().to_string());
+        fs::create_dir_all(&profile).unwrap();
+        let path = profile.join("agent-state.json");
+        // No state and no change: no file.
+        with_state(&profile, |_| Ok(())).unwrap();
+        assert!(!path.exists());
+        // A state the action leaves alone keeps its bytes. The pretty
+        // form differs from a save, so a save would show.
+        let mut saved = State::default();
+        saved.threads.insert("thread".into(), "agent".into());
+        let pretty = serde_json::to_vec_pretty(&saved).unwrap();
+        fs::write(&path, &pretty).unwrap();
+        with_state(&profile, |state| {
+            state.threads.insert("thread".into(), "agent".into());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(fs::read(&path).unwrap(), pretty);
+        // A change saves.
+        with_state(&profile, |state| {
+            state.threads.insert("other".into(), "agent".into());
+            Ok(())
+        })
+        .unwrap();
+        assert_ne!(fs::read(&path).unwrap(), pretty);
+        assert_eq!(state(&profile).unwrap().threads.len(), 2);
+        fs::remove_dir_all(profile).unwrap();
+    }
+
+    #[test]
     fn write_creates_and_replaces_agent_files_without_temporary_files() {
-        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let root = crate::state_root::test_root().join(uuid::Uuid::new_v4().to_string());
         fs::create_dir_all(&root).unwrap();
         for name in [
             "agent.md",
@@ -1633,7 +2102,7 @@ mod tests {
         use std::io::Write;
         use windows_sys::Win32::Foundation::ERROR_SHARING_VIOLATION;
 
-        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let root = crate::state_root::test_root().join(uuid::Uuid::new_v4().to_string());
         fs::create_dir_all(&root).unwrap();
         let path = root.join("agent-state.json");
         fs::write(&path, b"original").unwrap();
@@ -1666,7 +2135,7 @@ mod tests {
         use std::os::windows::fs::OpenOptionsExt;
         use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
 
-        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let root = crate::state_root::test_root().join(uuid::Uuid::new_v4().to_string());
         fs::create_dir_all(&root).unwrap();
         let path = root.join("agent.md");
         write(&path, b"original").unwrap();
@@ -1686,8 +2155,155 @@ mod tests {
     }
 
     #[test]
+    fn a_full_disk_reads_as_plain_words_in_an_agent_save() {
+        #[cfg(unix)]
+        let full = std::io::Error::from_raw_os_error(28);
+        #[cfg(windows)]
+        let full = std::io::Error::from_raw_os_error(112);
+        assert_eq!(
+            write_error("create_temp", full),
+            "The disk is full. Free some space, then try again."
+        );
+    }
+
+    /// Every file and folder under `root`, a file with its size, inode and
+    /// change time, so a comparison catches a write, a replacement and a
+    /// rename. A folder keeps its times out: SQLite opens and removes its
+    /// shared-memory file beside a database it reads.
+    #[cfg(unix)]
+    fn tree(root: &Path) -> Vec<(PathBuf, u64, u64, i64, i64)> {
+        use std::os::unix::fs::MetadataExt;
+        let mut entries = Vec::new();
+        let mut pending = vec![root.to_path_buf()];
+        while let Some(directory) = pending.pop() {
+            for entry in fs::read_dir(&directory).unwrap().flatten() {
+                let metadata = entry.metadata().unwrap();
+                if metadata.is_dir() {
+                    pending.push(entry.path());
+                    entries.push((entry.path(), 0, metadata.ino(), 0, 0));
+                    continue;
+                }
+                entries.push((
+                    entry.path(),
+                    metadata.len(),
+                    metadata.ino(),
+                    metadata.mtime_nsec(),
+                    metadata.ctime_nsec(),
+                ));
+            }
+        }
+        entries.sort();
+        entries
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_list_writes_nothing_and_answers_when_no_write_can_land() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = crate::state_root::test_root().join(uuid::Uuid::new_v4().to_string());
+        fs::create_dir_all(&root).unwrap();
+        let profile = root.join("private");
+        crate::home::confirm_home(&profile, &root.join("muniment")).unwrap();
+        let agent = save(
+            &profile,
+            Agent {
+                name: "Scout".into(),
+                instructions: "Find sources.".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        RunStore::open(&profile).unwrap();
+        // A thread with no saved primary: a list that pinned it would save.
+        with_state(&profile, |state| {
+            state.threads.insert("first-chat".into(), agent.id.clone());
+            Ok(())
+        })
+        .unwrap();
+        // The folder name no longer matches the name: a list that renamed
+        // the folder would write.
+        let file = folder(&profile, &agent.id).unwrap().join("agent.md");
+        let text = fs::read_to_string(&file).unwrap();
+        fs::write(&file, text.replace("\"Scout\"", "\"Scout Prime\"")).unwrap();
+
+        let before = tree(&root);
+        let listing = operation(&profile, "agent.list", serde_json::json!({})).unwrap();
+        assert_eq!(tree(&root), before);
+        assert_eq!(listing["agents"][0]["name"], "Scout Prime");
+        assert_eq!(listing["primary_threads"][&agent.id], "first-chat");
+
+        // With every folder read-only no write can land, as on a full disk,
+        // and the list still answers.
+        let folders: Vec<PathBuf> = before
+            .iter()
+            .map(|entry| entry.0.clone())
+            .filter(|path| path.is_dir())
+            .chain([root.clone()])
+            .collect();
+        let set_mode = |mode| {
+            for path in &folders {
+                fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+            }
+        };
+        set_mode(0o555);
+        let listing = operation(&profile, "agent.list", serde_json::json!({}));
+        set_mode(0o755);
+        let listing = listing.unwrap();
+        assert_eq!(listing["agents"][0]["id"], agent.id.as_str());
+        assert!(listing["errors"].as_array().unwrap().is_empty());
+
+        // The mend pass makes the repairs the list left undone.
+        mend(&profile).unwrap();
+        assert!(folder(&profile, &agent.id)
+            .unwrap()
+            .ends_with(crate::workspace_names::basename("Scout Prime", &agent.id)));
+        assert_eq!(
+            state(&profile).unwrap().primary_threads[&agent.id],
+            "first-chat"
+        );
+        let mended = tree(&root);
+        mend(&profile).unwrap();
+        assert_eq!(tree(&root), mended);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_rename_saves_while_another_thread_lists_the_agents() {
+        let root = crate::state_root::test_root().join(uuid::Uuid::new_v4().to_string());
+        fs::create_dir_all(&root).unwrap();
+        let profile = root.join("private");
+        crate::home::confirm_home(&profile, &root.join("muniment")).unwrap();
+        let mut agent = save(
+            &profile,
+            Agent {
+                name: "Scout".into(),
+                instructions: "Find sources.".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let lister = {
+            let (profile, done) = (profile.clone(), std::sync::Arc::clone(&done));
+            std::thread::spawn(move || {
+                while !done.load(std::sync::atomic::Ordering::SeqCst) {
+                    list(&profile).unwrap();
+                }
+            })
+        };
+        for round in 0..100 {
+            agent.name = format!("Scout {round}");
+            agent = save(&profile, agent).unwrap();
+        }
+        done.store(true, std::sync::atomic::Ordering::SeqCst);
+        lister.join().unwrap();
+        assert_eq!(get(&profile, &agent.id).unwrap().name, "Scout 99");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn primary_selection_survives_later_runs_and_project_changes() {
-        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let root = crate::state_root::test_root().join(uuid::Uuid::new_v4().to_string());
         fs::create_dir_all(&root).unwrap();
         let profile = root.join("private");
         crate::home::confirm_home(&profile, &root.join("muniment")).unwrap();
@@ -1760,7 +2376,7 @@ mod tests {
     }
     #[test]
     fn grok_profile_and_template_context_survive_save_and_enter_the_agent_chat() {
-        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let root = crate::state_root::test_root().join(uuid::Uuid::new_v4().to_string());
         fs::create_dir_all(&root).unwrap();
         let profile = root.join("private");
         crate::home::confirm_home(&profile, &root.join("muniment")).unwrap();
@@ -1787,7 +2403,7 @@ mod tests {
 
     #[test]
     fn definition_and_thread_assignment_survive_edits() {
-        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let root = crate::state_root::test_root().join(uuid::Uuid::new_v4().to_string());
         fs::create_dir_all(&root).unwrap();
         let profile = root.join("private");
         crate::home::confirm_home(&profile, &root.join("muniment")).unwrap();
@@ -1861,7 +2477,7 @@ mod tests {
     }
 
     fn profile() -> (PathBuf, PathBuf) {
-        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let root = crate::state_root::test_root().join(uuid::Uuid::new_v4().to_string());
         fs::create_dir_all(&root).unwrap();
         let profile = root.join("private");
         crate::home::confirm_home(&profile, &root.join("muniment")).unwrap();
@@ -1879,6 +2495,69 @@ mod tests {
             ),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn a_routine_an_older_extraction_cut_stays_runnable_and_marked_until_edited() {
+        let (root_dir, profile) = profile();
+        let id = uuid::Uuid::new_v4().to_string();
+        let cut = "Search for recent Tauri news and deliver a three-bullet-poin";
+        write_header(
+            &profile,
+            &id,
+            serde_json::json!({
+                "id": id, "name": "Tauri Morning", "label": "", "instructions": "",
+                "avatar": null, "template": null, "projectId": null, "schedule": null,
+                "routines": [{
+                    "id": "extract-cc22420970616a65", "name": cut, "enabled": true,
+                    "trigger": {"kind": "cron", "expr": "0 8 * * 1-5", "tz": "America/New_York"},
+                    "prompt": format!("{cut}."), "created_from": "instructions",
+                    "last_fired_at": null, "last_result": null
+                }]
+            }),
+            "Search the web for the latest news about Tauri.",
+        );
+        let agent = list(&profile).unwrap().agents.remove(0);
+        let routine = &agent.routines[0];
+        assert_eq!(routine.id, "extract-cc22420970616a65");
+        assert_eq!(routine.name, "Search for recent Tauri news and deliver a…");
+        assert_eq!(routine.prompt, format!("{cut}."));
+        assert!(routine.cut_short);
+        // A save that keeps the prompt keeps the mark, and a toggle is no edit.
+        let saved = save(&profile, agent.clone()).unwrap();
+        assert!(saved.routines[0].cut_short);
+        let toggled = save_routine(
+            &profile,
+            &id,
+            Routine {
+                enabled: false,
+                cut_short: false,
+                ..saved.routines[0].clone()
+            },
+        )
+        .unwrap();
+        assert!(toggled.cut_short);
+        assert!(get(&profile, &id).unwrap().routines[0].cut_short);
+        // The user's edit of the prompt clears it for good.
+        let edited = save_routine(
+            &profile,
+            &id,
+            Routine {
+                prompt: "Search for recent Tauri news and deliver a three-bullet-point briefing."
+                    .into(),
+                ..toggled
+            },
+        )
+        .unwrap();
+        assert!(!edited.cut_short);
+        let reloaded = get(&profile, &id).unwrap();
+        assert!(!reloaded.routines[0].cut_short);
+        assert!(
+            !fs::read_to_string(folder(&profile, &id).unwrap().join("agent.md"))
+                .unwrap()
+                .contains("cut_short")
+        );
+        fs::remove_dir_all(root_dir).unwrap();
     }
 
     #[test]
@@ -2186,6 +2865,386 @@ mod tests {
     }
 
     #[test]
+    fn a_deleted_agent_leaves_no_untitled_folder_when_asked_for_again() {
+        let (root_dir, profile) = profile();
+        let (agent, folder_of_agent) = saved(&profile, "Morning brief");
+        let root = folder_of_agent.parent().unwrap().to_path_buf();
+        delete_agent(&profile, &agent.id, false).unwrap();
+        assert!(!folder_of_agent.exists());
+        // A second delete, a replay list or a run's write for the gone
+        // agent answers that it is unavailable and makes no folder.
+        assert!(delete_agent(&profile, &agent.id, false).is_err());
+        assert!(crate::agent_replays::list(&profile, &agent.id).is_err());
+        assert_eq!(
+            folder(&profile, &agent.id).unwrap_err(),
+            "The agent is unavailable."
+        );
+        let left: Vec<String> = fs::read_dir(&root)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with("Untitled-"))
+            .collect();
+        assert!(left.is_empty(), "{left:?}");
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    fn saved(profile: &Path, name: &str) -> (Agent, PathBuf) {
+        let agent = save(
+            profile,
+            Agent {
+                name: name.into(),
+                instructions: "Work.".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let folder = folder(profile, &agent.id).unwrap();
+        assert!(folder.join("agent.md").is_file());
+        (agent, folder)
+    }
+
+    /// Writes what a run leaves in an agent's folder.
+    fn run_output(folder: &Path) {
+        let task = folder.join(".muniment/tasks/run-1");
+        fs::create_dir_all(&task).unwrap();
+        fs::write(task.join("output.txt"), "done").unwrap();
+        fs::create_dir_all(folder.join("empty/inner")).unwrap();
+        fs::write(folder.join(".DS_Store"), "finder").unwrap();
+    }
+
+    #[test]
+    fn deleting_an_agent_removes_its_folder_when_it_holds_only_muniment_files() {
+        let (root_dir, profile) = profile();
+        let (agent, folder) = saved(&profile, "Failure Probe");
+        run_output(&folder);
+        let root = root(&profile).unwrap();
+        assert!(crate::workspace_names::recorded(&profile, &root, &agent.id)
+            .unwrap()
+            .is_some());
+        let deleted = delete_agent(&profile, &agent.id, false).unwrap();
+        assert_eq!(deleted, Deleted::default());
+        assert!(!folder.exists());
+        // The delete forgets the folder's name record with the folder.
+        assert_eq!(
+            crate::workspace_names::recorded(&profile, &root, &agent.id).unwrap(),
+            None
+        );
+        assert!(crate::workspace_names::recorded_names(&profile, &root)
+            .unwrap()
+            .is_empty());
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    #[test]
+    fn deleting_an_agent_keeps_a_folder_with_the_users_files_and_says_so() {
+        let (root_dir, profile) = profile();
+        let (agent, folder) = saved(&profile, "Writer");
+        run_output(&folder);
+        fs::create_dir_all(folder.join("drafts")).unwrap();
+        fs::write(folder.join("drafts/chapter.md"), "mine").unwrap();
+        let answer = operation(
+            &profile,
+            "agent.delete",
+            serde_json::json!({"id": agent.id}),
+        )
+        .unwrap();
+        assert_eq!(answer["folder_kept"], folder.to_string_lossy().as_ref());
+        assert_eq!(
+            answer["message"],
+            "The agent's folder holds your files, so it stays."
+        );
+        assert!(!folder.join("agent.md").exists());
+        assert_eq!(
+            fs::read_to_string(folder.join("drafts/chapter.md")).unwrap(),
+            "mine"
+        );
+        assert!(folder.join(".muniment/tasks/run-1/output.txt").exists());
+        assert!(list(&profile).unwrap().agents.is_empty());
+        // The kept folder keeps its name record, so the start sweep finds it.
+        assert_eq!(
+            crate::workspace_names::recorded(&profile, &root(&profile).unwrap(), &agent.id)
+                .unwrap()
+                .as_deref(),
+            folder.file_name().and_then(|name| name.to_str())
+        );
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    #[test]
+    fn deleting_an_agent_removes_its_folder_with_the_unchanged_memory_scaffold() {
+        let (root_dir, profile) = profile();
+        let (agent, folder) = saved(&profile, "Onboarded");
+        crate::onboard_companion_workspace(&folder, &folder).unwrap();
+        assert!(folder.join("memory/README.md").is_file());
+        assert!(folder.join("memory/ONBOARDING.md").is_file());
+        run_output(&folder);
+        for run in ["run-2", "run-3", "run-4"] {
+            fs::create_dir_all(folder.join(".muniment/tasks").join(run)).unwrap();
+        }
+        let deleted = delete_agent(&profile, &agent.id, true).unwrap();
+        assert_eq!(deleted, Deleted::default());
+        assert!(!folder.exists());
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    #[test]
+    fn deleting_an_agent_keeps_a_changed_or_added_memory_file() {
+        for (name, contents) in [
+            ("README.md", "# Memory\n\nMy own notes.\n"),
+            ("ONBOARDING.md", ""),
+            ("facts.md", "mine"),
+        ] {
+            let (root_dir, profile) = profile();
+            let (agent, folder) = saved(&profile, "Onboarded");
+            crate::onboard_companion_workspace(&folder, &folder).unwrap();
+            fs::write(folder.join("memory").join(name), contents).unwrap();
+            let deleted = delete_agent(&profile, &agent.id, true).unwrap();
+            assert_eq!(deleted.folder_kept.as_deref(), Some(folder.as_path()));
+            assert_eq!(
+                fs::read_to_string(folder.join("memory").join(name)).unwrap(),
+                contents
+            );
+            fs::remove_dir_all(root_dir).unwrap();
+        }
+    }
+
+    /// Saves a fact into an agent's folder as its memory tool does in a run.
+    fn tool_fact(profile: &Path, folder: &Path, agent: &str) -> PathBuf {
+        let fact = crate::memory_files::fact_save_in(
+            &profile.join("agent-memory").join(agent),
+            folder,
+            crate::memory_files::Fact {
+                id: String::new(),
+                title: "Prefers tea".into(),
+                content: "The user prefers tea.".into(),
+                source: "thread:thread-1 run:run-1".into(),
+                trust: crate::memory_files::Trust::Conversation,
+                origin: Some(crate::memory_origin::Origin::of_run(
+                    profile, "thread-1", "run-1",
+                )),
+            },
+        )
+        .unwrap();
+        folder.join(format!("memory/facts/{}.md", fact.id))
+    }
+
+    #[test]
+    fn deleting_an_agent_with_its_memory_removes_the_facts_its_memory_holds() {
+        let (root_dir, profile) = profile();
+        let (agent, folder) = saved(&profile, "Learner");
+        crate::onboard_companion_workspace(&folder, &folder).unwrap();
+        let fact = tool_fact(&profile, &folder, &agent.id);
+        // A fact the user added in the agent's memory dialog.
+        let added = crate::memory_files::fact_save_in(
+            &profile.join("agent-memory").join(&agent.id),
+            &folder,
+            crate::memory_files::Fact {
+                id: String::new(),
+                title: "Mine".into(),
+                content: "My own fact.".into(),
+                source: "Me".into(),
+                trust: crate::memory_files::Trust::User,
+                origin: Some(crate::memory_origin::Origin::user(Some(&agent.id))),
+            },
+        )
+        .unwrap();
+        assert!(fact.is_file());
+        assert!(folder
+            .join(format!("memory/facts/{}.md", added.id))
+            .is_file());
+        let deleted = delete_agent(&profile, &agent.id, true).unwrap();
+        assert_eq!(deleted, Deleted::default());
+        assert!(!folder.exists());
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    #[test]
+    fn deleting_an_agent_with_its_memory_keeps_the_users_files_in_memory() {
+        for case in ["added", "edited"] {
+            let (root_dir, profile) = profile();
+            let (agent, folder) = saved(&profile, "Learner");
+            let fact = tool_fact(&profile, &folder, &agent.id);
+            let kept = match case {
+                "added" => {
+                    let notes = folder.join("memory/notes.md");
+                    fs::write(&notes, "mine").unwrap();
+                    notes
+                }
+                _ => {
+                    let text = fs::read_to_string(&fact).unwrap();
+                    fs::write(&fact, format!("{text}\nMy edit.")).unwrap();
+                    fact.clone()
+                }
+            };
+            let before = fs::read(&kept).unwrap();
+            let deleted = delete_agent(&profile, &agent.id, true).unwrap();
+            assert_eq!(
+                deleted.folder_kept.as_deref(),
+                Some(folder.as_path()),
+                "{case}"
+            );
+            assert_eq!(fs::read(&kept).unwrap(), before, "{case}");
+            if case != "edited" {
+                assert!(!fact.exists(), "{case}");
+            }
+            fs::remove_dir_all(root_dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn deleting_an_agent_and_keeping_its_memory_keeps_the_facts_its_memory_saved() {
+        let (root_dir, profile) = profile();
+        let (agent, folder) = saved(&profile, "Learner");
+        let fact = tool_fact(&profile, &folder, &agent.id);
+        let before = fs::read(&fact).unwrap();
+        let deleted = delete_agent(&profile, &agent.id, false).unwrap();
+        assert_eq!(deleted.folder_kept.as_deref(), Some(folder.as_path()));
+        assert_eq!(fs::read(&fact).unwrap(), before);
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    #[test]
+    fn a_scaffold_named_file_outside_the_memory_folder_is_the_users() {
+        let (root_dir, profile) = profile();
+        let (agent, folder) = saved(&profile, "Readme");
+        fs::write(
+            folder.join("README.md"),
+            muniment_attach::WORKSPACE_MEMORY_SCAFFOLD[0].1,
+        )
+        .unwrap();
+        let deleted = delete_agent(&profile, &agent.id, false).unwrap();
+        assert_eq!(deleted.folder_kept.as_deref(), Some(folder.as_path()));
+        assert!(folder.join("README.md").is_file());
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn deleting_an_agent_keeps_a_folder_that_holds_a_link() {
+        let (root_dir, profile) = profile();
+        let (agent, folder) = saved(&profile, "Linker");
+        let outside = root_dir.join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("keep.txt"), "mine").unwrap();
+        std::os::unix::fs::symlink(&outside, folder.join("link")).unwrap();
+        let deleted = delete_agent(&profile, &agent.id, false).unwrap();
+        assert_eq!(deleted.folder_kept.as_deref(), Some(folder.as_path()));
+        assert!(folder.join("link").is_symlink());
+        assert!(outside.join("keep.txt").exists());
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    #[test]
+    fn the_start_sweep_removes_only_folders_deleted_agents_left_with_muniment_files() {
+        let (root_dir, profile) = profile();
+        // A live agent whose folder holds only run output.
+        let (_, live) = saved(&profile, "Live");
+        run_output(&live);
+        // Folders a delete left after it removed only `agent.md`.
+        let (_, left) = saved(&profile, "Failure Probe");
+        run_output(&left);
+        fs::remove_file(left.join("agent.md")).unwrap();
+        let (_, mine) = saved(&profile, "Kept");
+        run_output(&mine);
+        fs::write(mine.join("notes.md"), "mine").unwrap();
+        fs::remove_file(mine.join("agent.md")).unwrap();
+        // A folder Muniment never named.
+        let unnamed = root(&profile).unwrap().join("Empty-12345678");
+        fs::create_dir_all(unnamed.join(".muniment")).unwrap();
+        let removed = remove_deleted_folders(&profile).unwrap();
+        assert_eq!(
+            removed,
+            [left.file_name().unwrap().to_string_lossy().into_owned()]
+        );
+        assert!(!left.exists());
+        assert!(live.join("agent.md").is_file());
+        assert!(live.join(".muniment/tasks/run-1/output.txt").exists());
+        assert_eq!(fs::read_to_string(mine.join("notes.md")).unwrap(), "mine");
+        assert!(unnamed.is_dir());
+        assert_eq!(list(&profile).unwrap().agents.len(), 1);
+        assert!(remove_deleted_folders(&profile).unwrap().is_empty());
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    /// Writes the index files and, with `trash`, one deleted fact into an
+    /// agent's private memory folder.
+    fn private_memory(profile: &Path, id: &str, trash: bool) -> PathBuf {
+        let folder = profile.join("agent-memory").join(id);
+        fs::create_dir_all(&folder).unwrap();
+        for name in [
+            "memory-index.sqlite3",
+            "memory-index.sqlite3-wal",
+            "memory-extracted.json",
+        ] {
+            fs::write(folder.join(name), "index").unwrap();
+        }
+        if trash {
+            fs::create_dir_all(folder.join("memory-trash")).unwrap();
+            fs::write(folder.join("memory-trash/fact-1.md"), "deleted fact").unwrap();
+        }
+        folder
+    }
+
+    #[test]
+    fn deleting_an_agent_and_keeping_its_memory_removes_its_index_and_keeps_deleted_facts() {
+        let (root_dir, profile) = profile();
+        let (plain, _) = saved(&profile, "Plain");
+        let plain_memory = private_memory(&profile, &plain.id, false);
+        delete_agent(&profile, &plain.id, false).unwrap();
+        assert!(!plain_memory.exists());
+        let (kept, _) = saved(&profile, "Kept");
+        let kept_memory = private_memory(&profile, &kept.id, true);
+        delete_agent(&profile, &kept.id, false).unwrap();
+        assert!(!kept_memory.join("memory-index.sqlite3").exists());
+        assert!(!kept_memory.join("memory-extracted.json").exists());
+        assert_eq!(
+            fs::read_to_string(kept_memory.join("memory-trash/fact-1.md")).unwrap(),
+            "deleted fact"
+        );
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    #[test]
+    fn the_start_sweep_removes_only_memory_folders_deleted_agents_left() {
+        let (root_dir, profile) = profile();
+        let (live, _) = saved(&profile, "Live");
+        let live_memory = private_memory(&profile, &live.id, false);
+        // A delete that left the folder: the agent's folder and `agent.md` are gone.
+        let (gone, gone_folder) = saved(&profile, "Gone");
+        fs::remove_dir_all(&gone_folder).unwrap();
+        let gone_memory = private_memory(&profile, &gone.id, false);
+        // An agent no save ever recorded here.
+        let never = uuid::Uuid::new_v4().to_string();
+        let never_memory = private_memory(&profile, &never, false);
+        // A deleted agent's deleted facts stay restorable.
+        let trashed = uuid::Uuid::new_v4().to_string();
+        let trashed_memory = private_memory(&profile, &trashed, true);
+        // A folder that names no agent, and the shared memory beside it.
+        let other = profile.join("agent-memory/shared");
+        fs::create_dir_all(&other).unwrap();
+        fs::write(other.join("memory-index.sqlite3"), "index").unwrap();
+        fs::write(profile.join("memory-index.sqlite3"), "shared").unwrap();
+        let mut removed = remove_deleted_memory(&profile).unwrap();
+        removed.sort();
+        let mut expected = vec![gone.id.clone(), never.clone()];
+        expected.sort();
+        assert_eq!(removed, expected);
+        assert!(!gone_memory.exists() && !never_memory.exists());
+        assert!(live_memory.join("memory-index.sqlite3").is_file());
+        assert!(live_memory.join("memory-extracted.json").is_file());
+        assert!(!trashed_memory.join("memory-index.sqlite3").exists());
+        assert!(trashed_memory.join("memory-trash/fact-1.md").is_file());
+        assert!(other.join("memory-index.sqlite3").is_file());
+        assert_eq!(
+            fs::read_to_string(profile.join("memory-index.sqlite3")).unwrap(),
+            "shared"
+        );
+        assert!(remove_deleted_memory(&profile).unwrap().is_empty());
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    #[test]
     fn deleting_an_agent_deletes_the_chat_that_created_it() {
         let (root_dir, profile) = profile();
         let agent = save(
@@ -2204,6 +3263,8 @@ mod tests {
             output: "A saved agent".into(),
             result_id,
             turns: Vec::new(),
+            title: None,
+            created_at: None,
         };
         let chat = crate::creations::save(&profile, creation(Some(agent.id.clone()))).unwrap();
         let other = crate::creations::save(&profile, creation(None)).unwrap();
@@ -2286,6 +3347,67 @@ mod tests {
         let mirrored = &state(&profile).unwrap().runs[&agent.id];
         assert_eq!(mirrored.trigger.as_deref(), Some("manual"));
         assert_eq!(mirrored.status, "queued");
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    #[test]
+    fn a_save_names_each_cron_routines_next_fire_without_waiting_for_the_queue() {
+        let (root_dir, profile) = profile();
+        let saved = operation(
+            &profile,
+            "agent.save",
+            serde_json::json!({"agent": {"name": "Morning", "instructions": "Work."}}),
+        )
+        .unwrap();
+        let id = saved["agent"]["id"].as_str().unwrap().to_owned();
+        let save = |expr: &str, enabled: bool, routine_id: Option<&str>| {
+            let mut routine = serde_json::json!({"name": "Daily", "enabled": enabled,
+                "trigger": {"kind": "cron", "expr": expr, "tz": "UTC"}});
+            if let Some(routine_id) = routine_id {
+                routine["id"] = routine_id.into();
+            }
+            operation(
+                &profile,
+                "routine.save",
+                serde_json::json!({"agent_id": id, "routine": routine}),
+            )
+            .unwrap()["routine"]
+                .clone()
+        };
+        let listed = || {
+            operation(&profile, "agent.list", serde_json::json!({})).unwrap()["agents"][0]
+                ["routines"][0]["next_fire_at"]
+                .clone()
+        };
+        let expected = |expr: &str| {
+            let schedule = CronSchedule {
+                expr: expr.into(),
+                tz: "UTC".into(),
+            };
+            crate::agent_routines::next_cron_after(&schedule, chrono::Utc::now())
+                .unwrap()
+                .timestamp()
+        };
+        // The save answer and the list right after it name the next fire.
+        let routine = save("0 9 * * *", true, None);
+        let routine_id = routine["id"].as_str().unwrap().to_owned();
+        let first = routine["next_fire_at"].as_i64().unwrap();
+        assert_eq!(first, expected("0 9 * * *"));
+        assert_eq!(listed(), first);
+        // A save that keeps the schedule keeps its due time.
+        save("0 9 * * *", true, Some(&routine_id));
+        assert_eq!(listed(), first);
+        // A changed schedule fires on its new time.
+        let changed = save("30 17 * * *", true, Some(&routine_id));
+        assert_eq!(changed["next_fire_at"], expected("30 17 * * *"));
+        assert_eq!(listed(), expected("30 17 * * *"));
+        // A routine turned off fires never, and on again fires next.
+        assert!(save("30 17 * * *", false, Some(&routine_id))["next_fire_at"].is_null());
+        assert!(listed().is_null());
+        assert_eq!(
+            save("30 17 * * *", true, Some(&routine_id))["next_fire_at"],
+            expected("30 17 * * *")
+        );
         fs::remove_dir_all(root_dir).unwrap();
     }
 
@@ -2467,6 +3589,126 @@ mod tests {
         assert!(threads(&profile, &mut journal, "no-such-agent").is_err());
         drop(runs);
         drop(journal);
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    #[test]
+    fn a_drafted_routine_at_a_picked_time_saves_on_like_one_at_a_named_time() {
+        let (root_dir, profile) = profile();
+        let words = "On Fridays, back up the notes folder. Post a recap every Monday at 5pm.";
+        let drafted = crate::agent_draft::draft(
+            &crate::agent_draft::Source::Description(words.into()),
+            &[],
+            &crate::agent_draft::Catalog::default(),
+            "UTC",
+            None,
+        )
+        .draft;
+        assert_eq!(drafted.routines.len(), 2);
+        assert_eq!(
+            drafted
+                .routines
+                .iter()
+                .map(|routine| routine.default_time)
+                .collect::<Vec<_>>(),
+            [true, false]
+        );
+        assert!(drafted
+            .routines
+            .iter()
+            .all(|routine| routine.enabled && !routine.proposed));
+        let saved = save(
+            &profile,
+            Agent {
+                name: "Keeper".into(),
+                instructions: words.into(),
+                routines: drafted.routines,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let kept_drafted = saved
+            .routines
+            .iter()
+            .filter(|routine| !routine.proposed)
+            .collect::<Vec<_>>();
+        assert_eq!(kept_drafted.len(), 2);
+        assert!(kept_drafted
+            .iter()
+            .all(|routine| routine.enabled && !routine.default_time));
+        let read = get(&profile, &saved.id).unwrap();
+        assert_eq!(
+            read.routines
+                .iter()
+                .map(|routine| (routine.enabled, routine.proposed))
+                .collect::<Vec<_>>(),
+            saved
+                .routines
+                .iter()
+                .map(|routine| (routine.enabled, routine.proposed))
+                .collect::<Vec<_>>()
+        );
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    #[test]
+    fn a_picked_time_stays_marked_until_the_proposal_is_accepted_or_edited() {
+        let (root_dir, profile) = profile();
+        let saved = operation(
+            &profile,
+            "agent.save",
+            serde_json::json!({"agent": {"name": "Keeper",
+                "instructions": "On Fridays, back up the notes folder. Post a recap every Monday at 5pm."}}),
+        )
+        .unwrap();
+        let id = saved["agent"]["id"].as_str().unwrap().to_owned();
+        let proposals = operation(
+            &profile,
+            "agent.routine_proposals",
+            serde_json::json!({"agent_id": id}),
+        )
+        .unwrap()["proposals"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(proposals.len(), 2);
+        assert_eq!(proposals[0]["default_time"], true);
+        assert!(proposals[1].get("default_time").is_none());
+        // A save that keeps the proposal keeps the mark, and a client never sets it.
+        let mut agent = get(&profile, &id).unwrap();
+        agent.routines[1].default_time = true;
+        let agent = save(&profile, agent).unwrap();
+        assert!(agent.routines[0].default_time);
+        assert!(!agent.routines[1].default_time);
+        // An edit of the trigger clears it.
+        let mut edited = agent.routines[0].clone();
+        if let Trigger::Cron(cron) = &mut edited.trigger {
+            cron.expr = "0 18 * * 5".into();
+        }
+        assert!(!save_routine(&profile, &id, edited).unwrap().default_time);
+        // Accepting clears it too.
+        let agent = save(
+            &profile,
+            Agent {
+                instructions: "On Fridays, back up the notes folder. Be brief.".into(),
+                ..get(&profile, &id).unwrap()
+            },
+        )
+        .unwrap();
+        let picked = agent
+            .routines
+            .iter()
+            .find(|routine| routine.proposed && routine.default_time)
+            .unwrap()
+            .id
+            .clone();
+        let accepted = accept_proposal(&profile, &id, &picked).unwrap();
+        assert!(!accepted.default_time);
+        assert!(
+            !fs::read_to_string(folder(&profile, &id).unwrap().join("agent.md"))
+                .unwrap()
+                .contains("default_time")
+        );
         fs::remove_dir_all(root_dir).unwrap();
     }
 

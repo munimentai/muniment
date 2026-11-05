@@ -340,23 +340,67 @@ fn save_unlocked(home: &Path, mut fact: Fact) -> Result<Fact, String> {
         }
         fact.id = uuid::Uuid::new_v4().to_string();
     }
+    write(home, &fact_path(&fact.id)?, &render(&fact))?;
+    Ok(fact)
+}
+/// The bytes a save writes for `fact`.
+fn render(fact: &Fact) -> String {
     let origin = fact
         .origin
         .as_ref()
         .map(|origin| format!("Origin: {}\n", origin.to_line()))
         .unwrap_or_default();
-    write(
-        home,
-        &fact_path(&fact.id)?,
-        &format!(
-            "# {}\n\nSource: {}\nTrust: {}\n{origin}\n{}\n",
-            fact.title,
-            fact.source,
-            fact.trust.as_str(),
-            fact.content
-        ),
-    )?;
-    Ok(fact)
+    format!(
+        "# {}\n\nSource: {}\nTrust: {}\n{origin}\n{}\n",
+        fact.title,
+        fact.source,
+        fact.trust.as_str(),
+        fact.content
+    )
+}
+/// Whether `path` is a fact file the memory store wrote and nobody changed
+/// since: a regular file named by a fact id that holds the bytes a save
+/// writes for what it holds, whatever its trust.
+fn is_store_written(path: &Path) -> bool {
+    let Some(id) = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_suffix(".md"))
+    else {
+        return false;
+    };
+    if fact_path(id).is_err()
+        || !fs::symlink_metadata(path).is_ok_and(|m| m.is_file() && m.len() <= MAX_TEXT as u64)
+    {
+        return false;
+    }
+    let Ok(text) = fs::read_to_string(path) else {
+        return false;
+    };
+    parse_fact(id, &text).is_ok_and(|fact| render(&fact) == text)
+}
+/// Removes each fact in `home`'s `memory/facts` that the memory store wrote
+/// and nobody changed since. A file edited out of the store's format, any
+/// other file and a link stay.
+pub(crate) fn remove_store_written_in(home: &Path) {
+    let _guard = WRITE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Ok(directory) = checked_path(home, "memory/facts") else {
+        return;
+    };
+    if !fs::symlink_metadata(&directory).is_ok_and(|m| m.is_dir()) {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(&directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if is_store_written(&path) {
+            let _ = fs::remove_file(path);
+        }
+    }
 }
 const USAGE_FILE: &str = "memory-usage.json";
 const MAX_USAGE: u64 = 256 * 1024;

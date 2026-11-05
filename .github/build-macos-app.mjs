@@ -83,7 +83,7 @@ tauri("bundle", "--target", "universal-apple-darwin", "--bundles", "app", "--no-
 mustRun("package universal CEF", process.execPath, ["scripts/package-cef-macos.mjs", app, "--universal"]);
 const runPackaging = (cmd, args) => {
   const result = buildSpawnSync(cmd, args, { encoding: "utf8", maxBuffer: 1024 * 1024 });
-  if (result.error || result.status !== 0) throw new Error(`${cmd} failed`);
+  if (result.error || result.status !== 0) throw new Error(`${cmd} failed: ${result.stderr ?? result.error}`);
   return result.stdout;
 };
 const variants = prepareMacosVariants(bundleBase, runPackaging);

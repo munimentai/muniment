@@ -18,15 +18,16 @@ it('shows a column of full-color provider marks named on hover without connectio
   expect(within(screen.getByRole('navigation', { name: 'Providers' })).getByRole('button', { name: 'Model router' }).querySelector('[data-icon=route]')).not.toBeNull()
   // Anthropic's mark is its brand's colored one, as on the model Settings pages.
   expect(within(screen.getByRole('navigation', { name: 'Providers' })).getByRole('button', { name: 'Anthropic' }).querySelector('.logo svg')).not.toBeNull()
-  expect(container.querySelector('.rail-tip')).toBeNull()
+  expect(document.querySelector('.rail-tip')).toBeNull()
   await fireEvent.pointerEnter(within(screen.getByRole('navigation', { name: 'Providers' })).getByRole('button', { name: 'Anthropic' }))
-  expect(container.querySelector('.rail-tip')).toHaveTextContent('Anthropic')
+  expect(document.querySelector('.rail-tip')).toHaveTextContent('Anthropic')
   await fireEvent.pointerLeave(within(screen.getByRole('navigation', { name: 'Providers' })).getByRole('button', { name: 'Anthropic' }))
-  expect(container.querySelector('.rail-tip')).toBeNull()
+  expect(document.querySelector('.rail-tip')).toBeNull()
 
   // The first provider leads, and a mark filters the list to its own models.
   expect(within(screen.getByRole('navigation', { name: 'Providers' })).getByRole('button', { name: 'Model router' })).toHaveAttribute('aria-current', 'true')
   expect(screen.getByRole('button', { name: 'Jev Latest picks' }).querySelector('.logo svg')).not.toBeNull()
+  expect(screen.queryByText('Connect a decision model to route each message.')).toBeNull()
   await fireEvent.click(within(screen.getByRole('navigation', { name: 'Providers' })).getByRole('button', { name: 'OpenAI' }))
   expect(screen.getByRole('region', { name: 'OpenAI' })).toBeInTheDocument()
   expect(within(screen.getByRole('navigation', { name: 'Providers' })).getByRole('button', { name: 'OpenAI' })).toHaveAttribute('aria-current', 'true')
@@ -62,7 +63,7 @@ it('keeps an older saved model in the current list and searches every provider',
   ], hidden: [], shown: [], default_provider: 'openai', default_model: 'gpt-5.6-luna' }
   render(ModelPicker, props(inventory, { current: { provider: 'openai', model: 'gpt-5.6-luna' } }))
   expect([...screen.getByRole('region', { name: 'OpenAI' }).querySelectorAll('.picker-row')].map((row) => row.dataset.model)).toEqual(['gpt-6-luna', 'gpt-5.6-luna'])
-  expect(screen.getByRole('button', { name: 'GPT 5.6 Luna' })).toHaveAttribute('aria-pressed', 'true')
+  expect(screen.getByRole('button', { name: 'GPT-5.6 Luna' })).toHaveAttribute('aria-pressed', 'true')
   expect(within(screen.getByRole('region', { name: 'OpenAI' })).getByRole('button', { name: /Legacy models/ })).toHaveTextContent('1 model')
   await fireEvent.input(screen.getByRole('searchbox', { name: 'Search models' }), { target: { value: '4-8' } })
   expect(screen.getByRole('region', { name: 'Search results' })).toHaveTextContent('Claude Opus 4.8')
@@ -70,6 +71,28 @@ it('keeps an older saved model in the current list and searches every provider',
   await fireEvent.click(within(screen.getByRole('navigation', { name: 'Providers' })).getByRole('button', { name: 'Anthropic' }))
   expect(screen.getByRole('searchbox', { name: 'Search models' })).toHaveValue('')
   expect(screen.getByRole('region', { name: 'Anthropic' })).toHaveTextContent('Claude Opus 5.5')
+})
+
+it('offers a legacy model the router routes only once it is shown, since the router serves only the shown models', async () => {
+  // A ChatGPT account through the router lists older generations it no longer runs.
+  const inventory = { providers: [{ id: 'muniment-router', name: 'Model router', source: 'router', models: [] }], hidden: [], shown: [],
+    router_models: ['gpt-5.6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-6-astra', 'gpt-6-luna', 'gpt-6-sol', 'gpt-6.1-sol', 'gpt-6.1-terra'].map((model) => ({ id: `openai/${model}`, family: 'openai', model, accounts: 1 })) }
+  const onchoose = vi.fn()
+  const onvisibility = vi.fn()
+  render(ModelPicker, props(inventory, { onchoose, onvisibility, embedded: true, current: { provider: 'muniment-router', model: 'openai/gpt-6-astra' } }))
+  await fireEvent.click(screen.getByRole('button', { name: /Legacy models/ }))
+  expect(screen.getByText('Show a legacy model to use it.')).toBeInTheDocument()
+  const terra = within(screen.getByRole('list', { name: 'Legacy models' })).getByRole('button', { name: 'GPT-5.6 Terra' })
+  expect(terra).toBeDisabled()
+  await fireEvent.click(terra)
+  expect(onchoose).not.toHaveBeenCalled()
+  await fireEvent.click(screen.getByRole('button', { name: 'Show GPT-5.6 Terra' }))
+  expect(onvisibility).toHaveBeenCalledWith(expect.objectContaining({ provider: 'muniment-router', choice: 'openai/gpt-5.6-terra' }), true)
+  // Shown, the router serves it, and a pick runs on it.
+  cleanup()
+  render(ModelPicker, props({ ...inventory, shown: ['muniment-router/openai/gpt-5.6-terra'] }, { onchoose, embedded: true, current: { provider: 'muniment-router', model: 'openai/gpt-6-astra' } }))
+  await fireEvent.click(screen.getByRole('button', { name: 'GPT-5.6 Terra' }))
+  expect(onchoose).toHaveBeenCalledWith('muniment-router', 'openai/gpt-5.6-terra')
 })
 
 it('moves a model between its current list and Legacy models', async () => {
@@ -101,9 +124,49 @@ it('links the Model router heading to Decision models while routing is off', asy
   const onrouting = vi.fn()
   render(ModelPicker, props({ providers: [{ id: 'muniment-router', name: 'Router', source: 'router', models: [] }], router_classifier: null, router_models: [{ id: 'openai/gpt', family: 'openai', model: 'gpt', accounts: 2 }] }, { onrouting }))
   expect(screen.getByRole('heading', { name: 'Model router', exact: true })).toBeInTheDocument()
+  // The tab says why it lists no row, where it would otherwise stand empty.
+  expect(screen.getByText('Connect a decision model to route each message.')).toBeInTheDocument()
   expect(screen.queryByText('Automatic')).toBeNull()
   await fireEvent.click(screen.getByRole('button', { name: 'Manage model routing' }))
   expect(onrouting).toHaveBeenCalledTimes(1)
+})
+
+it('says routing is off and points to Roles while a decision model is connected', async () => {
+  const onrouting = vi.fn()
+  render(ModelPicker, props({ providers: [{ id: 'muniment-router', name: 'Router', source: 'router', models: [] }], router_classifier: null, router_decision_model: true, router_models: [{ id: 'openai/gpt', family: 'openai', model: 'gpt', accounts: 2 }] }, { onrouting }))
+  expect(screen.getByText('Routing is off. Turn on Route each message in Settings › Models › Roles.')).toBeInTheDocument()
+  expect(screen.queryByText('Connect a decision model to route each message.')).toBeNull()
+  await fireEvent.click(screen.getByRole('button', { name: 'Manage model routing' }))
+  expect(onrouting).toHaveBeenCalledTimes(1)
+})
+
+it('gives each custom endpoint in the rail its own monogram mark', () => {
+  const inventory = { providers: [
+    { id: 'custom-do-test', name: 'DO Test', source: 'custom', models: [{ id: 'qwen' }] },
+    { id: 'custom-live31', name: 'Live31', source: 'custom', models: [{ id: 'llama' }] },
+    { id: 'openai', name: 'OpenAI', source: 'key', models: [{ id: 'gpt-6.1-sol' }] },
+  ], hidden: [], shown: [] }
+  render(ModelPicker, props(inventory))
+  const rail = screen.getByRole('navigation', { name: 'Providers' })
+  expect(within(rail).getByRole('button', { name: 'DO Test' }).querySelector('.monogram')).toHaveTextContent('DT')
+  expect(within(rail).getByRole('button', { name: 'Live31' }).querySelector('.monogram')).toHaveTextContent('L3')
+  expect(within(rail).getByRole('button', { name: 'OpenAI' }).querySelector('.monogram')).toBeNull()
+  expect(within(rail).getByRole('button', { name: 'OpenAI' }).querySelector('.logo svg')).not.toBeNull()
+})
+
+it('marks an endpoint that did not answer the last refresh and still offers its saved models', async () => {
+  const inventory = { providers: [
+    { id: 'custom-dead', name: 'Dead box', source: 'custom', unreachable: true, models: [{ id: 'kept' }] },
+    { id: 'custom-live', name: 'Live box', source: 'custom', models: [{ id: 'served' }] },
+  ], hidden: [], shown: [] }
+  render(ModelPicker, props(inventory))
+  const dead = screen.getByRole('region', { name: 'Dead box' })
+  expect(within(dead).getByText('Not answering. Its saved models stay.')).toBeInTheDocument()
+  expect(within(dead).getByRole('button', { name: 'kept' })).toBeEnabled()
+  await fireEvent.click(within(screen.getByRole('navigation', { name: 'Providers' })).getByRole('button', { name: 'Live box' }))
+  expect(within(screen.getByRole('region', { name: 'Live box' })).queryByText('Not answering. Its saved models stay.')).toBeNull()
+  await fireEvent.input(screen.getByRole('searchbox'), { target: { value: 'e' } })
+  expect(within(screen.getByRole('region', { name: 'Dead box' })).getByText('Not answering. Its saved models stay.')).toBeInTheDocument()
 })
 
 it('lists only the picked provider\'s models without a search', async () => {
@@ -154,4 +217,18 @@ it('draws open inside another panel with no popup frame, close control or visibi
   expect(onclose).not.toHaveBeenCalled()
   await fireEvent.click(screen.getByRole('button', { name: 'llama4' }))
   expect(onchoose).toHaveBeenCalledWith('ollama', 'llama4')
+})
+
+it('stops Escape at the picker, so the document keys of the page under it never see it', async () => {
+  const page = vi.fn()
+  document.addEventListener('keydown', page)
+  try {
+    const extra = props({ providers: [{ id: 'openai', name: 'OpenAI', source: 'key', models: [{ id: 'gpt-6.1-sol' }] }], hidden: [], shown: [] })
+    render(ModelPicker, extra)
+    await fireEvent.keyDown(screen.getByRole('searchbox', { name: 'Search models' }), { key: 'Escape' })
+    expect(extra.onclose).toHaveBeenCalledTimes(1)
+    expect(page).not.toHaveBeenCalled()
+  } finally {
+    document.removeEventListener('keydown', page)
+  }
 })

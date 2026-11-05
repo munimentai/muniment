@@ -202,7 +202,9 @@ mod tests {
 
     #[test]
     fn a_readable_folder_is_open_within_the_bound() {
-        let directory = std::env::temp_dir();
+        // The test root, not the temporary folder itself: a check opens a
+        // `sessions` folder in what it checks.
+        let directory = crate::state_root::test_root();
         assert_eq!(
             check(&directory, Duration::from_secs(10), &AtomicBool::new(false)),
             FolderAccess::Open
@@ -299,9 +301,16 @@ mod tests {
 
     #[test]
     fn asking_ahead_returns_before_the_read_answers() {
+        let home = crate::state_root::test_root().join("ask-ahead");
+        std::fs::create_dir_all(&home).unwrap();
         let started = std::time::Instant::now();
-        ask_ahead(&std::env::temp_dir(), None);
+        ask_ahead(&home, None);
         assert!(started.elapsed() < Duration::from_secs(1));
+        // The read in the background opens `sessions`. Wait for it, so no
+        // folder appears after the process removes its test root.
+        while !home.join("sessions").is_dir() && started.elapsed() < Duration::from_secs(10) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     #[test]

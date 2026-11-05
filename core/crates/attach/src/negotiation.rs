@@ -266,6 +266,18 @@ pub struct Authorized {
     pub idle_timeout_seconds: u64,
     pub workspace_scopes: BTreeMap<String, BTreeSet<String>>,
     pub authorized_client_credential: String,
+    /// The credential lives only as long as the client process holds it. The
+    /// runtime kept no record of it, so a client never stores it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub credential_ephemeral: bool,
+}
+
+impl Authorized {
+    /// Marks the credential as one the client keeps only in memory.
+    pub fn with_ephemeral_credential(mut self) -> Self {
+        self.credential_ephemeral = true;
+        self
+    }
 }
 
 impl<'de> Deserialize<'de> for Authorized {
@@ -278,6 +290,8 @@ impl<'de> Deserialize<'de> for Authorized {
             idle_timeout_seconds: u64,
             workspace_scopes: BTreeMap<String, BTreeSet<String>>,
             authorized_client_credential: String,
+            #[serde(default)]
+            credential_ephemeral: bool,
             #[serde(flatten)]
             extra: BTreeMap<String, serde_json::Value>,
         }
@@ -314,6 +328,7 @@ impl<'de> Deserialize<'de> for Authorized {
             idle_timeout_seconds: fields.idle_timeout_seconds,
             workspace_scopes: fields.workspace_scopes,
             authorized_client_credential: fields.authorized_client_credential,
+            credential_ephemeral: fields.credential_ephemeral,
         })
     }
 }
@@ -546,5 +561,6 @@ pub fn authorized_with_client_credential(
         idle_timeout_seconds,
         workspace_scopes,
         authorized_client_credential: authorized_client_credential.into(),
+        credential_ephemeral: false,
     }
 }

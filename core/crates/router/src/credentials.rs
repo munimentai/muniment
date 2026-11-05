@@ -11,11 +11,271 @@ pub trait CredentialStore: Send + Sync {
     /// The stored secret, or none.
     fn read(&self, service: &str, name: &str) -> Option<String>;
 
+    /// The stored secret, none when the store holds none, or the store's
+    /// refusal. A caller never replaces a secret the store refused to read.
+    fn lookup(&self, service: &str, name: &str) -> Result<Option<String>, CredentialRefusal> {
+        Ok(self.read(service, name))
+    }
+
     /// Stores a secret, replacing the one there. The error names the store's refusal.
     fn write(&self, service: &str, name: &str, secret: &str) -> Result<(), String>;
 
     /// Removes a secret. Removing a secret that is not there succeeds.
     fn remove(&self, service: &str, name: &str) -> Result<(), String>;
+
+    /// The entries the store refused and holds back, each with its refusal.
+    fn refusals(&self) -> Vec<RefusedEntry> {
+        Vec::new()
+    }
+
+    /// The person asked to try again: the store forgets every refusal, so
+    /// the next read of each entry asks the system again.
+    fn retry_refused(&self) {}
+
+    /// A key for the entry works now, as one the store took or one the
+    /// caller holds in its place: a failure the store holds for the entry
+    /// goes. A declined prompt stays until the person retries.
+    fn answered(&self, _service: &str, _name: &str) {}
+}
+
+/// One entry a store refused and holds back.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RefusedEntry {
+    pub service: String,
+    pub name: String,
+    pub refusal: CredentialRefusal,
+}
+
+/// Why a store answered no secret for an entry it may hold.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CredentialRefusal {
+    /// The person declined the system's access prompt, or the store may not
+    /// show one now. Another read shows the prompt again.
+    Declined(String),
+    /// The store failed. The text names the failure.
+    Failed(String),
+}
+
+impl CredentialRefusal {
+    /// The sentence that names the refusal.
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Declined(message) | Self::Failed(message) => message,
+        }
+    }
+}
+
+/// The first wait after a store failure.
+pub const FIRST_REFUSAL_BACKOFF: std::time::Duration = std::time::Duration::from_secs(30);
+/// The longest wait after store failures in a row.
+pub const MAX_REFUSAL_BACKOFF: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+/// The wait after `failures` store failures in a row: 30 seconds, doubling
+/// up to half an hour.
+pub fn refusal_backoff(failures: u32) -> std::time::Duration {
+    let doublings = failures.saturating_sub(1).min(16);
+    FIRST_REFUSAL_BACKOFF
+        .saturating_mul(1 << doublings)
+        .min(MAX_REFUSAL_BACKOFF)
+}
+
+/// What a store remembers of the entries the system refused, so a refused
+/// entry never raises the system prompt in a loop and never takes a new
+/// secret over the one the store holds. A decline holds back every entry of
+/// its service until the person retries or the process ends. Any other
+/// failure holds back its entry for a backoff that doubles with each failure
+/// in a row.
+#[derive(Debug, Default)]
+pub struct RefusalMemory {
+    entries: std::sync::Mutex<std::collections::BTreeMap<(String, String), HeldRefusal>>,
+}
+
+#[derive(Clone, Debug)]
+struct HeldRefusal {
+    refusal: CredentialRefusal,
+    failures: u32,
+    retry_at: Option<std::time::Instant>,
+}
+
+impl RefusalMemory {
+    fn entries(
+        &self,
+    ) -> std::sync::MutexGuard<'_, std::collections::BTreeMap<(String, String), HeldRefusal>> {
+        self.entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The refusal that still holds for an entry at `now`, or none when the
+    /// system may hear a request for it.
+    pub fn held(
+        &self,
+        service: &str,
+        name: &str,
+        now: std::time::Instant,
+    ) -> Option<CredentialRefusal> {
+        let entries = self.entries();
+        if let Some(held) = entries
+            .get(&(service.to_owned(), name.to_owned()))
+            .filter(|held| held.retry_at.is_none_or(|at| now < at))
+        {
+            return Some(held.refusal.clone());
+        }
+        // A declined prompt holds back every entry of its service, so a
+        // service with many entries raises the prompt once, not once each.
+        entries
+            .iter()
+            .find(|((held_service, _), held)| {
+                held_service == service && matches!(held.refusal, CredentialRefusal::Declined(_))
+            })
+            .map(|(_, held)| held.refusal.clone())
+    }
+
+    /// Whether the system refused an entry and no answer came since. A
+    /// store never writes over such an entry.
+    pub fn refused(&self, service: &str, name: &str) -> bool {
+        self.entries()
+            .contains_key(&(service.to_owned(), name.to_owned()))
+    }
+
+    /// Records the system's refusal of an entry at `now`.
+    pub fn note(
+        &self,
+        service: &str,
+        name: &str,
+        refusal: &CredentialRefusal,
+        now: std::time::Instant,
+    ) {
+        let mut entries = self.entries();
+        let key = (service.to_owned(), name.to_owned());
+        let failures = entries
+            .get(&key)
+            .map_or(0, |held| held.failures)
+            .saturating_add(1);
+        let retry_at = match refusal {
+            CredentialRefusal::Declined(_) => None,
+            CredentialRefusal::Failed(_) => Some(now + refusal_backoff(failures)),
+        };
+        entries.insert(
+            key,
+            HeldRefusal {
+                refusal: refusal.clone(),
+                failures,
+                retry_at,
+            },
+        );
+    }
+
+    /// The system answered for an entry: its refusal goes.
+    pub fn answered(&self, service: &str, name: &str) {
+        self.entries()
+            .remove(&(service.to_owned(), name.to_owned()));
+    }
+
+    /// A key for an entry works now: a failure held for it goes, and a
+    /// decline stays until the person retries.
+    pub fn settled(&self, service: &str, name: &str) {
+        let mut entries = self.entries();
+        let key = (service.to_owned(), name.to_owned());
+        if entries
+            .get(&key)
+            .is_some_and(|held| matches!(held.refusal, CredentialRefusal::Failed(_)))
+        {
+            entries.remove(&key);
+        }
+    }
+
+    /// Every refusal the memory holds.
+    pub fn list(&self) -> Vec<RefusedEntry> {
+        self.entries()
+            .iter()
+            .map(|((service, name), held)| RefusedEntry {
+                service: service.clone(),
+                name: name.clone(),
+                refusal: held.refusal.clone(),
+            })
+            .collect()
+    }
+
+    /// The person asked to try again: every refusal goes.
+    pub fn clear(&self) {
+        self.entries().clear();
+    }
+}
+
+/// The declines a runtime shares with the short processes it starts, such
+/// as the `secret get` command Pi runs for an endpoint key, so a declined
+/// service raises the system prompt once across all of them. One file per
+/// service under `directory` holds the decline's message and never a
+/// secret. The runtime forgets every decline at its start and on the
+/// person's retry.
+#[derive(Clone, Debug)]
+pub struct SharedDeclines {
+    directory: std::path::PathBuf,
+}
+
+impl SharedDeclines {
+    pub fn new(directory: impl Into<std::path::PathBuf>) -> Self {
+        Self {
+            directory: directory.into(),
+        }
+    }
+
+    fn path(&self, service: &str) -> Option<std::path::PathBuf> {
+        valid_component(service).then(|| self.directory.join(service))
+    }
+
+    /// The decline a process shared for `service`, if one holds.
+    pub fn held(&self, service: &str) -> Option<CredentialRefusal> {
+        let message = std::fs::read_to_string(self.path(service)?).ok()?;
+        Some(CredentialRefusal::Declined(message))
+    }
+
+    /// Shares a decline of `service` with the runtime and its other
+    /// processes.
+    pub fn note(&self, service: &str, refusal: &CredentialRefusal) {
+        let (CredentialRefusal::Declined(message), Some(path)) = (refusal, self.path(service))
+        else {
+            return;
+        };
+        if std::fs::create_dir_all(&self.directory).is_ok() {
+            let _ = std::fs::write(path, message);
+        }
+    }
+
+    /// Every shared decline, one entry per service.
+    pub fn list(&self) -> Vec<RefusedEntry> {
+        let Ok(entries) = std::fs::read_dir(&self.directory) else {
+            return Vec::new();
+        };
+        let mut services: Vec<String> = entries
+            .flatten()
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .filter(|service| valid_component(service))
+            .collect();
+        services.sort();
+        services
+            .into_iter()
+            .filter_map(|service| {
+                let refusal = self.held(&service)?;
+                Some(RefusedEntry {
+                    service,
+                    name: String::new(),
+                    refusal,
+                })
+            })
+            .collect()
+    }
+
+    /// The runtime started or the person asked to try again: every shared
+    /// decline goes.
+    pub fn clear(&self) {
+        for entry in self.list() {
+            if let Some(path) = self.path(&entry.service) {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
 }
 
 /// The directory under a host's state root that [`FileCredentialStore`]
@@ -105,6 +365,11 @@ fn file_component(value: &str) -> String {
     component
 }
 
+/// Whether `value` is a file name [`file_component`] leaves as it is.
+fn valid_component(value: &str) -> bool {
+    !value.is_empty() && file_component(value) == value
+}
+
 fn create_private_directory(path: &Path) -> std::io::Result<()> {
     let mut builder = std::fs::DirBuilder::new();
     builder.recursive(true);
@@ -175,6 +440,112 @@ impl CredentialStore for FileCredentialStore {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(format!("The credential store kept the secret: {error}.")),
         }
+    }
+}
+
+#[cfg(test)]
+mod refusal_memory_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    fn declined() -> CredentialRefusal {
+        CredentialRefusal::Declined("User canceled the operation.".into())
+    }
+
+    fn failed() -> CredentialRefusal {
+        CredentialRefusal::Failed("The keychain is not available.".into())
+    }
+
+    #[test]
+    fn a_decline_holds_until_a_retry_however_long() {
+        let memory = RefusalMemory::default();
+        let now = Instant::now();
+        assert_eq!(memory.held("s", "a", now), None);
+        memory.note("s", "a", &declined(), now);
+        assert_eq!(memory.held("s", "a", now), Some(declined()));
+        assert_eq!(
+            memory.held("s", "a", now + Duration::from_secs(365 * 24 * 3600)),
+            Some(declined())
+        );
+        assert!(memory.refused("s", "a"));
+        // The decline holds back the service's other entries, which a write
+        // may still create, and no other service.
+        assert_eq!(memory.held("s", "b", now), Some(declined()));
+        assert!(!memory.refused("s", "b"));
+        assert_eq!(memory.held("t", "a", now), None);
+        assert_eq!(memory.list().len(), 1);
+        memory.clear();
+        assert_eq!(memory.held("s", "a", now), None);
+        assert!(!memory.refused("s", "a"));
+    }
+
+    #[test]
+    fn a_failure_backs_off_doubling_to_a_cap_and_an_answer_forgets_it() {
+        let memory = RefusalMemory::default();
+        let now = Instant::now();
+        memory.note("s", "a", &failed(), now);
+        assert!(memory
+            .held("s", "a", now + Duration::from_secs(29))
+            .is_some());
+        assert!(memory
+            .held("s", "a", now + Duration::from_secs(30))
+            .is_none());
+        // The wait is over, but the entry still may not be written over.
+        assert!(memory.refused("s", "a"));
+        memory.note("s", "a", &failed(), now);
+        assert!(memory
+            .held("s", "a", now + Duration::from_secs(59))
+            .is_some());
+        assert!(memory
+            .held("s", "a", now + Duration::from_secs(60))
+            .is_none());
+        for _ in 0..40 {
+            memory.note("s", "a", &failed(), now);
+        }
+        assert!(memory
+            .held("s", "a", now + MAX_REFUSAL_BACKOFF - Duration::from_secs(1))
+            .is_some());
+        assert!(memory.held("s", "a", now + MAX_REFUSAL_BACKOFF).is_none());
+        memory.answered("s", "a");
+        memory.note("s", "a", &failed(), now);
+        assert!(memory.held("s", "a", now + FIRST_REFUSAL_BACKOFF).is_none());
+    }
+
+    #[test]
+    fn a_working_key_ends_a_failure_and_keeps_a_decline() {
+        let memory = RefusalMemory::default();
+        let now = std::time::Instant::now();
+        memory.note("s", "a", &failed(), now);
+        memory.note("s", "b", &declined(), now);
+        memory.settled("s", "a");
+        memory.settled("s", "b");
+        assert!(!memory.refused("s", "a"));
+        assert!(memory.refused("s", "b"));
+        assert_eq!(memory.list().len(), 1);
+    }
+
+    #[test]
+    fn a_shared_decline_holds_in_every_process_until_cleared() {
+        let directory =
+            std::env::temp_dir().join(format!("muniment-shared-declines-{}", uuid::Uuid::new_v4()));
+        let runtime = SharedDeclines::new(&directory);
+        let child = SharedDeclines::new(&directory);
+        assert_eq!(child.held("ai.muniment.endpoints"), None);
+        // A failure is not shared, and neither is a service name a file
+        // cannot carry as it is.
+        child.note("ai.muniment.endpoints", &failed());
+        child.note("../escape", &declined());
+        assert!(runtime.list().is_empty());
+        child.note("ai.muniment.endpoints", &declined());
+        assert_eq!(runtime.held("ai.muniment.endpoints"), Some(declined()));
+        assert_eq!(runtime.held("ai.muniment.hooks"), None);
+        let listed = runtime.list();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].service, "ai.muniment.endpoints");
+        assert_eq!(listed[0].refusal, declined());
+        runtime.clear();
+        assert_eq!(child.held("ai.muniment.endpoints"), None);
+        let _ = std::fs::remove_dir_all(directory);
     }
 }
 

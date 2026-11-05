@@ -73,6 +73,8 @@ pub struct PromptLaunch {
     prepared: (u64, muniment_core::journal::reducer::ChatProjector),
     /// `Some` makes the run a manual compaction with these instructions.
     compaction: Option<Option<String>>,
+    /// Called when the run stops replying while the agent run queue holds it.
+    agent_run_ended: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -186,6 +188,24 @@ pub fn accept_compaction(
     .map(|(_, launch)| launch)
 }
 
+/// The memory runtime of one run. It carries the after-run extraction model,
+/// which answers through the cheapest connected router account and then the
+/// user's Pi sign-in, so a chat with Save facts from chats on learns facts.
+fn run_memory_runtime(
+    profile_directory: &Path,
+    config_directory: &Path,
+) -> Arc<ApplicationMemoryRuntime> {
+    Arc::new(
+        ApplicationMemoryRuntime::new(
+            config_directory.to_path_buf(),
+            profile_directory.join("memory"),
+        )
+        .with_extraction_model(muniment_core::memory_extract::extraction_model(
+            profile_directory.to_path_buf(),
+        )),
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn accept_run(
     host: &RuntimeHost,
@@ -208,10 +228,7 @@ fn accept_run(
     events: RuntimeChatEventTarget,
     pi_artifact: Option<PiArtifactDescriptor>,
 ) -> Result<(PromptAcceptance, PromptLaunch), String> {
-    let memory_runtime = Arc::new(ApplicationMemoryRuntime::new(
-        config_directory.to_path_buf(),
-        profile_directory.join("memory"),
-    ));
+    let memory_runtime = run_memory_runtime(profile_directory, config_directory);
     let cancelled = Arc::new(AtomicBool::new(false));
     let transport = Arc::new(Mutex::new(None));
     let adapter = Arc::new(Mutex::new(None));
@@ -405,12 +422,20 @@ fn accept_run(
         pi_artifact,
         prepared,
         compaction,
+        agent_run_ended: None,
     };
     Ok((acceptance, launch))
 }
 
 impl PromptLaunch {
     /// Runs the prompt at a thinking level. None runs the model at its default.
+    /// Calls `ended` when the run stops replying while the agent run queue
+    /// holds it, before the post-run work.
+    pub fn with_agent_run_ended(mut self, ended: Option<Arc<dyn Fn() + Send + Sync>>) -> Self {
+        self.agent_run_ended = ended;
+        self
+    }
+
     pub fn with_thinking_level(mut self, thinking_level: Option<String>) -> Self {
         self.thinking_level = thinking_level;
         self
@@ -468,7 +493,8 @@ pub fn drive_prompt(launch: PromptLaunch) {
         )
         .with_host(&launch.host)
         .with_pi_artifact(launch.pi_artifact.unwrap_or(PI_SELECTED_ARTIFACT))
-        .with_run_id(&launch.run_id),
+        .with_run_id(&launch.run_id)
+        .with_agent_run_ended(launch.agent_run_ended),
         launch.storage,
         launch.runtime,
         launch.runtime_activity,
@@ -675,10 +701,7 @@ pub fn resume_run_with_notice(
         resume.notice = notice;
         (resume, thread_id)
     };
-    let memory_runtime = Arc::new(ApplicationMemoryRuntime::new(
-        config_directory.as_ref().to_path_buf(),
-        profile_directory.join("memory"),
-    ));
+    let memory_runtime = run_memory_runtime(profile_directory, config_directory.as_ref());
     let cancelled = Arc::new(AtomicBool::new(false));
     let transport = Arc::new(Mutex::new(None));
     let adapter = Arc::new(Mutex::new(None));
@@ -734,4 +757,19 @@ pub fn resume_run_with_notice(
     result
         .recv()
         .map_err(|_| "This reply could not be resumed. Try again.".to_string())?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_run_carries_the_extraction_model_without_a_model_setting() {
+        let root = std::env::temp_dir().join(format!(
+            "muniment-run-memory-{}",
+            uuid::Uuid::now_v7().simple()
+        ));
+        let memory = run_memory_runtime(&root, &root.join("config"));
+        assert!(memory.review_model().is_some());
+    }
 }

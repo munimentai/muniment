@@ -23,7 +23,9 @@ export function arrangeStandIn(input = {}) {
   const sidebar = { projects: [], archived: [], results: [] }
   const listed = []
   const seen = new Set()
-  const homes = (input.agents ?? []).filter((agent) => agent.home_thread_id && !(input.threads ?? []).some((thread) => thread.id === agent.home_thread_id)).map((agent) => ({ id: agent.home_thread_id, title: '', updated_at: '' }))
+  // An unlisted home thread shows while no other thread of its agent does.
+  const listedAgents = new Set((input.threads ?? []).map((thread) => agentThreads[thread.id]).filter(Boolean))
+  const homes = (input.agents ?? []).filter((agent) => agent.home_thread_id && !listedAgents.has(agent.id) && !(input.threads ?? []).some((thread) => thread.id === agent.home_thread_id)).map((agent) => ({ id: agent.home_thread_id, title: '', updated_at: '' }))
   for (const thread of [...(input.threads ?? []), ...homes]) {
     if (!thread.id || seen.has(thread.id)) continue
     seen.add(thread.id)

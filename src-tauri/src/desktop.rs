@@ -19,6 +19,7 @@ mod e2e_folder_dialog;
 mod fonts;
 mod home;
 mod extend;
+mod input_mark;
 mod launcher;
 #[cfg(target_os = "linux")]
 mod linux_runtime_service;
@@ -143,6 +144,8 @@ pub fn run() {
             window_state::restore_main_window(app)?;
             #[cfg(target_os = "macos")]
             launcher::setup(app.handle())?;
+            input_mark::refuse_affordance();
+            input_mark::log_focus_changes();
             app.manage(chat::ChatState::default());
             runtime_owner::setup(app.handle());
             #[cfg(target_os = "macos")]
@@ -193,6 +196,10 @@ pub fn run() {
             cef_browser::artifact_read,
             onboarding_diagnostics::onboarding_model_settings_error,
             fonts::installed_fonts,
+            input_mark::input_mark_dismiss,
+            input_mark::input_mark_watch,
+            input_mark::input_mark_unwatch,
+            window_state::main_window_ready,
             auth::auth_sign_in,
             auth::auth_status,
             auth::auth_entitlement_snapshot,
@@ -319,6 +326,7 @@ pub fn run() {
             projects::project_list,
             projects::project_create,
             projects::project_rename,
+            projects::project_delete,
             projects::project_open,
             projects::project_settings,
             projects::project_settings_save,
@@ -457,13 +465,15 @@ mod command_thread_tests {
         "attach_pairing_decide",
         "attach_revoke_companion",
         "browser_language",
-        "creation_delete",
         "creation_list",
         "creation_save",
         "dictation_start",
         "dictation_status",
         "dictation_stop",
         "home_folder_settings",
+        "input_mark_dismiss",
+        "input_mark_unwatch",
+        "input_mark_watch",
         "installed_fonts",
         "launcher_close",
         "launcher_is_visible",
@@ -475,6 +485,7 @@ mod command_thread_tests {
         "local_mode_leave",
         "local_mode_open_url",
         "local_mode_status",
+        "main_window_ready",
         "model_registry",
         "onboarding_model_settings_error",
         "open_login_items",
@@ -519,6 +530,7 @@ mod command_thread_tests {
             "home_confirm",
             "home_status",
             "project_create",
+            "project_delete",
             "project_list",
             "project_move_thread",
             "project_open",

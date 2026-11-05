@@ -1149,7 +1149,18 @@ pub fn confirm_home(config_dir: &Path, home: &Path) -> Result<(), HomeError> {
 /// Keeps a saved Home or publishes the default under the shared Home lock.
 pub fn initialize_default_home(config_dir: &Path) -> Result<PathBuf, HomeError> {
     initialize_home_with(config_dir, || {
-        choose_default_home(dirs::document_dir(), dirs::home_dir()).map_err(|error| {
+        // A test run that would reach the owner's Documents folder gets a
+        // temporary one.
+        let documents = dirs::document_dir().map(|documents| {
+            if crate::state_root::is_test_run()
+                && crate::state_root::is_owner_data(&documents.join("muniment"))
+            {
+                crate::state_root::test_documents_directory()
+            } else {
+                documents
+            }
+        });
+        choose_default_home(documents, dirs::home_dir()).map_err(|error| {
             HomeError::io("The default Home is unavailable.", io::Error::other(error))
         })
     })
@@ -1244,6 +1255,7 @@ fn normalized_absolute(path: &Path) -> Result<PathBuf, HomeError> {
 }
 
 pub fn scaffold_home(home: &Path) -> Result<(), HomeError> {
+    crate::state_root::guard_owner_data(home, "Muniment Home");
     create_visible_directory(home)?;
     for name in HOME_DIRECTORIES {
         let directory = home.join(name);

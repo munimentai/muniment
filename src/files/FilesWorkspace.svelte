@@ -1,10 +1,9 @@
 <script>
   import { dialogDismiss } from '../lib/dialog-dismiss.js'
   import PopupClose from '../lib/PopupClose.svelte'
-  import OverflowText from '../lib/OverflowText.svelte'
   import { floatingMenu } from '../lib/floating-menu.js'
   import { panelScroll } from '../lib/panel-scroll.js'
-  import { onMount, tick } from 'svelte'
+  import { onMount, tick, untrack } from 'svelte'
   import { open } from '@tauri-apps/plugin-dialog'
   import LucideIcon from '../lib/LucideIcon.svelte'
   import ConfirmDialog from '../lib/ConfirmDialog.svelte'
@@ -12,7 +11,7 @@
   import { fileTreeRows } from './file-tree.js'
   let { context: workspaceContext = null, tauri, threadId = null, projectId = null, initialPath = '', onfolder, onfile, hidden = false, onwillchange = () => true, onchanged } = $props()
   let showHidden = $state(false)
-  const contextKey = JSON.stringify(workspaceContext ? Object.fromEntries(Object.entries(workspaceContext).filter(([key]) => key !== 'threadTitle')) : {threadId,projectId})
+  const contextKey = JSON.stringify(workspaceContext ? Object.fromEntries(Object.entries(workspaceContext).filter(([key]) => key !== 'threadTitle' && key !== 'label' && key !== 'unsent')) : {threadId,projectId})
   const storageKey = `muniment.files:${contextKey}`
   let folders = $state([])
   let listing = $state(null)
@@ -31,6 +30,16 @@
   let busy = $state(false)
   let status = $state('')
   const revealLabel = /Mac/.test(navigator.platform) ? 'Reveal in Finder' : /Win/.test(navigator.platform) ? 'Reveal in File Explorer' : 'Reveal in File Manager'
+  // A folder path too long for the line drops its start behind a leading
+  // ellipsis, and only then does the line name the full path on hover.
+  let pathCut = $state(false)
+  function cutStart(node) {
+    const measure = () => { pathCut = node.scrollWidth > node.clientWidth }
+    const resize = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure)
+    resize?.observe(node)
+    measure()
+    return { update: measure, destroy: () => resize?.disconnect() }
+  }
   const destination = () => selected?.directory ? selected.path : selected?.parent || listing?.path
   function picked() { return [...selection] }
   async function refresh() {
@@ -148,7 +157,15 @@
       void focus(next)
     }
   }
+  // A view that closed before its folders answered, such as the previous
+  // thread's while a new thread opens, loads nothing, so its folder never
+  // names the next view's tab.
+  let closed = false
+  // The listed path of the context's own folder, the last of its folders,
+  // while the view shows that folder or a folder inside it.
+  let ownFolder = null
   async function load(path) {
+    if (closed) return
     const request = ++version
     loading = true; error = ''; selected = null; selection = new Set(); menu = null
     children = {}; expanded = new Set(); reading = new Set(); folderErrors = {}; focused = null
@@ -156,8 +173,32 @@
       const result = await tauri.invoke('workspace_list', { path })
       if (request !== version) return
       listing = result; filter = ''; onfolder?.(result.path)
+      if (path === folders.at(-1)?.path) ownFolder = result.path
+      else if (ownFolder && !within(result.path, ownFolder)) ownFolder = null
     } catch (e) { if (request === version) error = String(e) }
     finally { if (request === version) loading = false }
+  }
+  const within = (path, root) => path === root || path.startsWith(root + '/') || path.startsWith(root + '\\')
+  // A thread's folder takes the thread's title after its first turn, and a
+  // rename takes it again. The view reads the thread's folders with the new
+  // title, and a view in the old folder opens the new one.
+  let shownTitle = untrack(() => workspaceContext?.threadTitle)
+  $effect(() => {
+    const title = workspaceContext?.threadTitle
+    if (!workspaceContext?.threadId || !title || title === shownTitle) return
+    shownTitle = title
+    if (started) untrack(() => { void follow() })
+  })
+  async function follow() {
+    let result
+    try { result = await tauri.invoke('workspace_folders', workspaceContext) } catch { return }
+    if (closed || !Array.isArray(result)) return
+    folders = result
+    const next = result.at(-1)?.path
+    if (!next) return
+    const current = listing?.path
+    if (!current) return load(next)
+    if (ownFolder && within(current, ownFolder)) await load(next)
   }
   async function choose() {
     try { const path = await open({ directory: true, multiple: false }); if (typeof path === 'string') await load(path) }
@@ -177,12 +218,24 @@
     if (entry.directory) return toggle(entry)
     onfile?.(entry)
   }
-  onMount(() => {
-    void tauri.invoke('workspace_folders', workspaceContext || { threadId, projectId }).then(result => {
+  // A thread's folder comes into being as its folders are read, so a hidden
+  // view reads them only once it shows, and the view of a chat with no sent
+  // message reads them only after the first message. A chat left unsent
+  // leaves no folder.
+  let started = $state(false)
+  const unsent = $derived(!!workspaceContext?.unsent)
+  $effect(() => { if (!hidden && !started && !unsent) untrack(start) })
+  function start() {
+    started = true
+    shownTitle = workspaceContext?.threadTitle
+    const { unsent: _, ...context } = workspaceContext || { threadId, projectId }
+    void tauri.invoke('workspace_folders', context).then(result => {
+      if (closed) return
       folders = result
       let saved
       try { saved = JSON.parse(localStorage.getItem(storageKey) || 'null') } catch { /* Ignore invalid saved state. */ }
-      const path = initialPath || saved?.path || result.at(-1)?.path
+      // A folder the person chose before the first message stays.
+      const path = listing?.path || initialPath || saved?.path || result.at(-1)?.path
       if (path) return load(path).then(async () => {
         if (!listing && result.at(-1)?.path !== path) await load(result.at(-1).path)
         for (const entry of saved?.expanded || []) {
@@ -191,8 +244,10 @@
         }
       })
       loading = false
-    }).catch(e => { error = String(e); loading = false })
-    return () => { if (listing) { try { localStorage.setItem(storageKey,JSON.stringify({path:listing.path,expanded:[...expanded]})) } catch { /* Storage may be unavailable. */ } }; version += 1 }
+    }).catch(e => { if (closed) return; error = String(e); loading = false })
+  }
+  onMount(() => {
+    return () => { closed = true; if (listing) { try { localStorage.setItem(storageKey,JSON.stringify({path:listing.path,expanded:[...expanded]})) } catch { /* Storage may be unavailable. */ } }; version += 1 }
   })
 </script>
 <svelte:window onpointerdown={outside} />
@@ -207,15 +262,16 @@
     <button type="button" disabled={busy} onclick={choose}>Choose folder…</button>
     <button type="button" aria-label="Refresh files" disabled={busy || !listing} onclick={() => refresh().catch(e => error = String(e))}><LucideIcon name="refresh-cw" /></button>
   </header>
-  {#if listing}<p class="path"><OverflowText text={listing.path} /></p>{/if}
+  {#if listing}<p class="path" data-tooltip={listing.path} data-cut={pathCut}><span class="path-text" use:cutStart={listing.path}><bdi dir="ltr">{listing.path}</bdi></span></p>{/if}
   {#if error}<p role="alert">{error}</p>{/if}
   <div class="files-content">
     <div class="file-list" use:panelScroll role="group" aria-label="File list" oncontextmenu={event => { if (listing) void context(event,{path:listing.path,directory:true,name:''}) }}>
-      <div class="filter-row"><input aria-label="Filter files" placeholder="Filter files" bind:value={filter} /><button type="button" aria-label="New file" disabled={!listing || busy} onclick={() => startName('new-file')}><LucideIcon name="file-plus" /></button><button type="button" aria-label="New folder" disabled={!listing || busy} onclick={() => startName('new-folder')}><LucideIcon name="folder-plus" /></button></div>
+      <div class="filter-row"><input spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" aria-label="Filter files" placeholder="Filter files" bind:value={filter} /><button type="button" aria-label="New file" disabled={!listing || busy} onclick={() => startName('new-file')}><LucideIcon name="file-plus" /></button><button type="button" aria-label="New folder" disabled={!listing || busy} onclick={() => startName('new-folder')}><LucideIcon name="folder-plus" /></button></div>
       <label class="hidden-toggle"><input type="checkbox" bind:checked={showHidden} />Show hidden files</label>
       {#if status}<p role="status">{status}</p>{/if}
       {#if selection.size > 1}<p>{selection.size} selected</p>{/if}
-      {#if loading}<p role="status">Reading folder…</p>
+      {#if unsent && !started && !listing}<p>Files appear here after the first message.</p>
+      {:else if loading}<p role="status">Reading folder…</p>
       {:else if !entries.length}<p>{filter ? "No matching files." : "No files here yet. Create a file or choose a folder."}</p>
       {:else}<div role="tree" aria-label="Files and folders" aria-multiselectable="true" bind:this={tree}>{#each entries as entry (entry.path)}
         <button class="tree-row" disabled={busy} type="button" role="treeitem" data-path={entry.path} aria-label={entry.name} aria-level={entry.depth+1} aria-expanded={entry.directory ? expanded.has(entry.path) : undefined} aria-selected={selection.has(entry.path)} tabindex={tabStop === entry.path ? 0 : -1} style:padding-left={`${6+entry.depth*18}px`} oncontextmenu={event => context(event,entry)} onclick={event => select(entry,event)} onkeydown={event => keys(event,entry)}>
@@ -241,14 +297,14 @@
     <button role="menuitem" disabled={!selection.size} onclick={() => copyPaths(false)}>Copy Path</button>
     <button role="menuitem" disabled={!selection.size} onclick={() => copyPaths(true)}>Copy Relative Path</button>
     <hr />
-    <button role="menuitem" class="delete" disabled={busy || !selection.size} onclick={() => { deleting = picked(); menu = null }}>Delete{selection.size > 1 ? ` ${selection.size} items` : ''}…</button>
+    <button role="menuitem" class="delete" data-danger disabled={busy || !selection.size} onclick={() => { deleting = picked(); menu = null }}>Delete{selection.size > 1 ? ` ${selection.size} items` : ''}…</button>
   </div>
 {/if}
-{#if deleting}<ConfirmDialog title={`Delete ${deleting.length} ${deleting.length === 1 ? 'item' : 'items'}?`} cancelLabel="Cancel" confirmLabel="Move to Trash" onDecision={yes => yes ? run('trash',deleting) : deleting = null}><p>The selected items will move to the system Trash.</p>{#if error}<p role="alert">{error}</p>{/if}</ConfirmDialog>{/if}
+{#if deleting}<ConfirmDialog title={`Delete ${deleting.length} ${deleting.length === 1 ? 'item' : 'items'}?`} cancelLabel="Cancel" confirmLabel="Move to Trash" destructive onDecision={yes => yes ? run('trash',deleting) : deleting = null}><p>The selected items will move to the system Trash.</p>{#if error}<p role="alert">{error}</p>{/if}</ConfirmDialog>{/if}
 {#if naming}
   <div class="name-backdrop" use:dialogDismiss={{onclose: () => naming = null, disabled: busy}}><form role="dialog" aria-modal="true" aria-label={naming.action === 'rename' ? 'Rename item' : naming.action === 'new-file' ? 'New file' : 'New folder'} onsubmit={e => { e.preventDefault(); void run(naming.action,naming.paths,proposedName,naming.target) }} onkeydown={e => { if (e.key === 'Escape' && !busy) naming = null; if (e.key === 'Tab') { const controls = [...e.currentTarget.querySelectorAll('input,button:not(:disabled)')]; const index = controls.indexOf(document.activeElement); e.preventDefault(); controls[(index+(e.shiftKey?-1:1)+controls.length)%controls.length]?.focus() } }}>
     <header class="name-head"><label for="workspace-item-name">{naming.action === 'rename' ? 'Rename item' : naming.action === 'new-file' ? 'New file' : 'New folder'}</label><PopupClose label="Close file name" disabled={busy} onclick={() => naming = null} /></header>
-    <input id="workspace-item-name" bind:this={nameInput} bind:value={proposedName} disabled={busy} autocomplete="off" />
+    <input id="workspace-item-name" bind:this={nameInput} bind:value={proposedName} disabled={busy} autocomplete="off" spellcheck="false" autocorrect="off" autocapitalize="off" />
     {#if error}<p role="alert">{error}</p>{/if}
     <div class="name-actions"><button type="submit" disabled={busy || !proposedName.trim()}>{naming.action === 'rename' ? 'Rename' : 'Create'}</button></div>
   </form></div>
@@ -263,7 +319,11 @@
   header { display:flex; align-items:center; gap:6px; padding:8px; border-bottom:1px solid var(--border); }
   button,input,select { border:1px solid var(--border); border-radius:var(--radius-control); background:var(--surface); color:var(--ink); padding:5px 8px; font:var(--text-12) var(--font-mono); }
   button { display:flex; align-items:center; gap:8px; cursor:pointer; } button:disabled { opacity:.5; } button:hover:not(:disabled),button[aria-selected="true"] { background:var(--faint); }
-  select { flex:1; min-width:0; } p { margin:12px; color:var(--muted); font:var(--text-12) var(--font-mono); } .path { min-width:0; }
+  select { flex:1; min-width:0; } p { margin:12px; color:var(--muted); font:var(--text-12) var(--font-mono); } .path { position:relative; min-width:0; }
+  /* The path reads left to right inside a right-to-left line, so its start drops behind the ellipsis. */
+  .path-text { display:block; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; direction:rtl; text-align:left; }
+  .path[data-cut="true"]::after { content:attr(data-tooltip); position:absolute; left:0; top:calc(100% + 4px); z-index:4; width:max-content; max-width:100%; box-sizing:border-box; padding:6px 9px; border:1px solid var(--border); border-radius:var(--radius-control); background:var(--surface); box-shadow:var(--shadow-overlay); color:var(--ink); font:var(--text-12) var(--font-mono); overflow-wrap:anywhere; pointer-events:none; opacity:0; transition:opacity 80ms ease; }
+  .path[data-cut="true"]:hover::after { opacity:1; transition-delay:350ms; }
   .files-content { flex:1; min-height:0; display:grid; grid-template-columns:minmax(0,1fr); }
   .file-list { min-height:0; overflow:auto; padding:8px; } input { width:100%; margin-bottom:8px; }
   .hidden-toggle { display:flex; align-items:center; gap:6px; margin:4px 0 8px; color:var(--muted); font:var(--text-12) var(--font-human); }

@@ -4,7 +4,8 @@
   import { listen, emitTo } from '@tauri-apps/api/event'
   import { applyTheme, readStoredTheme } from './theme-state.js'
   import LucideIcon from './LucideIcon.svelte'
-  import { followPointer } from './menu-pointer.js'
+  import { followPointer, menuStep } from './menu-pointer.js'
+  import { inputLeads } from './focus-source.js'
   let selected = $state(null)
   let actionId = $state(null)
   let label = $state('Workspace tools')
@@ -12,7 +13,16 @@
   let items = $state(workspaceItems)
   let menu
   let shown = false
+  // A click opens the menu with focus on its first item but no item shown,
+  // so the first arrow key shows an item rather than moving past the first.
+  let unshown = false
   const popup = getCurrentWindow()
+  // One native window draws every menu, so each open names the window for
+  // the menu it shows, and a screen reader announces that menu's name.
+  async function name(title) {
+    document.title = title
+    try { await popup.setTitle(title) } catch { /* The menu keeps its aria-label. */ }
+  }
   // The opener says whether a pointer press opened the menu, so the first
   // item shows the focus fill only when the keys opened it.
   function markFocusSource(pointer) {
@@ -20,14 +30,16 @@
     else delete document.documentElement.dataset.pointer
   }
   async function close() { if (!shown) return; shown = false; await popup.hide(); await emitTo('main', actionId ? 'action-menu-closed' : 'workspace-menu-closed', actionId) }
-  async function choose(id) { const source = actionId; shown = false; await popup.hide(); await emitTo('main', source ? 'action-menu-select' : 'workspace-menu-select', source ? {id: source, item: id} : id) }
+  // An action choice names the input that made it, read before the hide.
+  async function choose(id) { const source = actionId; const via = inputLeads(); shown = false; await popup.hide(); await emitTo('main', source ? 'action-menu-select' : 'workspace-menu-select', source ? {id: source, item: id, via} : id) }
   function keys(event) {
     const buttons = [...menu.querySelectorAll('button:not(:disabled)')]
-    const index = buttons.indexOf(document.activeElement)
+    const index = unshown ? -1 : buttons.indexOf(document.activeElement)
     if (event.key === 'Escape') { event.preventDefault(); void close() }
     else if (['ArrowDown','ArrowUp','Home','End'].includes(event.key)) {
       event.preventDefault()
-      buttons[event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length]?.focus()
+      unshown = false
+      buttons[menuStep(buttons.length, index, event.key)]?.focus()
     }
   }
   onMount(() => {
@@ -36,20 +48,24 @@
     const retain = off => { if (disposed) off(); else stops.push(off) }
     void listen('workspace-menu-open', async ({payload}) => {
       actionId = null
-      label = 'Workspace tools'
+      label = payload.label || 'Workspace tools'
       items = workspaceItems
       selected = payload.selected
+      unshown = !!payload.pointer
       markFocusSource(payload.pointer)
       applyTheme(document.documentElement, readStoredTheme())
+      await name(label)
       await tick()
       shown = true; await popup.show()
       await popup.setFocus()
       menu.querySelector('button')?.focus()
     }).then(retain)
     void listen('action-menu-open', async ({payload}) => {
-      actionId = payload.id; label = payload.label; items = payload.items; selected = null
+      actionId = payload.id; label = payload.label || 'Actions'; items = payload.items; selected = null
+      unshown = !!payload.pointer
       markFocusSource(payload.pointer)
       applyTheme(document.documentElement, readStoredTheme())
+      await name(label)
       await tick(); shown = true; await popup.show(); await popup.setFocus(); menu.querySelector('button:not(:disabled)')?.focus()
     }).then(retain)
     void popup.onFocusChanged(({payload}) => { if (!payload && shown) void close() }).then(retain)
@@ -57,9 +73,9 @@
   })
 </script>
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-<div data-panel="workspace-menu" data-panel-variant="overlay" class="tools" role="menu" tabindex="-1" aria-label={label} bind:this={menu} use:followPointer onkeydown={keys}>
+<div data-panel="workspace-menu" data-panel-variant="overlay" class="tools" role="menu" tabindex="-1" aria-label={label} bind:this={menu} use:followPointer onpointermove={() => { unshown = false }} onkeydown={keys}>
   {#each items as item}
-    <button type="button" role="menuitem" disabled={item.disabled} onclick={() => choose(item.id)}>{#if item.icon}<LucideIcon name={item.icon}/>{/if}<span>{item.name}</span>{#if !actionId && selected === item.id}<LucideIcon name="check"/>{/if}</button>
+    <button type="button" role="menuitem" disabled={item.disabled} data-danger={item.danger || undefined} onclick={() => choose(item.id)}>{#if item.icon}<LucideIcon name={item.icon}/>{/if}<span>{item.name}</span>{#if !actionId && selected === item.id}<LucideIcon name="check"/>{/if}</button>
   {/each}
 </div>
 <style>
@@ -68,4 +84,6 @@
   button { display:flex; align-items:center; gap:10px; width:100%; min-height:36px; padding:8px; border:0; text-align:left; border-radius:var(--radius-control); color:var(--ink); background:transparent; cursor:pointer; font:var(--text-13) var(--font-human); }
   button:disabled { opacity: .5; cursor: default; }
   button:hover:not(:disabled) { background:var(--faint); } span { flex:1; }
+  /* A destructive item, such as a thread's Delete, reads in the danger color. */
+  button[data-danger] { color:var(--danger); }
 </style>

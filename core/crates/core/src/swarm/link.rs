@@ -701,6 +701,8 @@ pub(super) fn members_view(inner: &Inner) -> Result<Value, String> {
         "members": members,
         "absence": super::absence::view(inner)?,
         "sync": inner.sync_view()?,
+        "fleet_key": super::fleet::key_status(inner),
+        "keychain": super::fleet::keychain_status(inner),
     }))
 }
 

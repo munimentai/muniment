@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { agentColor } from '../lib/agent-avatar.js'
-import { attention, freshIndex, listedRows, markRead, readMarks, runStates, shownRows, sidebarInput, statusTone } from './sidebar-model.js'
+import { attention, freshIndex, listedRows, markRead, readMarks, rowTime, runStates, shownRows, sidebarInput, statusTone, threadChangedAt } from './sidebar-model.js'
 
 function memoryStorage(values = {}) {
   return { getItem: (key) => values[key] ?? null, setItem: (key, value) => { values[key] = value }, values }
@@ -17,6 +17,17 @@ describe('sidebar model', () => {
     expect(readMarks({ getItem: () => '{', setItem: () => {} }).read).toEqual({})
   })
 
+  it('dates a thread by its row time and every run named on it, so a failed run with no message is unread until read', () => {
+    const threads = [{ id: 'a', updated_at: '2026-10-18T10:00:00Z' }, { id: 'b', updated_at: '2026-10-18T09:00:00Z' }]
+    const latestRuns = { scout: { thread_id: 'a', updated_at: '2026-10-18T11:00:00Z' }, other: { thread_id: 'b', updated_at: '2026-10-18T12:00:00Z' } }
+    const needsYou = [{ kind: 'failed', at: '2026-10-18T11:30:00Z', run: { thread_id: 'a', updated_at: '2026-10-18T11:30:00Z' } }]
+    expect(threadChangedAt('a', { threads })).toBe(Date.parse('2026-10-18T10:00:00Z'))
+    expect(threadChangedAt('a', { threads, latestRuns })).toBe(Date.parse('2026-10-18T11:00:00Z'))
+    expect(threadChangedAt('a', { threads, latestRuns, needsYou })).toBe(Date.parse('2026-10-18T11:30:00Z'))
+    expect(threadChangedAt('c', { threads, latestRuns, needsYou })).toBe(0)
+    expect(threadChangedAt(null, { threads })).toBe(0)
+  })
+
   it('reads working and failed threads from the newest run of each', () => {
     const { working, failed, since } = runStates([
       { thread_id: 'a', status: 'running', created_at: '2026-10-18T10:00:00Z' },
@@ -29,11 +40,45 @@ describe('sidebar model', () => {
     expect([...since]).toEqual([['a', '2026-10-18T10:00:00Z']])
   })
 
-  it('points each needs-you item at its thread or agent and leaves out offline machines', () => {
+  it('dates a row by its newest run once that run ends before the thread list reloads', () => {
+    const runs = runStates([
+      { thread_id: 'a', status: 'completed', created_at: '2026-10-18T07:00:00Z', updated_at: '2026-10-18T10:00:00Z' },
+      { thread_id: 'b', status: 'running', created_at: '2026-10-18T09:30:00Z', updated_at: '2026-10-18T09:31:00Z' },
+      { thread_id: 'c', status: 'completed', updated_at: '2026-10-18T08:00:00Z' },
+    ])
+    expect(rowTime({ threadId: 'a', updatedAt: '2026-10-18T07:00:00Z' }, runs, 'done')).toBe('2026-10-18T10:00:00Z')
+    expect(rowTime({ threadId: 'b', updatedAt: '2026-10-18T09:00:00Z' }, runs, 'working')).toBe('2026-10-18T09:30:00Z')
+    expect(rowTime({ threadId: 'c', updatedAt: '2026-10-18T09:00:00Z' }, runs, undefined)).toBe('2026-10-18T09:00:00Z')
+    expect(rowTime({ threadId: 'd', updatedAt: '2026-10-18T09:00:00Z' }, runs, undefined)).toBe('2026-10-18T09:00:00Z')
+  })
+
+  it('sorts a thread by its newest run once that run changes before the thread list reloads', () => {
+    const runs = runStates([
+      { thread_id: 'agent-home', status: 'completed', created_at: '2026-10-18T09:58:00Z', updated_at: '2026-10-18T10:00:00Z' },
+      { thread_id: 'notes', status: 'completed', updated_at: '2026-10-18T08:00:00Z' },
+    ])
+    const input = sidebarInput({
+      summaries: [
+        { threadId: 'notes', title: 'Notes', updatedAt: '2026-10-18T09:55:00Z' },
+        { threadId: 'agent-home', title: 'Morning', updatedAt: '2026-10-18T09:00:00Z' },
+      ],
+      changed: runs.changed,
+    })
+    // The agent's run ended after the other thread's last change, so core
+    // places its row first, as its row time reads.
+    expect(input.threads.map((thread) => [thread.id, thread.updated_at])).toEqual([
+      ['notes', '2026-10-18T09:55:00Z'],
+      ['agent-home', '2026-10-18T10:00:00Z'],
+    ])
+    expect(input.threads.find((thread) => thread.id === 'agent-home').updated_at).toBe(rowTime({ threadId: 'agent-home', updatedAt: '2026-10-18T09:00:00Z' }, runs, 'done'))
+  })
+
+  it('points each needs-you item at its thread or agent and leaves out offline machines and failed runs', () => {
     expect(attention([
       { kind: 'input', run: { thread_id: 't1' }, agent_id: 'a1' },
       { kind: 'approval', approval: { agent_id: 'a2' } },
       { kind: 'offline', id: 'box' },
+      { kind: 'failed', run: { thread_id: 't3' }, agent_id: 'a3' },
     ])).toEqual([
       { kind: 'input', thread_id: 't1', agent_id: 'a1' },
       { kind: 'approval', thread_id: null, agent_id: 'a2' },

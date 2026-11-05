@@ -57,9 +57,16 @@
     document.body.appendChild(node)
     return { destroy() { node.remove() } }
   }
+  // The window hears Escape first, in its capture phase, and stops it there,
+  // so the shell's document keys never close the page or the side panel
+  // under the dialog. A click inside the dialog can leave focus on the page
+  // body, so a listener on the panel alone misses it.
+  function keydown(event) {
+    if (event.key === 'Escape' && !pending) { event.preventDefault(); event.stopPropagation(); onclose?.() }
+  }
 </script>
 
-<svelte:window onkeydown={(event) => { if (event.key === 'Escape' && !pending) { event.preventDefault(); onclose?.() } }} />
+<svelte:window onkeydowncapture={keydown} />
 <div class="rewind-backdrop" use:portal use:dialogDismiss={{ onclose: () => onclose?.(), disabled: pending }}>
   <div data-panel="rewind" data-panel-variant="overlay" class="rewind-panel" role="dialog" aria-modal="true" aria-labelledby="rewind-title">
     <header>

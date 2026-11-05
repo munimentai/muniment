@@ -30,6 +30,8 @@ uuid = { version = "1", features = ["serde", "v4", "v7"] }
 libc = "0.2"
 
 [dev-dependencies]
+# Marks the core as a test build, so no test writes the owner's runtime logs.
+muniment-core = { path = "../../core/crates/core", features = ["test-build"] }
 hex = "0.4"
 quircs = "0.10"
 resvg = { version = "0.48", default-features = false }

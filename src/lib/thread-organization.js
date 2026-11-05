@@ -1,4 +1,31 @@
 export const THREAD_ORGANIZATION_KEY = 'muniment.thread-organization'
+// The thread open at quit, which launch opens again. Absent while a new
+// thread or no thread shows.
+export const OPEN_THREAD_KEY = 'muniment.open-thread'
+
+export function readOpenThread(storage = localStorage) {
+  try { return storage.getItem(OPEN_THREAD_KEY) || null } catch (_) { return null }
+}
+
+export function keepOpenThread(threadId, storage = localStorage) {
+  try {
+    if (threadId) storage.setItem(OPEN_THREAD_KEY, threadId)
+    else storage.removeItem(OPEN_THREAD_KEY)
+  } catch (_) {}
+}
+
+// Launch never reopens a thread the user deleted.
+export function forgetOpenThread(threadIds, storage = localStorage) {
+  const open = readOpenThread(storage)
+  if (open && threadIds.includes(open)) keepOpenThread(null, storage)
+}
+
+// The thread that shows after `threadIds` are deleted: the newest other
+// thread in `summaries` that is not archived, else null for a new thread.
+export function threadAfterDelete(summaries, threadIds, organization = {}) {
+  const gone = new Set(threadIds)
+  return summaries.find((thread) => !gone.has(thread.threadId) && !organization[thread.threadId]?.archived)?.threadId ?? null
+}
 
 export function readThreadOrganization(storage = localStorage) {
   try {

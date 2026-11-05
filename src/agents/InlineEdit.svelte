@@ -57,7 +57,7 @@
 
 <div class="inline-edit" class:strong>
   {#if editing}
-    <input bind:this={input} bind:value={draft} aria-label={label} {maxlength} {placeholder} disabled={busy} onkeydown={keydown} onblur={blur} />
+    <input bind:this={input} bind:value={draft} aria-label={label} {maxlength} {placeholder} spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" disabled={busy} onkeydown={keydown} onblur={blur} />
   {:else}
     <button type="button" class="value" class:empty={!value} bind:this={opener} aria-label={`Edit ${label.toLowerCase()}: ${value || placeholder}`} {disabled} onclick={open}>
       <span class="text">{value || placeholder}</span>

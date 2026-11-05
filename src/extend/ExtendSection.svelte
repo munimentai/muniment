@@ -176,12 +176,12 @@
       <div class="catalog-grid" aria-label={label}>{#each entries as entry (entry.id)}{@const connected = state.items.find(item => item.kind === 'mcp' && (item.source ? item.source === entry.source : `custom:${item.id}` === entry.source))}<article class="entry catalog-card" class:connected={!!connected}>
         <div class="card-title"><ProviderIcon {entry} /><strong>{entry.name}</strong></div>
         {#if distinctPublisher(entry)}<p class="publisher">{entry.publisher}</p>{/if}
-        {#if entry.categories.length}<p class="category">{categoryLabel(entry.categories[0])}{#if entry.categories.length > 1}<span class="more-categories"> +{entry.categories.length - 1}<span class="visually-hidden">: {entry.categories.slice(1).map(categoryLabel).join(', ')}</span></span>{/if}</p>{/if}
+        {#if entry.categories.length}<p class="category">{categoryLabel(entry.categories[0])}{#if entry.categories.length > 1}<span class="more-categories">{` +${entry.categories.length - 1}`}<span class="visually-hidden">: {entry.categories.slice(1).map(categoryLabel).join(', ')}</span></span>{/if}</p>{/if}
         <div class="actions"><button type="button" class="details-link" aria-label="Details" onclick={() => showDetails(entry)}><LucideIcon name="info" size={16} variant="action" /></button>{#if connected}<Toggle checked={connected.enabled !== false} label={`Use ${entry.name} in chats`} disabled={busy} onchange={enabled => mutate('toggle', { id: connected.id, enabled })} />{:else}<button type="button" disabled={busy} onclick={() => connectCatalog(entry)}>Connect</button>{/if}</div>
       </article>{/each}</div>
     {/snippet}
     {#if featured.length}
-      <Group heading="Popular MCPs" plain>{@render cards(featured, 'Popular MCP servers')}</Group>
+      <Group heading="Popular MCP servers" plain>{@render cards(featured, 'Popular MCP servers')}</Group>
     {/if}
     <Group heading={featured.length ? 'More MCPs' : ''} label="MCP servers" plain>
       {@render cards(results, 'MCP catalog')}
@@ -231,7 +231,6 @@
 <style>
   .exposure { display: grid; gap: 6px; margin: 12px 0; }
   .exposure p { margin: 0; color: var(--muted); font-size: var(--text-13); }
-  .tab-count { font-size: var(--text-12); font-variant-numeric: tabular-nums; }
   .server-details { position: fixed; inset: 0; margin: auto; width: min(560px, calc(100vw - 48px)); height: fit-content; max-height: calc(100vh - 48px); overflow: auto; box-sizing: border-box; padding: 24px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--paper); color: var(--ink); font-family: var(--font-human); }
   .server-details::backdrop { background: var(--overlay-backdrop); }
   .server-details h2 { margin: 0; font-size: var(--text-22); overflow-wrap: anywhere; }
@@ -245,7 +244,7 @@
   button.details-link { display: inline-grid; place-items: center; min-width: 28px; min-height: 28px; padding: 0; background: transparent; color: var(--muted); }
   button.details-link:hover { color: var(--ink); }
 
-  .extend { display: grid; gap: var(--page-gap); min-width: 0; } .note { margin: 4px 0 0; color: var(--muted); font-size: var(--text-12); } p, h4 { margin: 0; } .filters, .actions, .pages, .head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; } .head { justify-content: space-between; }  label { display: grid; gap: 5px; } .filters label { flex: 1; min-width: 110px; color: var(--muted); } input, select, textarea { background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 8px; min-width: 0; } textarea { width: 100%; box-sizing: border-box; } .form { display: grid; align-content: start; gap: 12px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-panel); }  .entry { display: grid; gap: 8px; border: 1px solid var(--border); border-radius: var(--radius-panel); padding: 12px; } .entry p { color: var(--muted); overflow-wrap: anywhere; } .check { display: flex; align-items: center; gap: 7px; font-size: var(--text-12); } .check span { color: var(--muted); } .pages { justify-content: space-between; } button, a { font-size: var(--text-12); } [role=alert] { color: var(--ink); }
+  .extend { display: grid; gap: var(--page-gap); min-width: 0; } .note { margin: 4px 0 0; color: var(--muted); font-size: var(--text-12); } p, h4 { margin: 0; } .filters, .actions, .pages, .head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; } .head { justify-content: space-between; }  label { display: grid; gap: 5px; } input, select, textarea { background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 8px; min-width: 0; } textarea { width: 100%; box-sizing: border-box; } .form { display: grid; align-content: start; gap: 12px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-panel); }  .entry { display: grid; gap: 8px; border: 1px solid var(--border); border-radius: var(--radius-panel); padding: 12px; } .entry p { color: var(--muted); overflow-wrap: anywhere; } .check { display: flex; align-items: center; gap: 7px; font-size: var(--text-12); } .check span { color: var(--muted); } .pages { justify-content: space-between; } button, a { font-size: var(--text-12); } [role=alert] { color: var(--ink); }
   .extend { container-type: inline-size; }
   button { font-family: var(--font-human); border: 0; border-radius: var(--radius-control); padding: 5px 9px; color: var(--ink); background: var(--faint); cursor: pointer; }
   button:disabled { opacity: .5; cursor: default; }

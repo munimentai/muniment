@@ -34,6 +34,7 @@ it('times a settled run by its record and a live run until now', () => {
 it('summarizes a run by its silence, error or result', () => {
   expect(runNote({ silent: true, result_summary: 'x' })).toBe('No reply needed')
   expect(runNote({ error: 'The model refused.', result_summary: 'x' })).toBe('The model refused.')
+  expect(runNote({ error: '{ "error": { "message": "Your authentication token has expir…' })).toBe('The sign-in expired. Sign in again in Models.')
   expect(runNote({ result_summary: 'Three new leads.' })).toBe('Three new leads.')
   expect(runNote(null)).toBe('')
 })
@@ -44,6 +45,20 @@ it('names a time by how long ago it was', () => {
   expect(whenLabel('2026-01-01T13:35:00Z', now)).toBe('25m ago')
   expect(whenLabel('2026-01-01T09:00:00Z', now)).toBe('5h ago')
   expect(whenLabel(null, now)).toBe('')
+})
+
+it('rounds a run time as the sidebar does, so a card and its thread row name one span', async () => {
+  const { relativeTime } = await import('./relative-time.js')
+  const now = Date.parse('2026-07-01T14:00:00Z')
+  // 2.55 hours, as Tauri Morning's last run read 3h on its card and 2h in the sidebar.
+  const ran = new Date(now - 2.55 * 3_600_000).toISOString()
+  expect(whenLabel(ran, now)).toBe('2h ago')
+  expect(relativeTime(ran, now)).toBe('2h')
+  for (const minutes of [0.5, 1.5, 59.6, 61, 89, 150, 23.9 * 60]) {
+    const at = new Date(now - minutes * 60_000).toISOString()
+    const short = relativeTime(at, now)
+    expect(whenLabel(at, now)).toBe(short === 'now' ? 'Just now' : `${short} ago`)
+  }
 })
 
 it('notes what an imported template brought', async () => {

@@ -56,6 +56,20 @@ export function isProposal(routine) {
   return routine?.proposed === true
 }
 
+// A routine whose prompt an older extraction cut: core marks it `cut_short`
+// until the user edits its prompt, and it keeps running the cut prompt.
+export const CUT_SHORT_NOTE = "This routine's instruction was cut short. Edit it to restore the full request."
+export function isCutShort(routine) {
+  return routine?.cut_short === true && !isProposal(routine)
+}
+
+// A routine whose time core picked because the instructions name no time
+// of day: core marks it `default_time` until the user accepts or edits it.
+export const DEFAULT_TIME_NOTE = 'Muniment picked the time. Change it if needed.'
+export function hasPickedTime(routine) {
+  return routine?.default_time === true
+}
+
 // When a tool check last asked its tool and what came of it. Core fills
 // `last_poll`; a failed check names its error and the next try.
 export function pollLabel(routine, now = Date.now()) {

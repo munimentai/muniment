@@ -71,6 +71,60 @@ pub fn validate_pi_session(
     Ok((PiSessionLocator(locator.to_owned()), canonical))
 }
 
+/// Points a stored Pi session at `working_directory` when the folder it
+/// names is gone. A thread's session folder takes the thread's title after
+/// its first reply, and Pi refuses to reopen a session whose stored working
+/// folder does not exist. A stored folder that exists stays as Pi wrote it.
+/// Returns whether the file changed. Errors omit paths.
+pub fn retarget_pi_session(
+    session_root: &Path,
+    locator: &PiSessionLocator,
+    working_directory: &Path,
+) -> Result<bool, String> {
+    use std::io::Write;
+    let (_, path) = validate_pi_session(session_root, locator.as_str())?;
+    let text =
+        std::fs::read_to_string(&path).map_err(|_| "Pi session file is unreadable".to_string())?;
+    let (first, rest) = text.split_once('\n').unwrap_or((text.as_str(), ""));
+    let Ok(mut header) = serde_json::from_str::<Value>(first) else {
+        return Ok(false);
+    };
+    if header.get("type").and_then(Value::as_str) != Some("session") {
+        return Ok(false);
+    }
+    let Some(stored) = header.get("cwd").and_then(Value::as_str) else {
+        return Ok(false);
+    };
+    if Path::new(stored) == working_directory || Path::new(stored).exists() {
+        return Ok(false);
+    }
+    header["cwd"] = Value::String(working_directory.to_string_lossy().into_owned());
+    let mut updated = header.to_string();
+    if text.contains('\n') {
+        updated.push('\n');
+    }
+    updated.push_str(rest);
+    let temporary = path.with_file_name(format!(
+        ".{}.{}.tmp",
+        locator.as_str(),
+        uuid::Uuid::new_v4()
+    ));
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        file.set_permissions(std::fs::metadata(&path)?.permissions())?;
+        file.write_all(updated.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
+        crate::atomic_file::replace(&temporary, &path)
+    })();
+    let _ = std::fs::remove_file(&temporary);
+    result.map_err(|_| "Pi session file could not be updated".to_string())?;
+    Ok(true)
+}
+
 /// The environment variable that sets, in whole seconds, how long Pi may take
 /// to become ready. A host that starts Pi under load raises it.
 pub const PI_STARTUP_TIMEOUT_ENV: &str = "MUNIMENT_PI_STARTUP_TIMEOUT_S";

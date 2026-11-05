@@ -4,13 +4,14 @@
 // first, then the runtime, then the app, with the nightly's codesign arguments
 // from .github/build-macos-app.mjs, and the keychain is deleted on exit.
 // Nothing here stores the certificate, and no hand codesign follows.
-import { cpSync, openSync, readSync, closeSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, renameSync, writeFileSync } from "node:fs";
+import { cpSync, openSync, readSync, closeSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { nativeFiles } from "../.github/lib/macos-variants.mjs";
+import { swapInstalledApp } from "../.github/lib/macos-install-swap.mjs";
 import {
   codesignArguments,
   intermediateCertificateImportArguments,
@@ -87,7 +88,7 @@ cpSync(runtimeSource, runtimeBundled);
 cpSync(cliSource, cliBundled);
 cpSync(readerSource, readerBundled);
 mustRun("build browser helper", "cargo", ["build", "--manifest-path", "src-tauri/Cargo.toml", "--bin", "muniment-cef-helper", "--release", "--locked"]);
-mustRun("build app", "npm", ["run", "tauri", "build", "--", "--bundles", "app", "--features", "local-runtime", "--no-sign"]);
+mustRun("build app", "npm", ["run", "tauri", "build", "--", "--bundles", "app", "--no-sign"]);
 mustRun("package direct CEF", process.execPath, ["scripts/package-cef-macos.mjs", app]);
 // A local build is arm64 only. The vendored speech libraries are universal.
 for (const file of nativeFiles(app)) {
@@ -164,9 +165,24 @@ const scan = async (dir) => {
   }
 };
 await scan(app);
-for (const path of [...binaries, ...bundles, app]) {
-  mustRun("sign CEF component", "codesign", [...codesignArguments(identity[1], path), "--entitlements", "src-tauri/packaging/entitlements.plist"]);
-}
+// The timestamp server can fail a signature with a transient internal error.
+// --force makes a second signature of the same file safe, so retry twice.
+const signWithRetry = (path) => {
+  const args = [...codesignArguments(identity[1], path), "--entitlements", "src-tauri/packaging/entitlements.plist"];
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const result = spawnSync("codesign", args, { stdio: "inherit" });
+    if (result.error) throw result.error;
+    if (result.status === 0) return;
+    if (attempt < 3) {
+      console.error(`sign CEF component retry ${attempt} of 2 (codesign rc=${result.status})`);
+      spawnSync("sleep", ["5"]);
+    } else {
+      console.error(`sign CEF component FAILED (codesign rc=${result.status})`);
+      process.exit(result.status ?? 1);
+    }
+  }
+};
+for (const path of [...binaries, ...bundles, app]) signWithRetry(path);
 mustRun("verify signature", "codesign", ["--verify", "--deep", "--strict", "--verbose=2", app]);
 
 // A running service holds the old executable after a bundle replacement.
@@ -183,14 +199,7 @@ if (!process.argv.includes("--build-only")) {
   const stagedApp = join(stage, "muniment.app");
   mustRun("stage app", "ditto", [app, stagedApp]);
   mustRun("verify staged signature", "codesign", ["--verify", "--deep", "--strict", stagedApp]);
-  const backup = mkdtempSync(join(tmpdir(), "muniment-app-backup-"));
-  const hadApp = existsSync(installed);
-  if (hadApp) renameSync(installed, join(backup, "muniment.app"));
-  try { renameSync(stagedApp, installed); }
-  catch (error) {
-    if (hadApp) renameSync(join(backup, "muniment.app"), installed);
-    throw error;
-  }
+  swapInstalledApp(stagedApp, installed);
   rmSync(stage, { recursive: true, force: true });
   mustRun("restart runtime", "pkill", ["-f", "LaunchServices/muniment-runtime"], { allowFailure: true });
   mustRun("verify installed signature", "codesign", ["--verify", "--deep", "--strict", installed]);

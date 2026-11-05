@@ -74,6 +74,33 @@ describe('owners', () => {
     expect(dedupeThreads([{ ...replica, threadId: 't3' }, container], { self: { local: LAPTOP } })).toEqual([container])
   })
 
+  it('keeps one label per thread whichever copy lists first and whatever fleet ids are known', () => {
+    const fleet = { self: { local: LAPTOP, hub: STUDIO, pod: POD }, members: swarm.members }
+    const list = { runtimes: [{ id: 'local', local: true, name: 'This computer' }, { id: 'hub', name: 'Studio' }, { id: 'pod', kind: 'container', name: 'Pod' }] }
+    const label = (rows, ids = fleet) => rows.map((row) => `${row.threadId}:${row.runtimeId}:${threadOwner(row, ids, list)?.name ?? 'holder'}`)
+    // A thread this computer owns, copied to the hub and the pod.
+    const here = { threadId: 'mine', runtimeId: 'local', owner_runtime: LAPTOP, updatedAt: '2026-10-20T08:50:00Z' }
+    const hubCopy = { threadId: 'mine', runtimeId: 'hub', owner_runtime: LAPTOP, replica: true, updatedAt: '2026-10-31T12:00:00Z' }
+    const podCopy = { threadId: 'mine', runtimeId: 'pod', owner_runtime: LAPTOP, replica: true, updatedAt: '2026-10-31T13:00:00Z' }
+    for (const rows of [[here, hubCopy, podCopy], [podCopy, hubCopy, here], [hubCopy, podCopy, here]]) {
+      expect(label(dedupeThreads(rows, fleet))).toEqual(['mine:local:holder'])
+    }
+    // This computer's page missed the thread: the copy lists as its own.
+    expect(label(dedupeThreads([podCopy, hubCopy], fleet))).toEqual(['mine:local:holder'])
+    expect(label(dedupeThreads([hubCopy, podCopy], fleet))).toEqual(['mine:local:holder'])
+    // A thread the pod owns: its own copy, else this computer's copy names it.
+    const own = { threadId: 'pods', runtimeId: 'pod', owner_runtime: POD }
+    const copy = { threadId: 'pods', runtimeId: 'local', owner_runtime: POD, replica: true }
+    const hubHeld = { threadId: 'pods', runtimeId: 'hub', owner_runtime: POD, replica: true }
+    expect(label(dedupeThreads([hubHeld, copy, own], fleet))).toEqual(['pods:pod:holder'])
+    expect(label(dedupeThreads([hubHeld, copy], fleet))).toEqual(['pods:local:Pod'])
+    expect(label(dedupeThreads([copy, hubHeld], fleet))).toEqual(['pods:local:Pod'])
+    // A swarm answer that has not named a holder's fleet id yet still names
+    // the owner of its copy, never the holder.
+    expect(threadOwner(copy, { members: swarm.members, self: {} }, list)?.name).toBe('Pod')
+    expect(threadOwner(hubHeld, { members: swarm.members, self: { local: LAPTOP } }, list)?.name).toBe('Pod')
+  })
+
   it('names the owner of another member\'s project', () => {
     expect(projectOwner({ name: 'Launch', ownerRuntime: STUDIO }, swarm)).toMatchObject({ name: 'Studio' })
     expect(projectOwner({ name: 'Mine', ownerRuntime: LAPTOP }, swarm)).toBeNull()
@@ -81,6 +108,15 @@ describe('owners', () => {
 
   it('offers every member the app does not reach as a place for a new thread', () => {
     expect(offloadTargets(swarm, null).map((target) => `${target.coreId}:${target.kind}`)).toEqual([`${POD}:container`, `${STUDIO}:desktop`])
+  })
+
+  it('lists a paired machine that is offline once, as its paired row', () => {
+    // A paired runtime's id is its core id. Offline, it answers no
+    // `swarm.members`, so only the pairing names it.
+    const offline = { self: { local: LAPTOP }, members: [{ runtime_id: LAPTOP, runtime_name: 'Laptop', online: true }, { runtime_id: POD, runtime_name: 'Docker container', form_factor: null, online: false }] }
+    const list = { runtimes: [{ id: 'local', local: true, status: 'online' }, { id: POD, name: 'Docker container', kind: 'container', status: 'offline' }] }
+    expect(offloadTargets(offline, list)).toEqual([])
+    expect(offloadTargets(offline, { runtimes: [list.runtimes[0]] }).map((target) => target.coreId)).toEqual([POD])
   })
 })
 
@@ -96,6 +132,10 @@ describe('offline and bootstrap', () => {
     expect(bootstrapRows(status).map((row) => `${row.name}:${row.percent}:${row.done}`)).toEqual(['Agents:100:true', 'Threads:10:false', 'History:0:false'])
     expect(listsArrived(status)).toBe(false)
     expect(listsArrived({ classes: [{ class: 'agent', percent: 100 }, { class: 'thread', percent: 100 }, { class: 'history', percent: 5 }] })).toBe(true)
+  })
+
+  it('names the MCP class with its acronym', () => {
+    expect(bootstrapRows({ classes: [{ class: 'mcp', percent: 40 }] })[0].name).toBe('MCP servers')
   })
 
   it('says where each missing sign-in comes from', () => {
@@ -124,7 +164,30 @@ describe('the audit log', () => {
     expect(auditRow({ at: 'x', kind: 'something_new', runtime_id: 'core-unknown-machine' }, swarm)).toMatchObject({ what: 'something new', machines: 'core-unk', time: '' })
     const named = { members: [{ runtime_id: '018f0000-0000-7000-8000-000000000041', runtime_name: 'Laptop' }] }
     expect(auditRow({ kind: 'sealed', runtime_id: null, actor_runtime: '018f0000-0000-7000-8000-000000000041', record: { secret_id: 'models:018f0000-0000-7000-8000-000000000041', version: 3, recipients: ['a', 'b'], keys: ['pi:anthropic'] } }, named))
-      .toMatchObject({ machines: 'Laptop', detail: 'models:Laptop · pi:anthropic · 2 recipients' })
+      .toMatchObject({ machines: 'Laptop', detail: 'Model connections of Laptop · Anthropic · 2 recipients' })
+  })
+
+  it('names each secret and connection in words, not ids', () => {
+    const accounts = [{ name: 'router:a1b2', label: 'Work', provider: 'openai-codex' }, { name: 'pi:anthropic', label: 'anthropic', provider: 'anthropic' }]
+    const opened = auditRow({ kind: 'opened', actor_runtime: LAPTOP, runtime_id: STUDIO, record: { secret_id: `models:${STUDIO}`, recipients: [LAPTOP], keys: ['pi:anthropic', 'router:a1b2', `shared:swarm:${BOX}:a1b2`, 'mcp:github'] } }, swarm, accounts)
+    expect(opened.detail).toBe('Model connections of Studio · Anthropic, Work, Work, github · 1 recipient')
+    expect(opened.detail).not.toMatch(/core-|models:|router:/)
+    expect(auditRow({ kind: 'sealed', actor_runtime: LAPTOP, record: { secret_id: `vault:${LAPTOP}:${BOX}` } }, swarm).detail).toBe('Vault token of This computer for Build box')
+    expect(auditRow({ kind: 'sealed', actor_runtime: LAPTOP, record: { secret_id: `handover:${LAPTOP}:router:a1b2` } }, swarm, accounts).detail).toBe('Sign-in handover of Work from This computer')
+    expect(auditRow({ kind: 'hold_moved', actor_runtime: LAPTOP, runtime_id: STUDIO, record: { account: 'router:a1b2' } }, swarm, accounts).detail).toBe('Work')
+    // A router account the accounts do not list reads in words, never by its id.
+    expect(auditRow({ kind: 'hold_moved', actor_runtime: LAPTOP, runtime_id: STUDIO, record: { account: 'router:0193aa' } }, swarm, []).detail).toBe('a model account')
+    // Every key class core seals reads in words: decision models by name, search keys by provider.
+    const decisionModels = [{ id: '01a17921-b66d-77e8-bc7e-815e81b4df15', name: 'Jev · TypeSafe API' }]
+    const keys = auditRow({ kind: 'sealed', actor_runtime: LAPTOP, record: { secret_id: `keys:${LAPTOP}`, keys: ['decision:01a17921-b66d-77e8-bc7e-815e81b4df15', 'decision:0193ffff-0000-7000-8000-000000000000', 'search:tavily'] } }, swarm, accounts, decisionModels)
+    expect(keys.detail).toBe('Keys of This computer · Jev · TypeSafe API, a decision model, Tavily search key')
+    const mcp = auditRow({ kind: 'sealed', actor_runtime: LAPTOP, record: { secret_id: `mcp:${LAPTOP}`, keys: ['mcp:github', 'mcp-oauth:linear'] } }, swarm)
+    expect(mcp.detail).toBe('MCP connections of This computer · github, linear')
+    expect(auditRow({ kind: 'sealed', actor_runtime: LAPTOP, record: { keys: ['endpoint:ollama', 'decision:01a17921-b66d-77e8-bc7e-815e81b4df15', 'other:0193aaaa-0000-7000-8000-000000000000'] } }, swarm).detail).toBe('Ollama, a decision model, a connection')
+    // A decision model connection named by its model's id reads by the model's display name.
+    const byId = [{ id: '01a17921-b66d-77e8-bc7e-815e81b4df15', name: 'claude-fable-5-1', connection: { kind: 'key', model: 'claude-fable-5-1' } }]
+    expect(auditRow({ kind: 'sealed', actor_runtime: LAPTOP, record: { secret_id: `keys:${LAPTOP}`, keys: ['decision:01a17921-b66d-77e8-bc7e-815e81b4df15'] } }, swarm, accounts, byId).detail).toBe('Keys of This computer · Claude Fable 5.1')
+    for (const row of [keys, mcp]) expect(row.detail).not.toMatch(/(decision|search|mcp|mcp-oauth|models|router|endpoint|keys):/)
   })
 
   it('reads each entry in the direction the action went', () => {

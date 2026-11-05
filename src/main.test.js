@@ -70,3 +70,28 @@ it('uses Moss vibrant dark at launch when storage is unavailable', async () => {
   await import('./main.js')
   expect(mount).toHaveBeenCalledOnce()
 })
+
+it('shows the hidden main window after the app mounts, with the page background, and never from the launcher', async () => {
+  const invoke = vi.fn(async () => {})
+  window.__TAURI__ = { core: { invoke } }
+  try {
+    document.body.innerHTML = '<div id="app"></div>'
+    document.body.style.background = 'rgb(11, 28, 23)'
+    mount.mockImplementation(() => { expect(invoke).not.toHaveBeenCalledWith('main_window_ready', expect.anything()) })
+    await import('./main.js')
+    expect(invoke).toHaveBeenCalledWith('main_window_ready', { background: 'rgb(11, 28, 23)' })
+    // A theme change sends the new background.
+    document.body.style.background = 'rgb(228, 244, 236)'
+    window.dispatchEvent(new CustomEvent('muniment:theme'))
+    expect(invoke).toHaveBeenLastCalledWith('main_window_ready', { background: 'rgb(228, 244, 236)' })
+
+    invoke.mockClear()
+    vi.resetModules()
+    history.replaceState({}, '', '/index.html?launcher')
+    await import('./main.js')
+    expect(invoke).not.toHaveBeenCalledWith('main_window_ready', expect.anything())
+  } finally {
+    delete window.__TAURI__
+    document.body.removeAttribute('style')
+  }
+})

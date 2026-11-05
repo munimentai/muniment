@@ -7,3 +7,6 @@ dist/
 .DS_Store
 
 __pycache__/
+
+# The attach fixture exporter locks its target with a hidden sibling.
+core/protocol-fixtures/**/.*.lock

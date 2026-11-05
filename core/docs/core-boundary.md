@@ -82,6 +82,7 @@ A module that `muniment-core` re-exports from another workspace crate keeps its 
 | module | http | It shares HTTP agent configuration and OS certificate verification. |
 | module | import_preview | It previews bounded assistant exports. |
 | module | journal | It owns the run journal and reader projections. |
+| module | keychain_refusal | It reads a keychain error as a declined prompt or a store failure. |
 | module | kokoro | It owns on-device read-aloud. |
 | module | launch_facts | It states the facts of a launch to the model: its model, earlier models, host, shell and working directory. |
 | module | local_mode | It reads the local-mode marker without an account. |
@@ -118,6 +119,7 @@ A module that `muniment-core` re-exports from another workspace crate keeps its 
 | module | shared_models | It shares model connections between paired machines and with the account's model vault. |
 | module | sidecar | It supervises Pi and its RPC transport. |
 | module | state_root | It resolves the one state root every local file sits under. |
+| module | disk_full | It names a full disk in plain words wherever a write fails for want of space. |
 | module | swarm | It links one owner's runtimes, replicates agent and group threads on the journal, delivers agent messages, moves and approvals between them, and seals shared credentials to each member's fleet key. |
 | module | thread_history | It reads journal-backed thread history. |
 | module | thread_ownership | It checks journal subject ownership. |
@@ -190,6 +192,7 @@ It rejects a path dependency of a workspace crate outside the core directory.
 It rejects a file in the core directory that names the desktop shell directory.
 It tests each port crate without default features.
 The core test enables `keyring` to include prompt and thread-history tests.
+The check allows `test-build`, which each crate's tests turn on through its dev-dependencies, so a test binary never writes the owner's runtime logs.
 CI runs this check on every push and pull request.
 
 The module scan covers all Rust source and test files in port crates, regardless of host platform.

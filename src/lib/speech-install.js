@@ -14,11 +14,17 @@ export function formatBytes(bytes) {
 const stateWords = {
   notInstalled: 'Not installed.',
   installing: 'Installing.',
-  installed: 'Installed. Press Voice again to dictate.',
+  installed: 'Installed.',
   cancelled: 'Cancelled.',
   failed: 'Failed.',
 }
 
 export function installStateWords(state) {
   return stateWords[state] ?? 'Install state unavailable.'
+}
+
+// The words beside the composer's Voice button, where a finished install
+// points back to that button. Settings shows the bare state.
+export function composerInstallWords(state) {
+  return state === 'installed' ? 'Installed. Press Voice again to dictate.' : installStateWords(state)
 }

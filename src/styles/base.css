@@ -74,6 +74,12 @@ a:hover {
 :root[data-pointer] :focus-visible:not(input, textarea, select, [contenteditable]) {
   outline: 0 !important;
 }
+/* A control that code focused while the keys lead (focus-source.js) shows the
+   same ring when the engine does not match :focus-visible after a script focus. */
+:root:not([data-pointer]) [data-key-focus]:focus:not([data-focus-frame]) {
+  outline: 1px solid var(--focus-ring) !important;
+  outline-offset: -1px !important;
+}
 :root:not([data-pointer]) :is([role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="option"]):focus-visible:not([aria-checked="true"], [aria-selected="true"]) {
   background-color: var(--faint);
 }
@@ -81,6 +87,18 @@ a:hover {
   background-color: transparent !important;
 }
 
+/* The model picker, a menu and a list of choices are controls, not text, so
+   a press on a row selects no word of its label (press-target.js keeps the
+   right button's default off too). A text field in them keeps selection. */
+:is([data-panel="model-picker"], [role="menu"], [role="menubar"], [role="listbox"], [role="tree"]) :not(input, textarea, [contenteditable]:not([contenteditable="false"])),
+:is([role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], [role="option"], [role="treeitem"]) {
+  user-select: none;
+  -webkit-user-select: none;
+}
+:is([data-panel="model-picker"], [role="menu"], [role="menubar"], [role="listbox"], [role="tree"]) :is(input, textarea) {
+  user-select: text;
+  -webkit-user-select: text;
+}
 
 code,
 kbd,

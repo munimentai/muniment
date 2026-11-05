@@ -10,6 +10,9 @@ use muniment_core::permission_gate::PLAN_TOOL;
 mod acquisition_coordinate;
 #[path = "pi_launch/compaction_coordinate.rs"]
 mod compaction_coordinate;
+#[path = "pi_launch/endpoint_wait_coordinate.rs"]
+mod endpoint_wait_coordinate;
+#[cfg(unix)]
 #[path = "pi_launch/folder_access_coordinate.rs"]
 mod folder_access_coordinate;
 #[path = "pi_launch/gateway_coordinate.rs"]
@@ -20,6 +23,9 @@ use muniment_core::pi_launch::{
     pi_launch_config, pi_launch_config_for_executable, PiLaunchBoundaries, PiLaunchError,
     DECISIONS_EXTENSION, DECISIONS_EXTENSION_FILE, EXCLUDED_TOOLS, IDENTITY_EXTENSION,
     IDENTITY_EXTENSION_FILE, SYSTEM_PROMPT,
+};
+use muniment_core::pi_launch::{
+    small_window_tools, COMPACT_SYSTEM_PROMPT, NO_TOOLS_SYSTEM_PROMPT, SMALL_WINDOW,
 };
 use muniment_core::sidecar::{
     validate_pi_session, PiRpcWiring, SidecarConfig, SidecarStatus, SidecarSupervisor,
@@ -643,6 +649,150 @@ fn passes_the_system_prompt_with_the_launch_facts_for_every_launch() {
     fs::remove_dir_all(root).unwrap();
 }
 
+/// A local launch whose model has the window `window` on an endpoint whose
+/// tools are off when `tools_off` says so.
+struct ShapeBoundaries {
+    root: PathBuf,
+    window: Option<u64>,
+    tools_off: bool,
+}
+
+impl PiLaunchBoundaries for ShapeBoundaries {
+    fn pi_session_root(&self) -> Result<PathBuf, PiLaunchError> {
+        Ok(self.root.clone())
+    }
+
+    fn memory_agent_extension_path(&self) -> Option<PathBuf> {
+        None
+    }
+
+    fn prepare_pi_settings(
+        &self,
+        _artifact: muniment_core::sidecar::pi_install::PiArtifactDescriptor,
+        _executable: &std::path::Path,
+    ) -> Result<(), PiLaunchError> {
+        Ok(())
+    }
+
+    fn local_default_model(&self) -> Option<String> {
+        Some("custom-do-test/qwen2.5-1.5b".into())
+    }
+
+    fn home_directory(&self) -> Option<PathBuf> {
+        Some(self.root.join("Documents").join("Home"))
+    }
+
+    fn local_model_window(&self, model: &str) -> Option<u64> {
+        assert_eq!(model, "custom-do-test/qwen2.5-1.5b");
+        self.window
+    }
+
+    fn local_model_tools_off(&self, _model: &str) -> bool {
+        self.tools_off
+    }
+}
+
+/// Pi's own estimate: a quarter token per character.
+fn tokens(text: &str) -> usize {
+    text.len().div_ceil(4)
+}
+
+/// A small window gets the compact prompt and the core tools, an endpoint
+/// whose tools are off gets no tools, and a large window keeps every tool.
+/// Prints what each part of an empty thread costs: the prompt from the
+/// launch and the tool schemas from the recorded turn with every extension.
+#[test]
+fn a_small_window_launches_compact_and_an_endpoint_without_tools_launches_none() {
+    let root = temporary_directory();
+    let payload: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pi_turn/payload.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let schemas: Vec<(String, usize)> = payload["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| {
+            let name = tool["function"]["name"].as_str().unwrap().to_owned();
+            (name, tokens(&tool.to_string()))
+        })
+        .filter(|(name, _)| !EXCLUDED_TOOLS.split(',').any(|excluded| excluded == name))
+        .collect();
+    let mut totals = Vec::new();
+    for (window, tools_off, base, label) in [
+        (Some(131_072), false, SYSTEM_PROMPT, "large window"),
+        (None, false, SYSTEM_PROMPT, "unknown window"),
+        (Some(32_768), false, COMPACT_SYSTEM_PROMPT, "32k window"),
+        (Some(131_072), true, NO_TOOLS_SYSTEM_PROMPT, "tools off"),
+    ] {
+        let boundaries = ShapeBoundaries {
+            root: root.clone(),
+            window,
+            tools_off,
+        };
+        let config =
+            pi_launch_config_for_executable(&boundaries, "pi".into(), &ChatGrant::local(), None)
+                .unwrap();
+        let value = |flag: &str| {
+            config
+                .args
+                .windows(2)
+                .find(|args| args[0] == flag)
+                .map(|args| args[1].clone())
+        };
+        let prompt = value("--system-prompt").unwrap();
+        assert!(
+            prompt.starts_with(&format!("{base}\n\nFacts:\n")),
+            "{label}"
+        );
+        let allowed = value("--tools");
+        let no_tools = config.args.iter().any(|arg| arg == "--no-tools");
+        let offered: Vec<&(String, usize)> = schemas
+            .iter()
+            .filter(|(name, _)| match (&allowed, no_tools) {
+                (_, true) => false,
+                (Some(list), _) => list.split(',').any(|allowed| allowed == name),
+                (None, _) => true,
+            })
+            .collect();
+        let tool_tokens: usize = offered.iter().map(|(_, count)| count).sum();
+        let rest = tokens(&prompt) - tokens(base);
+        let total = tokens(&prompt) + tool_tokens;
+        println!(
+            "{label}: base prompt {} + facts and rules {rest} + {} tool schemas {tool_tokens} = {total} tokens",
+            tokens(base),
+            offered.len(),
+        );
+        match (window, tools_off) {
+            (_, true) => {
+                assert!(no_tools && allowed.is_none());
+                assert!(!prompt.contains("memory-search"));
+            }
+            (Some(window), false) if window < SMALL_WINDOW => {
+                assert_eq!(allowed.as_deref(), Some(small_window_tools().as_str()));
+                assert!(!no_tools);
+                assert!(
+                    !prompt.contains("Creation workflow") && !prompt.contains("Muniment harness")
+                );
+                // The compact launch fits a quarter of a 32k window.
+                assert!(total * 4 < 32_768, "{total}");
+            }
+            _ => {
+                assert!(allowed.is_none() && !no_tools);
+                assert!(prompt.contains("Creation workflow"));
+            }
+        }
+        totals.push(total);
+    }
+    // The large and unknown windows launch as before.
+    assert_eq!(totals[0], totals[1]);
+    assert!(totals[2] * 3 < totals[0]);
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn the_system_prompt_states_purpose_and_tools_and_names_no_harness_or_product() {
     let lower = SYSTEM_PROMPT.to_lowercase();
@@ -1022,6 +1172,90 @@ fn project_launch_uses_the_folder_after_rename_and_rejects_a_missing_folder() {
 }
 
 #[test]
+fn a_renamed_thread_folder_reopens_its_stored_session_in_the_new_folder() {
+    struct ThreadBoundary {
+        profile: PathBuf,
+    }
+    impl PiLaunchBoundaries for ThreadBoundary {
+        fn pi_session_root(&self) -> Result<PathBuf, PiLaunchError> {
+            Ok(self.profile.join("sessions"))
+        }
+        fn memory_agent_extension_path(&self) -> Option<PathBuf> {
+            None
+        }
+        fn local_default_model(&self) -> Option<String> {
+            Some("test/model".into())
+        }
+        fn prepare_pi_settings(
+            &self,
+            _: muniment_core::sidecar::pi_install::PiArtifactDescriptor,
+            _: &Path,
+        ) -> Result<(), PiLaunchError> {
+            Ok(())
+        }
+        fn project_directory(&self) -> Result<Option<PathBuf>, PiLaunchError> {
+            muniment_core::projects::workspace(&self.profile, "thread-1")
+                .map(Some)
+                .map_err(|error| PiLaunchError::rejected("project_folder", error))
+        }
+    }
+    let root = temporary_directory();
+    let profile = root.join("profile");
+    let home = root.join("muniment");
+    muniment_core::home::confirm_home(&profile, &home).unwrap();
+    fs::create_dir_all(profile.join("sessions")).unwrap();
+    let boundary = ThreadBoundary {
+        profile: profile.clone(),
+    };
+    // The first reply runs in the untitled folder and Pi stores it.
+    let first = muniment_core::projects::workspace(&profile, "thread-1").unwrap();
+    assert!(first.ends_with("Untitled-thread1"));
+    let header = serde_json::json!({
+        "type": "session", "version": 3, "id": "s1", "cwd": first.to_string_lossy(),
+    });
+    let body = "{\"type\":\"message\",\"id\":\"m1\",\"text\":\"kept\"}\n";
+    let session = profile.join("sessions/session.jsonl");
+    fs::write(&session, format!("{header}\n{body}")).unwrap();
+    let (locator, _) = validate_pi_session(&profile.join("sessions"), "session.jsonl").unwrap();
+    // The title arrives and the folder takes it.
+    let renamed = muniment_core::workspace_names::resolve(
+        &profile,
+        &home.join("sessions"),
+        "thread-1",
+        Some("Favorite Color"),
+        None,
+    )
+    .unwrap();
+    assert!(!first.exists());
+    let config = pi_launch_config_for_executable(
+        &boundary,
+        "pi".into(),
+        &ChatGrant::local(),
+        Some(&locator),
+    )
+    .unwrap();
+    assert_eq!(config.working_directory.as_deref(), Some(renamed.as_path()));
+    let text = fs::read_to_string(&session).unwrap();
+    let (first_line, rest) = text.split_once('\n').unwrap();
+    let stored: serde_json::Value = serde_json::from_str(first_line).unwrap();
+    assert_eq!(stored["cwd"], renamed.to_string_lossy().as_ref());
+    assert_eq!(stored["id"], "s1");
+    assert_eq!(rest, body);
+    // A stored folder that still exists stays as Pi wrote it.
+    let elsewhere = root.join("elsewhere");
+    fs::create_dir_all(&elsewhere).unwrap();
+    let header = serde_json::json!({"type": "session", "cwd": elsewhere.to_string_lossy()});
+    fs::write(&session, format!("{header}\n{body}")).unwrap();
+    pi_launch_config_for_executable(&boundary, "pi".into(), &ChatGrant::local(), Some(&locator))
+        .unwrap();
+    assert_eq!(
+        fs::read_to_string(&session).unwrap(),
+        format!("{header}\n{body}")
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn the_launch_prompt_opens_with_trusted_facts_most_recalled_first() {
     use muniment_core::memory_files::{fact_save_in, note_recalled, Fact, Trust};
     let root = temporary_directory();
@@ -1288,6 +1522,7 @@ fn an_agent_launch_runs_with_every_tool_behind_its_gate() {
                 mode: PermissionMode::Manual,
                 ..RunPermissions::default()
             }),
+            agent_run: false,
         },
     };
     let pair = |config: &SidecarConfig, flag: &str| -> Vec<String> {

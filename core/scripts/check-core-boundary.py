@@ -152,7 +152,7 @@ def check_tree(text, staying_crates, package):
         if fields[0].split()[0] == CORE:
             require(len(fields) == 2, "Cargo omitted the core feature list.")
             features = set(fields[1].strip().split(",")) - {""}
-            allowed = {"keyring"}
+            allowed = {"keyring", "test-build"}
             require(features <= allowed,
                     f"{package} enables unexpected core features: {sorted(features - allowed)}")
 

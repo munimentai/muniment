@@ -2,8 +2,40 @@
 //! and Windows. A test run writes that file under a temporary directory, or
 //! the one `MUNIMENT_LOG_DIR` names, never the owner's.
 
-/// The runtime logs each hold at most 256 KiB.
+/// Each runtime log file holds at most 256 KiB. A full file moves to
+/// `<name>.1`, so a log keeps its previous file as well.
 pub const RUNTIME_LOG_MAX_BYTES: u64 = 256 * 1024;
+/// Each log record starts with its UTC time to the millisecond in RFC 3339
+/// form and a space, such as `2026-01-02T03:04:05.678Z `.
+pub const RECORD_TIME_BYTES: usize = 25;
+
+/// A record as a runtime log keeps it: its UTC time, a space, the record.
+pub fn stamped(record: &[u8]) -> Vec<u8> {
+    let mut stamped = chrono::Utc::now()
+        .format("%Y-%m-%dT%H:%M:%S%.3fZ ")
+        .to_string()
+        .into_bytes();
+    stamped.extend_from_slice(record);
+    stamped
+}
+
+/// The log text with the time removed from the start of each record, for
+/// a reader that compares the records alone.
+#[doc(hidden)]
+pub fn without_record_times(text: &str) -> String {
+    text.split_inclusive('\n')
+        .map(|line| {
+            let stamp = line.get(..RECORD_TIME_BYTES - 1);
+            let stamped = line.as_bytes().get(RECORD_TIME_BYTES - 1) == Some(&b' ')
+                && stamp.is_some_and(|stamp| chrono::DateTime::parse_from_rfc3339(stamp).is_ok());
+            if stamped {
+                &line[RECORD_TIME_BYTES..]
+            } else {
+                line
+            }
+        })
+        .collect()
+}
 
 /// The runtime prints each diagnostic with the existing stderr format.
 #[macro_export]
@@ -79,7 +111,9 @@ fn write_windows_runtime_record(
 fn bounded_record(arguments: std::fmt::Arguments<'_>) -> Vec<u8> {
     let mut record = arguments.to_string();
     // Leave room for the newline, even when a diagnostic exceeds the whole file cap.
-    let mut end = record.len().min(RUNTIME_LOG_MAX_BYTES as usize - 1);
+    let mut end = record
+        .len()
+        .min(RUNTIME_LOG_MAX_BYTES as usize - RECORD_TIME_BYTES - 1);
     while !record.is_char_boundary(end) {
         end -= 1;
     }
@@ -158,6 +192,10 @@ mod tests {
         fn write(&self, record: &str) {
             write_runtime_service_record(&self.0, format_args!("{record}")).unwrap();
         }
+
+        fn records(&self) -> String {
+            without_record_times(&fs::read_to_string(self.file()).unwrap())
+        }
     }
 
     impl Drop for Logs {
@@ -173,7 +211,7 @@ mod tests {
         logs.write("muniment-runtime: run_id=test run_start");
         logs.write("");
         assert_eq!(
-            fs::read_to_string(logs.file()).unwrap(),
+            logs.records(),
             "muniment-runtime: started version=test\nmuniment-runtime: run_id=test run_start\n\n"
         );
         assert_eq!(
@@ -186,19 +224,45 @@ mod tests {
         );
 
         let used = fs::metadata(logs.file()).unwrap().len();
-        logs.write(&"x".repeat((RUNTIME_LOG_MAX_BYTES - used - 1) as usize));
+        logs.write(&"x".repeat((RUNTIME_LOG_MAX_BYTES - used - 1) as usize - RECORD_TIME_BYTES));
         assert_eq!(
             fs::metadata(logs.file()).unwrap().len(),
             RUNTIME_LOG_MAX_BYTES
         );
-        assert!(fs::read_to_string(logs.file())
-            .unwrap()
-            .starts_with("muniment-runtime: started"));
+        assert!(logs.records().starts_with("muniment-runtime: started"));
         logs.write("muniment-runtime: run_id=test first_event text_delta");
         assert_eq!(
-            fs::read_to_string(logs.file()).unwrap(),
+            logs.records(),
             "muniment-runtime: run_id=test first_event text_delta\n"
         );
+        let rotated = logs.0.join("runtime-service.log.1");
+        assert_eq!(fs::metadata(&rotated).unwrap().len(), RUNTIME_LOG_MAX_BYTES);
+        assert!(without_record_times(&fs::read_to_string(rotated).unwrap())
+            .starts_with("muniment-runtime: started version=test\n"));
+    }
+
+    #[test]
+    fn each_record_starts_with_its_utc_time() {
+        let logs = Logs::new();
+        let before = chrono::Utc::now() - chrono::Duration::milliseconds(1);
+        logs.write("muniment-runtime: started version=test");
+        logs.write("event=activation_failed message=runtime activation failed");
+        let after = chrono::Utc::now() + chrono::Duration::milliseconds(1);
+        let contents = fs::read_to_string(logs.file()).unwrap();
+        let lines: Vec<&str> = contents.lines().collect();
+        assert_eq!(lines.len(), 2, "{contents}");
+        for (line, record) in lines.iter().zip([
+            "muniment-runtime: started version=test",
+            "event=activation_failed message=runtime activation failed",
+        ]) {
+            let (time, rest) = line.split_once(' ').unwrap();
+            assert_eq!(time.len(), RECORD_TIME_BYTES - 1, "{line}");
+            assert!(time.ends_with('Z'), "{line}");
+            let time = chrono::DateTime::parse_from_rfc3339(time).unwrap();
+            assert!(before <= time && time <= after, "{line}");
+            assert_eq!(rest, record);
+        }
+        assert_eq!(without_record_times("no time here\n"), "no time here\n");
     }
 
     #[test]
@@ -228,7 +292,7 @@ mod tests {
                 });
             }
         });
-        let contents = fs::read_to_string(logs.file()).unwrap();
+        let contents = logs.records();
         assert_eq!(contents.lines().count(), 128);
         for index in 0..8 {
             let record = format!("muniment-runtime: run_id={index} run_start");
@@ -242,7 +306,7 @@ mod tests {
         logs.write("original");
         fs::set_permissions(logs.file(), fs::Permissions::from_mode(0o640)).unwrap();
         assert!(write_runtime_service_record(&logs.0, format_args!("rejected")).is_err());
-        assert_eq!(fs::read_to_string(logs.file()).unwrap(), "original\n");
+        assert_eq!(logs.records(), "original\n");
         fs::set_permissions(logs.file(), fs::Permissions::from_mode(0o600)).unwrap();
         fs::set_permissions(&logs.0, fs::Permissions::from_mode(0o750)).unwrap();
         assert!(write_runtime_service_record(&logs.0, format_args!("rejected")).is_err());
@@ -256,7 +320,7 @@ mod tests {
         symlink(logs.0.join("target"), logs.file()).unwrap();
         assert!(write_runtime_service_record(&logs.0, format_args!("rejected")).is_err());
         assert_eq!(
-            fs::read_to_string(logs.0.join("target")).unwrap(),
+            without_record_times(&fs::read_to_string(logs.0.join("target")).unwrap()),
             "original\n"
         );
     }

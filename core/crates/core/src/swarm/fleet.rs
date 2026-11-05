@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
@@ -112,6 +112,8 @@ enum Channel {
 pub(super) struct FleetState {
     signer: Mutex<Option<Arc<IdentitySigner>>>,
     keys: Mutex<Option<Arc<Keys>>>,
+    /// Whether the credential store may hear a request for the fleet key.
+    gate: Mutex<super::fleet_key::KeyGate>,
     view: Mutex<Option<(String, Arc<View>)>>,
     peers: Mutex<HashMap<String, FleetPeer>>,
     /// Held while this runtime refreshes the sign-ins it seals or hands one
@@ -293,6 +295,10 @@ fn credential_store(inner: &Inner) -> Arc<dyn CredentialStore> {
 }
 
 /// This runtime's keys, created on first use.
+///
+/// A store that refuses the key closes the gate, so later calls answer the
+/// refusal without asking the store, and a refused key is never replaced
+/// with a new one. See [`super::fleet_key`].
 pub(super) fn keys(inner: &Inner) -> Result<Arc<Keys>, String> {
     let mut held = lock(&inner.fleet.keys);
     if let Some(keys) = held.as_ref() {
@@ -301,9 +307,26 @@ pub(super) fn keys(inner: &Inner) -> Result<Arc<Keys>, String> {
     let signer = lock(&inner.fleet.signer)
         .clone()
         .ok_or("Turn on remote access to hold fleet keys.")?;
+    {
+        let gate = lock(&inner.fleet.gate);
+        if !gate.may_ask(std::time::Instant::now()) {
+            return Err(gate.closed_message());
+        }
+    }
     let store = credential_store(inner);
-    let stored = store
-        .read(KEY_SERVICE, KEY_NAME)
+    let stored = match store.lookup(KEY_SERVICE, KEY_NAME) {
+        Ok(stored) => stored,
+        Err(refusal) => {
+            crate::runtime_eprintln!(
+                "muniment-runtime: the credential store refused the fleet key: {}",
+                refusal.message()
+            );
+            let mut gate = lock(&inner.fleet.gate);
+            gate.refused(&refusal, std::time::Instant::now());
+            return Err(gate.closed_message());
+        }
+    };
+    let stored = stored
         .and_then(|text| decode(text.trim()))
         .map(Zeroizing::new)
         .and_then(|bytes| <[u8; 32]>::try_from(bytes.as_slice()).ok());
@@ -313,12 +336,18 @@ pub(super) fn keys(inner: &Inner) -> Result<Arc<Keys>, String> {
             let mut bytes = Zeroizing::new([0u8; 32]);
             getrandom::fill(bytes.as_mut()).map_err(|_| "The system random source failed.")?;
             let text = Zeroizing::new(encode(bytes.as_ref()));
-            store
-                .write(KEY_SERVICE, KEY_NAME, &text)
-                .map_err(|error| format!("The fleet key could not be saved: {error}"))?;
+            if let Err(error) = store.write(KEY_SERVICE, KEY_NAME, &text) {
+                let refusal = crate::model_router::credentials::CredentialRefusal::Failed(error);
+                lock(&inner.fleet.gate).refused(&refusal, std::time::Instant::now());
+                return Err(format!(
+                    "The fleet key could not be saved: {}",
+                    refusal.message()
+                ));
+            }
             AgreementKeyPair::from_private_bytes(*bytes)
         }
     };
+    lock(&inner.fleet.gate).answered();
     let card = sign_card(&signer, &fleet.public_key())?;
     let keys = Arc::new(Keys {
         signer,
@@ -327,6 +356,73 @@ pub(super) fn keys(inner: &Inner) -> Result<Arc<Keys>, String> {
     });
     *held = Some(Arc::clone(&keys));
     Ok(keys)
+}
+
+/// The fleet key's refusal that `swarm.members` shows, or none.
+pub(super) fn key_status(inner: &Inner) -> Value {
+    lock(&inner.fleet.gate).view()
+}
+
+/// The keychain entries this runtime holds back after a refusal, each named
+/// for a person, that `swarm.members` shows: its credential store's and the
+/// protected prompts'.
+pub(super) fn keychain_status(inner: &Inner) -> Value {
+    let mut refused = credential_store(inner).refusals();
+    refused.extend(crate::chat_prompt::keychain_refusals());
+    let mut items: Vec<Value> = Vec::new();
+    for entry in refused {
+        let label = keychain_label(&entry.service);
+        let state = match entry.refusal {
+            crate::model_router::credentials::CredentialRefusal::Declined(_) => "declined",
+            crate::model_router::credentials::CredentialRefusal::Failed(_) => "failed",
+        };
+        if items
+            .iter()
+            .any(|item| item["label"] == label && item["state"] == state)
+        {
+            continue;
+        }
+        items.push(serde_json::json!({
+            "service": entry.service,
+            "label": label,
+            "state": state,
+            "message": entry.refusal.message(),
+        }));
+    }
+    Value::Array(items)
+}
+
+/// What the keychain refused this runtime, with no members, as
+/// `swarm.members` answers it while remote access is off.
+pub(super) fn keychain_view(inner: &Inner) -> Value {
+    serde_json::json!({
+        "self": null,
+        "members": [],
+        "fleet_key": key_status(inner),
+        "keychain": keychain_status(inner),
+    })
+}
+
+/// What a keychain service holds, in words.
+fn keychain_label(service: &str) -> &'static str {
+    match service {
+        KEY_SERVICE => "fleet key",
+        crate::agent_hooks::SECRET_SERVICE => "webhook secrets",
+        "ai.muniment.desktop.chat" => "protected prompts",
+        "ai.muniment.reader" => "reader source secrets",
+        "ai.muniment.endpoints" => "model endpoint keys",
+        _ => "saved secrets",
+    }
+}
+
+/// The person asked to try again: the credential store, the protected
+/// prompts and the fleet key forget their refusals, and the fleet key is
+/// asked for once more.
+pub(super) fn retry_key(inner: &Inner) {
+    credential_store(inner).retry_refused();
+    crate::chat_prompt::retry_keychain();
+    lock(&inner.fleet.gate).retry();
+    let _ = keys(inner);
 }
 
 /// This runtime's card, once it has an identity.
@@ -461,7 +557,9 @@ fn store_entries(inner: &Inner, incoming: Vec<RosterEntry>) -> Result<bool, Stri
         }
     }
     let mut room = MAX_ENTRIES.saturating_sub(held.max(0) as usize);
-    let transaction = connection.transaction().map_err(sql)?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(sql)?;
     let mut added = false;
     for entry in incoming {
         if room == 0 {

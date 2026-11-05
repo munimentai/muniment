@@ -37,7 +37,13 @@ fn panel_properties() {
     );
     let mtm = MainThreadMarker::new().unwrap();
     let app = NSApplication::sharedApplication(mtm);
-    assert!(app.setActivationPolicy(NSApplicationActivationPolicy::Regular));
+    // AppKit answers NO when the policy already is the one asked for, which
+    // Tao sets before setup in some sessions, so the test checks the policy itself.
+    app.setActivationPolicy(NSApplicationActivationPolicy::Regular);
+    assert_eq!(
+        app.activationPolicy(),
+        NSApplicationActivationPolicy::Regular
+    );
     // These retained windows keep ownership if AppKit receives a close action.
     let main = unsafe {
         NSWindow::initWithContentRect_styleMask_backing_defer(
@@ -115,7 +121,11 @@ fn panel_properties() {
     );
     assert!(!main.isKindOfClass(NSPanel::class()));
     assert_eq!(main.styleMask(), NSWindowStyleMask::Titled);
+    // AppKit lets only a visible window become main.
+    assert!(!main.canBecomeMainWindow());
+    main.orderFront(None);
     assert!(main.canBecomeMainWindow());
+    main.orderOut(None);
     assert!(!host.isVisible());
 }
 
@@ -129,12 +139,29 @@ fn main() {
     #[link(name = "CoreGraphics", kind = "framework")]
     extern "C" {
         fn CGWarpMouseCursorPosition(point: NSPoint) -> i32;
+        fn CGSessionCopyCurrentDictionary() -> *const std::ffi::c_void;
+    }
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFRelease(value: *const std::ffi::c_void);
     }
 
+    // AppKit windows need a window server session. A process outside one, such
+    // as an SSH login or a background job, has no session dictionary, and the
+    // test reports itself skipped there instead of failing in AppKit.
+    let session = unsafe { CGSessionCopyCurrentDictionary() };
+    if session.is_null() {
+        println!("launcher-panel: skipped, no window server session is available");
+        return;
+    }
+    unsafe { CFRelease(session) };
+
     let mut context = tauri::test::mock_context(tauri::test::noop_assets());
-    let config: tauri::utils::config::Config =
+    // The file's version names package.json, so only the window list is parsed as config.
+    let config: serde_json::Value =
         serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
-    context.config_mut().app.windows = config.app.windows;
+    context.config_mut().app.windows =
+        serde_json::from_value(config["app"]["windows"].clone()).unwrap();
     // The context supplies empty assets, but the builder creates real Wry, Tao, and AppKit windows.
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![

@@ -540,6 +540,7 @@ pub(super) fn phone_event(approval: &Approval) -> Option<crate::run_events::Chat
     Some(crate::run_events::ChatEvent {
         run_id: approval.run_id.clone(),
         thread_id: approval.thread_id.clone(),
+        started_at: None,
         phase: if pending {
             "pending-permission"
         } else {

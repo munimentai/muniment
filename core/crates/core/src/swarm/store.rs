@@ -319,6 +319,66 @@ pub(super) fn sql(error: rusqlite::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::TransactionBehavior;
+
+    /// A deferred transaction that reads, then writes after another
+    /// connection commits, fails at once with `database is locked`: the busy
+    /// timeout never covers the upgrade. An immediate one waits instead.
+    #[test]
+    fn swarm_write_transactions_take_the_write_lock_when_they_begin() {
+        let profile = std::env::temp_dir().join(format!("swarm-lock-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir_all(&profile).unwrap();
+        let store = Store::open(&profile).unwrap();
+        let race = |behavior: TransactionBehavior| -> Result<(), rusqlite::Error> {
+            let mut connection = store.open_connection().unwrap();
+            let transaction = connection.transaction_with_behavior(behavior)?;
+            transaction.query_row("SELECT COUNT(*) FROM meta", [], |row| row.get::<_, i64>(0))?;
+            let other = store.clone();
+            let writer = std::thread::spawn(move || {
+                other
+                    .open_connection()
+                    .unwrap()
+                    .execute(
+                        "INSERT OR REPLACE INTO meta(key, value) VALUES('other', 'x')",
+                        [],
+                    )
+                    .unwrap();
+            });
+            std::thread::sleep(Duration::from_millis(200));
+            let written = transaction
+                .execute(
+                    "INSERT OR REPLACE INTO meta(key, value) VALUES('own', 'y')",
+                    [],
+                )
+                .and_then(|_| transaction.commit());
+            writer.join().unwrap();
+            written
+        };
+        let deferred = race(TransactionBehavior::Deferred).unwrap_err();
+        assert!(
+            deferred.to_string().contains("database is locked"),
+            "{deferred}"
+        );
+        race(TransactionBehavior::Immediate).unwrap();
+        drop(store);
+        std::fs::remove_dir_all(profile).unwrap();
+
+        // Every swarm write transaction begins immediate.
+        let swarm = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/swarm");
+        for file in std::fs::read_dir(swarm).unwrap() {
+            let path = file.unwrap().path();
+            if path.to_string_lossy().ends_with("tests.rs") {
+                continue;
+            }
+            let source = std::fs::read_to_string(&path).unwrap();
+            let product = source.split("#[cfg(test)]").next().unwrap();
+            assert!(
+                !product.contains(".transaction()"),
+                "{} begins a deferred transaction",
+                path.display()
+            );
+        }
+    }
 
     #[test]
     fn populated_store_backfills_missing_versions_and_reopens_idempotently() {

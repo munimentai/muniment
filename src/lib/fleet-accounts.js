@@ -59,6 +59,15 @@ export function piHold(accounts, provider) {
   return signIn(accounts, named, (entry) => entry.this_machine) ?? signIn(accounts, named, (entry) => entry.usable_here)
 }
 
+// The line of a sign-in this machine holds that has no fleet record to name
+// it, such as an unshared one or a Claude Code account, so every sign-in row
+// names where it lives while the fleet lists accounts. A key or a sign-in
+// another member shares here gets none.
+export function hereLine(accounts, account) {
+  if (!accounts?.length || !account || account.source === 'key' || RECEIVED.test(account.id ?? '')) return ''
+  return routerHold(accounts, account.id) ? '' : 'Signed in here'
+}
+
 // The one state line of a sign-in's holder. One this computer holds, on
 // another machine's page, reads as this computer's.
 export function holdLine(account, requested = false) {

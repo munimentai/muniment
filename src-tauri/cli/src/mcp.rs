@@ -452,7 +452,10 @@ fn tools_call(
     };
     let company_id = arguments.remove("company_id");
     let mut body = Map::new();
-    if let Some(company_id) = company_id.filter(|id| id.is_string()) {
+    // An empty company id names no company, so the call reads the current one.
+    if let Some(company_id) =
+        company_id.filter(|id| id.as_str().is_some_and(|id| !id.trim().is_empty()))
+    {
         body.insert("company_id".to_owned(), company_id);
     }
     if let Some(client) = client_name {
@@ -869,6 +872,26 @@ mod tests {
         assert_eq!(result["tools"][2]["outputSchema"]["required"][1], "csv");
         let again = handle_line(&mut backend, &request(8, "tools/list", json!({}))).unwrap();
         assert_eq!(again["result"]["tools"], result["tools"]);
+    }
+
+    #[test]
+    fn an_empty_company_id_reads_the_current_company() {
+        for company_id in ["", "  "] {
+            let mut backend = FakeBackend::default();
+            handle_line(
+                &mut backend,
+                &request(
+                    9,
+                    "tools/call",
+                    json!({"name": "sql", "arguments": {"sql": "select 1 as n", "company_id": company_id}}),
+                ),
+            )
+            .unwrap();
+            assert_eq!(
+                backend.calls[0].1,
+                json!({"sql": "select 1 as n", "client": "claude-code"})
+            );
+        }
     }
 
     #[test]

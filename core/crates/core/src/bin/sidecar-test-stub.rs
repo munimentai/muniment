@@ -220,6 +220,39 @@ fn pi_rpc_blocked_stdin() {
 }
 
 fn pi_resume(args: Vec<String>) {
+    // Each start appends its process id, so a test counts the processes
+    // a thread's replies started.
+    if let Ok(path) = std::env::var("PI_RESUME_STUB_SPAWNS") {
+        let mut spawns = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .unwrap();
+        writeln!(spawns, "{}", std::process::id()).unwrap();
+    }
+    // Pi loads its extensions before it answers its first command.
+    if let Ok(delay) = std::env::var("PI_RESUME_STUB_START_DELAY_MS") {
+        thread::sleep(Duration::from_millis(delay.parse().unwrap()));
+    }
+    // Pi exits when it cannot load what it starts with.
+    if let Ok(error) = std::env::var("PI_RESUME_STUB_START_ERROR") {
+        eprintln!("{error}");
+        io::stderr().flush().unwrap();
+        std::process::exit(1);
+    }
+    // Pi exits when an extension it names is gone by then.
+    if std::env::var_os("PI_RESUME_STUB_LOAD_EXTENSIONS").is_some() {
+        for pair in args.windows(2).filter(|pair| pair[0] == "--extension") {
+            if !std::path::Path::new(&pair[1]).exists() {
+                eprintln!(
+                    "Error: Failed to load extension {:?}: Extension path does not exist: {}",
+                    pair[1], pair[1]
+                );
+                io::stderr().flush().unwrap();
+                std::process::exit(1);
+            }
+        }
+    }
     // Pi reads its working folder before it answers its first command. A
     // `PI_RESUME_STUB_FOLDER_GATE` FIFO there holds that read, as macOS holds
     // a protected folder until the user answers its consent prompt.
@@ -250,6 +283,10 @@ fn pi_resume(args: Vec<String>) {
                 })
         })
         .unwrap();
+    let mut session_file = session_file;
+    // The folder the stub's tools work in: its own until a reopened
+    // conversation names another, as Pi rebuilds its tools on a switch.
+    let mut working_folder = std::env::current_dir().unwrap();
     let mut compacted = false;
     // A reasoning stub model starts at medium and takes each level it is sent.
     let reasoning = std::env::var_os("PI_RESUME_STUB_REASONING").is_some();
@@ -289,6 +326,25 @@ fn pi_resume(args: Vec<String>) {
             continue;
         }
         match request["type"].as_str().unwrap() {
+            "switch_session" => {
+                session_file = std::path::PathBuf::from(request["sessionPath"].as_str().unwrap());
+                let header = fs::read_to_string(&session_file)
+                    .ok()
+                    .and_then(|text| {
+                        serde_json::from_str::<serde_json::Value>(text.lines().next()?).ok()
+                    })
+                    .and_then(|header| header["cwd"].as_str().map(std::path::PathBuf::from));
+                if let Some(folder) = header {
+                    working_folder = folder;
+                }
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "type":"response", "command":"switch_session", "success":true,
+                        "id":request["id"], "data":{"cancelled":false}
+                    })
+                );
+            }
             "get_state" => println!(
                 "{}",
                 serde_json::json!({
@@ -378,7 +434,23 @@ fn pi_resume(args: Vec<String>) {
                     if let Some(parent) = session_file.parent() {
                         fs::create_dir_all(parent).unwrap();
                     }
-                    fs::write(&session_file, "{}\n").unwrap();
+                    // Pi's saved conversation opens with its working folder.
+                    let header = if std::env::var_os("PI_RESUME_STUB_SESSION_HEADER").is_some() {
+                        serde_json::json!({"type":"session", "cwd":working_folder}).to_string()
+                    } else {
+                        "{}".to_owned()
+                    };
+                    fs::write(&session_file, format!("{header}\n")).unwrap();
+                }
+                if let Ok(path) = std::env::var("PI_RESUME_STUB_PROMPT_FOLDERS") {
+                    let mut folders = fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(path)
+                        .unwrap();
+                    let message = request["message"].as_str().unwrap();
+                    let last = message.lines().last().unwrap_or_default();
+                    writeln!(folders, "{last}\t{}", working_folder.display()).unwrap();
                 }
                 if let Ok(path) = std::env::var("PI_RESUME_STUB_PROMPTS") {
                     let mut prompts = fs::OpenOptions::new()
@@ -387,6 +459,16 @@ fn pi_resume(args: Vec<String>) {
                         .open(path)
                         .unwrap();
                     writeln!(prompts, "{}", request["message"].as_str().unwrap()).unwrap();
+                }
+                if let Ok(path) = std::env::var("PI_RESUME_STUB_PROMPT_PIDS") {
+                    let mut prompts = fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(path)
+                        .unwrap();
+                    let message = request["message"].as_str().unwrap();
+                    let last = message.lines().last().unwrap_or_default();
+                    writeln!(prompts, "{} {last}", std::process::id()).unwrap();
                 }
                 println!(
                     "{}",
@@ -398,7 +480,30 @@ fn pi_resume(args: Vec<String>) {
                         .is_some_and(|message| message.contains(HOLD_MARKER))
                 {
                     // Keep the run active until the test sends a queued
-                    // message or stops it.
+                    // message or stops it, after the text the reply wrote.
+                    if let Ok(text) = std::env::var("PI_RESUME_STUB_HELD_TEXT") {
+                        println!(
+                            "{}",
+                            serde_json::json!({"type":"message_update", "assistantMessageEvent":{"type":"text_delta", "delta":text}})
+                        );
+                    }
+                } else if let Ok(error) = std::env::var("PI_RESUME_STUB_RETRY_ERROR") {
+                    // Pi's model call fails, and Pi retries it after a delay:
+                    // the first retry fails too, and the second waits.
+                    for attempt in 1..=2 {
+                        println!("{}", serde_json::json!({"type":"agent_start"}));
+                        println!(
+                            "{}",
+                            serde_json::json!({"type":"agent_end", "willRetry":false, "messages":[
+                                {"role":"assistant", "stopReason":"error", "errorMessage":error}
+                            ]})
+                        );
+                        println!(
+                            "{}",
+                            serde_json::json!({"type":"auto_retry_start", "attempt":attempt,
+                                "maxAttempts":3, "delayMs":2000, "errorMessage":error})
+                        );
+                    }
                 } else if let Ok(plan) = std::env::var("PI_RESUME_STUB_PLAN") {
                     // The plan tool's first step: the plan check.
                     println!(
@@ -503,9 +608,22 @@ fn pi_resume(args: Vec<String>) {
                     "{}",
                     serde_json::json!({"type":"response", "command":command, "success":true, "id":request["id"]})
                 );
+                // After written text, Pi ends the model call the message
+                // interrupted and answers it in a new call.
+                let delta = if std::env::var_os("PI_RESUME_STUB_HELD_TEXT").is_some() {
+                    println!(
+                        "{}",
+                        serde_json::json!({"type":"message_end", "message":{
+                            "role":"assistant", "provider":"stub", "model":"stub-model"
+                        }})
+                    );
+                    command.to_owned()
+                } else {
+                    format!(" {command}")
+                };
                 println!(
                     "{}",
-                    serde_json::json!({"type":"message_update", "assistantMessageEvent":{"type":"text_delta", "delta":format!(" {command}")}})
+                    serde_json::json!({"type":"message_update", "assistantMessageEvent":{"type":"text_delta", "delta":delta}})
                 );
                 if std::env::var_os("PI_RESUME_STUB_PERMISSION_CAPTURE").is_some() {
                     println!(
@@ -595,6 +713,28 @@ fn pi_resume(args: Vec<String>) {
                     serde_json::json!({"type":"message_update", "assistantMessageEvent":{"type":"text_delta", "delta":" resumed"}})
                 );
                 println!("{}", serde_json::json!({"type":"agent_end"}));
+            }
+            "abort_retry" => {
+                if let Ok(path) = std::env::var("PI_RESUME_STUB_REQUESTS") {
+                    let mut requests = fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(path)
+                        .unwrap();
+                    writeln!(requests, "{request}").unwrap();
+                }
+                println!(
+                    "{}",
+                    serde_json::json!({"type":"response", "command":"abort_retry", "success":true, "id":request["id"]})
+                );
+                println!(
+                    "{}",
+                    serde_json::json!({"type":"auto_retry_end", "success":false, "attempt":2, "finalError":"Retry cancelled"})
+                );
+                println!(
+                    "{}",
+                    serde_json::json!({"type":"agent_settled", "aborted":false})
+                );
             }
             "abort" => {
                 if let Ok(path) = std::env::var("PI_RESUME_STUB_ABORT_CAPTURE") {

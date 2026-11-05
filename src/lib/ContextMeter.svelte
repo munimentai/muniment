@@ -19,6 +19,8 @@
 <style>
   .context-trigger { position: relative; flex: none; display: inline-flex; align-items: center; gap: 5px; min-width: 24px; min-height: 24px; padding: 3px 4px; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--muted); font: var(--text-12) var(--font-mono); white-space: nowrap; cursor: pointer; }
   .context-trigger:hover, .context-trigger[aria-expanded="true"] { background: var(--faint); }
+  /* composer-priority.js collapses the meter to its ring before the model name clips. */
+  .context-trigger:global([data-collapsed]) > span { display: none; }
   .ring { width: 14px; height: 14px; transform: rotate(-90deg); }
   circle { fill: none; stroke-width: 2; }
   .track { stroke: var(--border); }

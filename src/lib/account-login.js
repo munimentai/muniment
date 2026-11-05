@@ -13,7 +13,8 @@ export function loginEnded(login) {
 }
 
 // The next sign-in state for one event, or null when the event belongs to
-// another sign-in. `open` is a page to open in the browser, `stop` ends the
+// another sign-in. An ended sign-in drops its page and code, which no longer
+// sign in, so only a fresh sign-in is offered. `open` is a page to open in the browser, `stop` ends the
 // event subscription, and `done` names a finished sign-in, with `pool` when
 // the account joined the router's pool.
 export function loginEvent(login, payload) {
@@ -34,12 +35,12 @@ export function loginEvent(login, payload) {
       return { login: { ...login, stage: 'done', prompt: null }, stop: true, done: true, pool: !!payload.pool }
     case 'failed':
       // The cause a provider or the runtime named stays for Show log.
-      return { login: { ...login, stage: 'failed', message: payload.message || 'The sign-in did not finish. Try again.', detail: payload.detail ?? payload.error ?? '', prompt: null }, stop: true }
+      return { login: { ...login, stage: 'failed', message: payload.message || 'The sign-in did not finish. Try again.', detail: payload.detail ?? payload.error ?? '', url: '', code: '', prompt: null }, stop: true }
     case 'cancelled':
-      return { login: { ...login, stage: 'cancelled', message: 'The sign-in was cancelled.', prompt: null }, stop: true }
+      return { login: { ...login, stage: 'cancelled', message: 'The sign-in was cancelled.', url: '', code: '', prompt: null }, stop: true }
     case 'exit':
       if (loginEnded(login)) return { login }
-      return { login: { ...login, stage: 'failed', message: 'The sign-in stopped before it finished. Try again.', prompt: null }, stop: true }
+      return { login: { ...login, stage: 'failed', message: 'The sign-in stopped before it finished. Try again.', url: '', code: '', prompt: null }, stop: true }
     default:
       return { login: payload.message ? { ...login, message: payload.message } : login }
   }

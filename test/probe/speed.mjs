@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { INPUT_MARK_THROTTLE_MS } from '../../src/lib/focus-landing.js'
 
 // Speed budgets that runner noise cannot move: requests, DOM writes and
 // rendered nodes, counted in headless Chromium against the probe fixtures.
@@ -8,8 +9,8 @@ import assert from 'node:assert/strict'
 export const SPEED_BUDGETS = {
   // Requests the window sends from its first frame until it settles, per fixture.
   start: {
-    'index.html': { total: 48, sidebar_arrange: 2 },
-    'history.html': { total: 55, sidebar_arrange: 5, chat_thread_open: 1 },
+    'index.html': { total: 50, sidebar_arrange: 2 },
+    'history.html': { total: 57, sidebar_arrange: 5, chat_thread_open: 1 },
   },
   // DOM records per streamed text chunk outside the reply that streams, and inside it.
   chunk: { outside: 0, inside: 4, requests: 0, sidebar_arrange: 0 },
@@ -103,6 +104,9 @@ async function checkStreaming(browser, baseUrl, report) {
   const { page, close } = await open(browser, baseUrl, 'in-flight.html')
   try {
     const chunks = 30
+    // Launch's code focus asks the shell to watch the input-source mark, and a
+    // burst of such asks sends its last one a throttle later.
+    await page.waitForTimeout(INPUT_MARK_THROTTLE_MS * 2)
     const from = await commandCount(page)
     const stop = await watchWrites(page, '.response:has(.streaming)')
     for (let index = 0; index < chunks; index += 1) {
@@ -137,6 +141,8 @@ async function checkKeystrokes(browser, baseUrl, report) {
     // The first key shows the send control, a write the budget allows once.
     await composer.press('W')
     await frames(page)
+    // The focus from code asks the shell to watch the input-source mark once.
+    await page.waitForTimeout(INPUT_MARK_THROTTLE_MS * 2)
     const from = await commandCount(page)
     const stop = await watchWrites(page, '.composer')
     const keys = 'rite the renewal'

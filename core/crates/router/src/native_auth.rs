@@ -871,6 +871,50 @@ pub fn refresh_if_expiring_within(
     margin_ms: i64,
     timeout: Duration,
 ) -> Option<Result<Credential, String>> {
+    if !credential.expired(now_ms + margin_ms) {
+        return None;
+    }
+    refresh_now(credential, now_ms, timeout)
+}
+
+/// Trades the refresh token of an account whose upstream refused its access
+/// token, whatever expiry the account records, and keeps the fresh credential.
+/// Answers `None` when the account holds no refresh token this router can
+/// trade. When another turn already replaced the refused credential, the
+/// account answers as it stands, with no second trade.
+pub fn refresh_refused_account_in(
+    backend: &super::store::Backend,
+    id: &str,
+    refused: &Credential,
+    now_ms: i64,
+    timeout: Duration,
+) -> Option<Result<super::config::Account, String>> {
+    let _held = REFRESH.lock().unwrap_or_else(|error| error.into_inner());
+    let Ok(config) = backend.config() else {
+        return Some(Err("Cannot read account settings.".into()));
+    };
+    let mut account = config
+        .accounts
+        .iter()
+        .find(|account| account.id == id)
+        .cloned()?;
+    if account.credential != *refused {
+        return Some(Ok(account));
+    }
+    let fresh = refresh_now(&account.credential, now_ms, timeout)?;
+    Some(fresh.and_then(|fresh| {
+        account.credential = backend.secrets.swap(id, refused, &fresh)?;
+        Ok(account)
+    }))
+}
+
+/// Trades a subscription's refresh token for a fresh credential now. Answers
+/// none for a credential with no refresh token or an upstream with no trade.
+fn refresh_now(
+    credential: &Credential,
+    now_ms: i64,
+    timeout: Duration,
+) -> Option<Result<Credential, String>> {
     let Credential::Subscription {
         provider,
         refresh: Some(refresh),
@@ -883,9 +927,6 @@ pub fn refresh_if_expiring_within(
     else {
         return None;
     };
-    if !credential.expired(now_ms + margin_ms) {
-        return None;
-    }
     let refreshed = match provider.as_str() {
         "kimi" => kimi_refresh(
             KIMI_AUTH_URL,

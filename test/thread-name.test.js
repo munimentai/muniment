@@ -4,7 +4,7 @@ import { corePath } from '../scripts/muniment-core.mjs'
 // The real harness wire tests cover the bundled import. Unit tests inject completion.
 const source = readFileSync(corePath('crates/core/src/assistant_identity.mjs'), 'utf8').replace(/^import \{ completeSimple \}[^\n]*\n/m, '')
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`
-const { nameFirstThread, threadName } = await import(/* @vite-ignore */ moduleUrl)
+const { currentWorkingFolder, nameFirstThread, threadName } = await import(/* @vite-ignore */ moduleUrl)
 
 it('requests a short name separately and saves only the validated result', async () => {
   const editor = vi.fn().mockResolvedValueOnce('{"prompt":"Help me fix the report"}').mockResolvedValue('{}')
@@ -65,4 +65,39 @@ it('bounds credential lookup before naming starts', async () => {
     await pending
     expect(complete).not.toHaveBeenCalled()
   } finally { vi.useRealTimers() }
+})
+
+it('starts the first turn at once and ends the run only once naming settles', async () => {
+  // The registry's own completion serves the request, so the bundled import is unused.
+  const withImport = readFileSync(corePath('crates/core/src/assistant_identity.mjs'), 'utf8').replace(/^import \{ completeSimple \}[^\n]*\n/m, 'const completeSimple = undefined\n')
+  const { default: register } = await import(/* @vite-ignore */ `data:text/javascript;base64,${Buffer.from(withImport).toString('base64')}`)
+  const handlers = {}
+  register({ on: (name, handler) => { handlers[name] = handler } })
+  let finish
+  const complete = vi.fn(() => new Promise((resolve) => { finish = resolve }))
+  const editor = vi.fn().mockResolvedValueOnce('{"prompt":"Plan the launch"}').mockResolvedValue('{}')
+  const context = { model: { provider: 'muniment-router' }, ui: { editor }, modelRegistry: { complete } }
+  const started = await handlers.before_agent_start({ systemPrompt: 'You help.' }, context)
+  expect(started.systemPrompt).toBe('You help.')
+  await vi.waitFor(() => expect(complete).toHaveBeenCalledOnce())
+  let ended = false
+  const end = handlers.agent_end({}).then(() => { ended = true })
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  expect(ended).toBe(false)
+  finish({ content: [{ type: 'text', text: 'Launch plan' }] })
+  await end
+  expect(JSON.parse(editor.mock.calls[1][1])).toEqual({ action: 'save', title: 'Launch plan' })
+  await expect(handlers.agent_end({})).resolves.toBeUndefined()
+})
+
+it('names the session folder in the working-directory fact once the launch folder is gone', () => {
+  const fact = (folder) => `Facts:\n- The working directory is ${folder}. Create generated files inside this working directory. Read or write elsewhere only at a path the user names.\n- Next fact.`
+  const old = '/Users/a/muniment/sessions/Untitled-db6632f9'
+  const renamed = '/Users/a/muniment/sessions/Bubbles_in_$&_water-db6632f9'
+  expect(currentWorkingFolder(fact(old), renamed, () => false)).toBe(fact(renamed))
+  // A folder that still exists, or a session in the same folder, keeps the prompt.
+  expect(currentWorkingFolder(fact(old), renamed, () => true)).toBe(fact(old))
+  expect(currentWorkingFolder(fact(old), old, () => false)).toBe(fact(old))
+  expect(currentWorkingFolder('No working directory is configured.', renamed, () => false)).toBe('No working directory is configured.')
+  expect(currentWorkingFolder(fact(old), undefined, () => false)).toBe(fact(old))
 })

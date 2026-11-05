@@ -2,11 +2,11 @@
 // the agent's folder, newest 20, with secrets removed, lists them through
 // `agent.replays` and queues a new run of one through `agent.replay`. These
 // helpers ask the agent's machine and name what came back.
-import { agentRequest } from './agent-runtime.js'
+import { agentRead, agentRequest } from './agent-runtime.js'
 
-export async function loadReplays(tauri, agent) {
+export async function loadReplays(tauri, agent, delays) {
   try {
-    const answer = await agentRequest(tauri, agent.runtimeId, 'agent.replays', { id: agent.id })
+    const answer = await agentRead(tauri, agent.runtimeId, 'agent.replays', { id: agent.id }, delays)
     return { replays: answer?.replays ?? [], version: answer?.agent_version ?? null, error: '' }
   } catch (failure) {
     return { replays: [], version: null, error: String(failure?.message ?? failure) }

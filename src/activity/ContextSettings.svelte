@@ -13,17 +13,23 @@
   let saving = $state(false)
   let error = $state('')
   let status = $state('')
+  // Save waits for a change from the saved settings.
+  let saved = $state(null)
+  const changed = $derived(!!saved && (enabled !== saved.enabled || reserveTokens !== saved.reserveTokens || keepRecentTokens !== saved.keepRecentTokens))
   onMount(async () => {
     try {
       const value = await tauri.invoke('context_settings')
       enabled = value.enabled; reserveTokens = value.reserveTokens; keepRecentTokens = value.keepRecentTokens
+      saved = { enabled, reserveTokens, keepRecentTokens }
       ready = true
     } catch { error = 'Context settings could not be read.' }
   })
   async function save() {
     saving = true; error = ''; status = ''
     try {
-      await tauri.invoke('context_settings_save', { enabled, reserveTokens, keepRecentTokens })
+      const next = { enabled, reserveTokens, keepRecentTokens }
+      await tauri.invoke('context_settings_save', next)
+      saved = next
       status = 'Saved. Applies to the next message.'
     } catch (failure) { error = String(failure?.message ?? failure) }
     finally { saving = false }
@@ -31,10 +37,10 @@
 </script>
 <section aria-label="Conversation context">
   <PageHead intro="Summarize older messages to make room. Full history stays saved.">
-    {#snippet actions()}{#if ready}<Button type="submit" form="context-settings" disabled={saving}>{saving ? 'Saving…' : 'Save context settings'}</Button>{/if}{/snippet}
+    {#snippet actions()}{#if ready}<Button type="submit" form="context-settings" disabled={saving || !changed}>{saving ? 'Saving…' : 'Save context settings'}</Button>{/if}{/snippet}
   </PageHead>
   {#if ready}
-    <form id="context-settings" onsubmit={(event) => { event.preventDefault(); void save() }}>
+    <form id="context-settings" onsubmit={(event) => { event.preventDefault(); if (changed) void save() }}>
       <Group heading="Compaction">
         <Row title="Compact automatically" info="When off, a full conversation can stop replies.">
           <Toggle bind:checked={enabled} label="Compact automatically" disabled={saving} />

@@ -333,9 +333,9 @@ impl<'a> Resolver<'a> {
                 None => "Added by an agent".to_owned(),
             };
         match (origin.kind, origin.surface) {
-            (OriginKind::User, Some(Surface::AgentProfile | Surface::AgentImport)) => {
-                by_agent(self)
-            }
+            // The person wrote it in the agent's profile, as its trust says.
+            (OriginKind::User, Some(Surface::AgentProfile)) => "Added by you".to_owned(),
+            (OriginKind::User, Some(Surface::AgentImport)) => by_agent(self),
             (OriginKind::User, _) => "Added in Settings".to_owned(),
             (OriginKind::Agent, _) => by_agent(self),
             (OriginKind::Chat, _) => "Added in a chat".to_owned(),
@@ -589,10 +589,7 @@ mod tests {
             find(&profile_fact).fact.origin,
             Some(Origin::user(Some(&agent)))
         );
-        assert_eq!(
-            find(&profile_fact).origin_label,
-            "Added by Tauri Morning agent"
-        );
+        assert_eq!(find(&profile_fact).origin_label, "Added by you");
         assert_eq!(
             find(&unmapped).fact.origin.as_ref().unwrap().agent_id,
             Some(agent.clone())
@@ -609,17 +606,17 @@ mod tests {
         };
         let label = |origin: &Origin| Resolver::new(&fixture.profile, None).label(origin, "unused");
         assert_eq!(label(&written), "Added by Tauri Morning agent");
-        assert_eq!(
-            label(&Origin::user(Some(&agent))),
-            "Added by Tauri Morning agent"
-        );
+        // A fact the person adds in the agent's profile reads as the
+        // person's, whatever the agent's name.
+        assert_eq!(label(&Origin::user(Some(&agent))), "Added by you");
         assert_eq!(
             label(&Origin::imported(&agent)),
             "Added by Tauri Morning agent"
         );
         crate::agents::delete(&fixture.profile, &agent).unwrap();
         assert_eq!(label(&written), "Added by an agent");
-        assert_eq!(label(&Origin::user(Some(&agent))), "Added by an agent");
+        assert_eq!(label(&Origin::user(Some(&agent))), "Added by you");
+        assert_eq!(label(&Origin::imported(&agent)), "Added by an agent");
     }
 
     #[test]

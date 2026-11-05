@@ -382,6 +382,7 @@ fn run_event(run_id: &str, phase: &str, text: &str) -> ChatEvent {
         pending_permission: None,
         delta: None,
         seq: None,
+        started_at: None,
     }
 }
 

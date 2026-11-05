@@ -41,6 +41,7 @@ function machine(stored = agent, extra = {}) {
     if (args.operation === 'permission.modes') return structuredClone(modes)
     if (args.operation === 'agent.run_now') return { run: { id: 'run-new', agent_id: stored.id, status: 'queued', trigger: { kind: 'manual' } } }
     if (args.operation === 'agent.routine_proposals') return { proposals: stored.routines.filter((routine) => routine.proposed) }
+    if (args.operation === 'agent.delete') return { folder_kept: '/home/me/Scout', message: "The agent's folder holds your files, so it stays." }
     if (args.operation === 'agent.export') return { format: args.body.format, file_name: `${stored.name}.${args.body.format}.md`, content: '# Export' }
     return {}
   })
@@ -84,6 +85,28 @@ it('keeps a failed edit for retry and names the failure', async () => {
   fail = false
   await fireEvent.click(screen.getByRole('button', { name: 'Save', exact: true }))
   await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Job title' })).not.toBeInTheDocument())
+})
+
+it('shows an instructions Save refusal beside that Save, above Delete agent, and clears it on Cancel', async () => {
+  const invoke = vi.fn(async (command, args) => {
+    if (args?.operation === 'agent.read') return { agent }
+    if (args?.operation === 'agent.save') throw new Error('Remove credentials from the agent instructions.')
+    return {}
+  })
+  render(AgentProfile, { agent, tauri: { invoke }, onchange: vi.fn(), onclose: vi.fn() })
+  await fireEvent.click(screen.getByRole('button', { name: 'Edit instructions' }))
+  await fireEvent.input(screen.getByRole('textbox', { name: 'Instructions' }), { target: { value: 'Use token sk-live-123 to post.' } })
+  await fireEvent.click(screen.getByRole('button', { name: 'Save', exact: true }))
+  const alert = await screen.findByRole('alert')
+  expect(alert).toHaveTextContent('Remove credentials from the agent instructions.')
+  expect(screen.getAllByRole('alert')).toHaveLength(1)
+  const form = screen.getByRole('form', { name: 'Edit Instructions' })
+  expect(form).toContainElement(alert)
+  expect(within(form).getByRole('button', { name: 'Save', exact: true }).compareDocumentPosition(alert) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  const remove = screen.getByRole('button', { name: 'Delete agent' })
+  expect(alert.compareDocumentPosition(remove) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  await fireEvent.click(within(form).getByRole('button', { name: 'Cancel' }))
+  expect(screen.queryByRole('alert')).toBeNull()
 })
 
 it('turns skills on and off, picks a core mode from the composer menu and limits messages to chosen agents', async () => {
@@ -160,6 +183,24 @@ it('saves the project on a pick and picks the model and thinking level from the 
   await waitFor(() => expect(saved().model).toBeNull())
 })
 
+it('names the agent\'s model as the composer does, not by its id', async () => {
+  const { invoke } = machine()
+  const inventory = {
+    providers: [{ id: 'anthropic', name: 'Anthropic', source: 'oauth', models: [{ id: 'claude-fable-5-1' }] }, { id: 'muniment-router', name: 'Router', source: 'router', models: [] }],
+    router_models: [{ id: 'xai/grok-4.20-multi-agent-0309', family: 'xai', model: 'grok-4.20-multi-agent-0309', name: 'Grok 4.20 Multi Agent 0309', accounts: 1 }],
+  }
+  const view = render(AgentProfile, { agent: { ...agent, model: { provider: 'anthropic', id: 'claude-fable-5-1' } }, tauri: { invoke }, inventory, onchange: vi.fn() })
+  const model = screen.getByRole('region', { name: 'Model' })
+  expect(within(model).getByRole('button', { name: 'Model: Claude Fable 5.1' })).toHaveTextContent('Claude Fable 5.1')
+  await view.rerender({ agent: { ...agent, model: { provider: 'muniment-router', id: 'xai/grok-4.20-multi-agent-0309' } } })
+  expect(within(model).getByRole('button', { name: 'Model: Grok 4.20 Multi Agent 0309' })).toBeInTheDocument()
+  // A model no connected provider lists still reads formatted.
+  await view.rerender({ agent: { ...agent, model: { provider: 'gone', id: 'xai/grok-4.20-multi-agent-0309' } }, inventory: { providers: [] } })
+  await fireEvent.click(within(model).getByRole('button', { name: 'Model: Grok 4.20 Multi Agent 0309' }))
+  expect(within(model).getByText('Grok 4.20 Multi Agent 0309 · this agent')).toBeInTheDocument()
+  expect(model).not.toHaveTextContent(/grok-4\.20|claude-fable/)
+})
+
 it('saves the picked permission mode alone', async () => {
   const { invoke, saved } = machine(agent)
   render(AgentProfile, { agent, tauri: { invoke }, catalog, onchange: vi.fn() })
@@ -197,11 +238,12 @@ it('runs the agent on its own machine, opens a run from its history and deletes 
   await fireEvent.click(screen.getByRole('button', { name: 'Delete agent' }))
   await fireEvent.click(screen.getByRole('checkbox', { name: 'Also delete its memory' }))
   await fireEvent.click(screen.getByRole('button', { name: 'Confirm delete' }))
-  await waitFor(() => expect(ondelete).toHaveBeenCalled())
+  // Core's answer reaches the app, which names a kept folder.
+  await waitFor(() => expect(ondelete).toHaveBeenCalledWith({ folder_kept: '/home/me/Scout', message: "The agent's folder holds your files, so it stays." }, { removeThreads: false, asked: false }))
   expect(requests.at(-1)).toEqual({ runtime: 'box', operation: 'agent.delete', body: { id: 'scout', remove_memory: true } })
 })
 
-it('adds a memory in the same dialog, with the agent as its source, and goes back to the list', async () => {
+it('adds a memory in the same dialog, with you as its source, and goes back to the list', async () => {
   const facts = [{ id: 'fact', title: 'Source preference', content: 'Use primary sources.', source: 'Chat', trust: 'user' }]
   const invoke = vi.fn(async (command, args) => {
     if (command !== 'agent_memory') return null
@@ -221,8 +263,9 @@ it('adds a memory in the same dialog, with the agent as its source, and goes bac
   expect(dialog).toHaveAccessibleName('Add memory')
   expect(within(dialog).queryByText('Source preference')).not.toBeInTheDocument()
   await waitFor(() => expect(within(dialog).getByRole('textbox', { name: 'Title' })).toHaveFocus())
-  expect(within(dialog).getByRole('textbox', { name: 'Source' })).toHaveValue('Added by Scout agent')
-  expect(within(dialog).getByRole('textbox', { name: 'Source' }).parentElement.querySelector('.agent-avatar')).not.toBeNull()
+  // A fact the person adds reads Added by you, as its trust does.
+  expect(within(dialog).getByRole('textbox', { name: 'Source' })).toHaveValue('Added by you')
+  expect(within(dialog).queryByText(/Added by Scout/)).toBeNull()
 
   // Escape on the form goes back to the list and Add memory.
   await fireEvent.keyDown(window, { key: 'Escape' })
@@ -240,7 +283,7 @@ it('adds a memory in the same dialog, with the agent as its source, and goes bac
   await fireEvent.input(within(dialog).getByRole('textbox', { name: 'Title' }), { target: { value: 'Tone' } })
   await fireEvent.input(within(dialog).getByRole('textbox', { name: 'Fact' }), { target: { value: 'Use short answers.' } })
   await fireEvent.click(within(dialog).getByRole('button', { name: 'Save memory' }))
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_memory', expect.objectContaining({ id: 'scout', action: 'memory_fact_save', fact: expect.objectContaining({ title: 'Tone', source: 'Added by Scout agent' }) })))
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('agent_memory', expect.objectContaining({ id: 'scout', action: 'memory_fact_save', fact: expect.objectContaining({ title: 'Tone', source: 'Added by you' }) })))
   expect(await within(dialog).findByText('Tone')).toBeInTheDocument()
   expect(dialog).toHaveAccessibleName('Agent memory')
 
@@ -261,7 +304,7 @@ it('opens scoped memory only on request', async () => {
 
 it('accepts or dismisses routines core proposed and edits a schedule', async () => {
   const proposed = { id: 'extract-1', name: 'Morning digest', enabled: false, proposed: true, created_from: 'instructions', prompt: 'Digest.', trigger: { kind: 'cron', expr: '0 8 * * 1-5', tz: 'UTC' }, last_fired_at: null, last_result: null }
-  const urgent = { ...proposed, id: 'import-2', name: 'Urgent mail' }
+  const urgent = { ...proposed, id: 'import-2', name: 'Urgent mail', default_time: true }
   const daily = { id: 'schedule', name: 'Briefing', enabled: true, created_from: 'user', prompt: '', trigger: { kind: 'cron', expr: '0 9 * * *', tz: 'UTC' }, last_fired_at: '2026-01-01T09:00:00Z', last_result: { run_id: 'r', status: 'completed', silent: false } }
   const withRoutines = { ...agent, routines: [proposed, urgent, daily] }
   const { invoke, requests } = machine(withRoutines)
@@ -274,6 +317,9 @@ it('accepts or dismisses routines core proposed and edits a schedule', async () 
   expect(within(routines).getByRole('switch', { name: 'Briefing on' })).toHaveClass('small')
   const digest = await screen.findByRole('article', { name: 'Proposed routine Morning digest' })
   expect(digest).toHaveTextContent('Proposed from instructions')
+  expect(within(digest).queryByRole('note')).toBeNull()
+  // A time core picked says so until the user accepts or edits it.
+  expect(within(screen.getByRole('article', { name: 'Proposed routine Urgent mail' })).getByRole('note')).toHaveTextContent('Muniment picked the time. Change it if needed.')
   expect(screen.getByRole('article', { name: 'Proposed routine Urgent mail' })).toHaveTextContent('Proposed from the imported template')
   expect(within(routines).queryByRole('button', { name: 'Morning digest' })).not.toBeInTheDocument()
   await fireEvent.click(within(digest).getByRole('button', { name: 'Accept' }))
@@ -290,6 +336,25 @@ it('accepts or dismisses routines core proposed and edits a schedule', async () 
   await waitFor(() => expect(requests.filter((request) => request.operation !== 'agent.routine_proposals').at(-1)).toEqual({ runtime: 'local', operation: 'routine.save', body: { agent_id: 'scout', routine: { ...daily, trigger: { kind: 'cron', expr: '0 9 * * 5', tz: 'UTC' } } } }))
   await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Edit routine' })).not.toBeInTheDocument())
   expect(onchange).toHaveBeenCalled()
+})
+
+it('stops Escape at the routine editor, so the profile page under it stays', async () => {
+  // The shell's page keys listen on the document from its mount, after the
+  // window's own delegated handlers, and skip a key a handler took.
+  const page = vi.fn()
+  const shell = (event) => { if (!event.defaultPrevented) page() }
+  try {
+    const { invoke } = machine()
+    render(AgentProfile, { agent, tauri: { invoke }, catalog, onchange: vi.fn() })
+    document.addEventListener('keydown', shell)
+    await fireEvent.click(screen.getByRole('button', { name: 'Add routine' }))
+    const editor = await screen.findByRole('dialog', { name: 'New routine' })
+    await fireEvent.keyDown(within(editor).getByRole('textbox', { name: 'Name' }), { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'New routine' })).not.toBeInTheDocument())
+    expect(page).not.toHaveBeenCalled()
+  } finally {
+    document.removeEventListener('keydown', shell)
+  }
 })
 
 it('adds a tool check with its condition', async () => {
@@ -492,10 +557,13 @@ it('lists runs in one history with stoplight colors, retries a failed run core k
   expect(screen.queryByRole('region', { name: 'Failed runs' })).not.toBeInTheDocument()
   expect(within(history).getAllByRole('listitem').map((item) => item.dataset.light)).toEqual(['green', 'red'])
   expect(within(history).getByRole('button', { name: /^Morning digest, / })).toHaveTextContent(/^Morning digestToday at \d{1,2}:\d{2}/)
-  expect(failed).toHaveTextContent(/Jan 1 at \d{1,2}:\d{2}.* · Failed$/)
+  expect(failed.querySelector('time')).toHaveTextContent(/Jan 1 at \d{1,2}:\d{2}.* · Failed$/)
+  // A failed row names why the run failed.
+  expect(failed).toHaveTextContent(/· FailedThe model could not complete this reply\.$/)
   expect(history).not.toHaveTextContent(/UTC|GMT/)
+  // A run opens through its run, which names a thread that was deleted.
   await fireEvent.click(failed)
-  expect(onopen).toHaveBeenCalledWith('t-fail')
+  expect(onopenrun).toHaveBeenCalledWith(expect.objectContaining({ id: 'rp1', thread_id: 't-fail' }))
 
   await fireEvent.click(within(history).getByRole('button', { name: 'Retry Build finished' }))
   await waitFor(() => expect(requests).toContainEqual({ runtime: 'local', operation: 'agent.replay', body: { id: 'scout', replay_id: 'rp1' } }))
@@ -509,7 +577,8 @@ it('lists runs in one history with stoplight colors, retries a failed run core k
   expect(onopenrun).toHaveBeenCalledWith(expect.objectContaining({ id: 'run-r' }))
   await view.rerender({ runs: [{ ...run, runtimeId: 'local', status: 'running', thread_id: 'thread-r' }, done] })
   await fireEvent.click(within(history).getByRole('button', { name: /^Retry, Today at/ }))
-  expect(onopen).toHaveBeenCalledWith('thread-r')
+  expect(onopenrun).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'run-r', thread_id: 'thread-r' }))
+  expect(onopen).not.toHaveBeenCalled()
 })
 
 it('says when the agent has no runs yet and shows its activity', async () => {
@@ -521,12 +590,127 @@ it('says when the agent has no runs yet and shows its activity', async () => {
 
 it('opens at its delete confirmation when a card asks to delete the agent', async () => {
   const { invoke } = machine()
-  const view = render(AgentProfile, { agent, tauri: { invoke }, onchange: vi.fn(), ondelete: vi.fn() })
+  const ondelete = vi.fn()
+  const view = render(AgentProfile, { agent, tauri: { invoke }, onchange: vi.fn(), ondelete })
   expect(screen.queryByRole('button', { name: 'Confirm delete' })).not.toBeInTheDocument()
   await view.rerender({ deleteAsked: 1 })
   expect(await screen.findByRole('button', { name: 'Confirm delete' })).toBeInTheDocument()
   expect(screen.getByRole('checkbox', { name: 'Also delete its memory' })).not.toBeChecked()
+  expect(screen.getByText('Its threads move to Archived.')).toBeInTheDocument()
+  await fireEvent.click(screen.getByRole('checkbox', { name: 'Also delete its threads' }))
+  // The sentence follows the checkbox.
+  expect(screen.getByText('Its threads will be deleted.')).toBeInTheDocument()
+  expect(screen.queryByText('Its threads move to Archived.')).not.toBeInTheDocument()
+  await fireEvent.click(screen.getByRole('checkbox', { name: 'Also delete its threads' }))
+  expect(screen.getByText('Its threads move to Archived.')).toBeInTheDocument()
+  await fireEvent.click(screen.getByRole('checkbox', { name: 'Also delete its threads' }))
   await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
   await view.rerender({ deleteAsked: 2 })
-  expect(await screen.findByRole('button', { name: 'Confirm delete' })).toBeInTheDocument()
+  expect(await screen.findByRole('checkbox', { name: 'Also delete its threads' })).not.toBeChecked()
+  await fireEvent.click(screen.getByRole('checkbox', { name: 'Also delete its threads' }))
+  await fireEvent.click(screen.getByRole('button', { name: 'Confirm delete' }))
+  await waitFor(() => expect(ondelete).toHaveBeenCalledWith(expect.anything(), { removeThreads: true, asked: true }))
+})
+
+it('scrolls a card\'s delete confirmation into view and focuses its safe choice', async () => {
+  const { invoke } = machine()
+  const scrolled = []
+  const scrollIntoView = vi.fn(function (options) { scrolled.push([this.getAttribute('aria-label'), options]) })
+  Element.prototype.scrollIntoView = scrollIntoView
+  try {
+    const view = render(AgentProfile, { agent, tauri: { invoke }, onchange: vi.fn(), ondelete: vi.fn() })
+    await view.rerender({ deleteAsked: 1 })
+    const confirm = await screen.findByRole('group', { name: 'Delete agent' })
+    await waitFor(() => expect(scrolled).toContainEqual(['Delete agent', { block: 'center' }]))
+    expect(scrolled.every(([label, options]) => label === 'Delete agent' && options.block === 'center')).toBe(true)
+    expect(document.activeElement).toBe(within(confirm).getByRole('button', { name: 'Cancel' }))
+    // A second ask while the confirmation shows scrolls to it again.
+    document.activeElement.blur()
+    const before = scrolled.length
+    await view.rerender({ deleteAsked: 2 })
+    await waitFor(() => expect(scrolled.length).toBeGreaterThan(before))
+    expect(document.activeElement).toBe(within(confirm).getByRole('button', { name: 'Cancel' }))
+  } finally { delete Element.prototype.scrollIntoView }
+})
+
+it('keeps a card\'s delete confirmation in view with Cancel focused while History draws after the ask, until the user acts', async () => {
+  const { invoke } = machine()
+  let scrolls = 0
+  Element.prototype.scrollIntoView = vi.fn(function () { if (this.getAttribute('aria-label') === 'Delete agent') scrolls += 1 })
+  const outside = document.body.appendChild(document.createElement('input'))
+  try {
+    const view = render(AgentProfile, { agent, tauri: { invoke }, onchange: vi.fn(), ondelete: vi.fn() })
+    await view.rerender({ deleteAsked: 1 })
+    const confirm = await screen.findByRole('group', { name: 'Delete agent' })
+    const cancel = within(confirm).getByRole('button', { name: 'Cancel' })
+    await waitFor(() => expect(document.activeElement).toBe(cancel))
+    const first = scrolls
+    // Code moves focus away, as a closing page does, and History draws above the confirmation.
+    outside.focus()
+    const done = { id: 'r-late', agent_id: 'scout', thread_id: 't-late', status: 'completed', trigger: { kind: 'manual' }, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+    await view.rerender({ runs: [done] })
+    await waitFor(() => expect(scrolls).toBeGreaterThan(first))
+    await waitFor(() => expect(document.activeElement).toBe(cancel))
+    // Once the user acts in the profile, later drawing leaves the scroll and focus alone.
+    await fireEvent.keyDown(cancel, { key: 'Tab' })
+    outside.focus()
+    const settled = scrolls
+    await view.rerender({ runs: [{ ...done, id: 'r-later' }, done] })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(scrolls).toBe(settled)
+    expect(document.activeElement).toBe(outside)
+  } finally { delete Element.prototype.scrollIntoView; outside.remove() }
+})
+
+it('cancels the delete confirmation with Escape and returns focus to Delete agent, leaving the profile open', async () => {
+  const onclose = vi.fn()
+  const outer = vi.fn()
+  window.addEventListener('keydown', outer)
+  try {
+    render(AgentProfile, { agent, tauri: { invoke: vi.fn(async () => null) }, onclose })
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete agent' }))
+    const confirm = screen.getByRole('group', { name: 'Delete agent' })
+    await waitFor(() => expect(within(confirm).getByRole('button', { name: 'Cancel' })).toHaveFocus())
+    await fireEvent.keyDown(within(confirm).getByRole('button', { name: 'Cancel' }), { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('group', { name: 'Delete agent' })).not.toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'Delete agent' })).toHaveFocus()
+    // The key ends at the confirmation, so the app does not close the profile too.
+    expect(outer).not.toHaveBeenCalled()
+    expect(onclose).not.toHaveBeenCalled()
+  } finally { window.removeEventListener('keydown', outer) }
+})
+
+it('asks a busy runtime again and shows the History and Permissions it answers', async () => {
+  const { invoke: answer } = machine()
+  const busy = { 'agent.replays': 2, 'permission.modes': 2 }
+  const invoke = vi.fn(async (command, args) => {
+    if (command === 'agent_request' && busy[args.operation] > 0) {
+      busy[args.operation] -= 1
+      throw new Error('Muniment is busy with another request. Try again.')
+    }
+    return answer(command, args)
+  })
+  render(AgentProfile, { agent, tauri: { invoke }, onclose: vi.fn() })
+  const permissions = screen.getByRole('region', { name: 'Permissions' })
+  await waitFor(() => expect(within(permissions).getByRole('button', { name: 'Permissions: Ask before changes' })).toBeInTheDocument(), { timeout: 3000 })
+  expect(screen.queryByText(/Update .* to choose/)).not.toBeInTheDocument()
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  expect(invoke.mock.calls.filter(([, args]) => args?.operation === 'agent.replays')).toHaveLength(3)
+})
+
+it('never shows the unreachable line while the runtime is connected, and reads again when it returns', async () => {
+  const { invoke: answer } = machine()
+  let up = false
+  const invoke = vi.fn(async (command, args) => {
+    if (command === 'agent_request' && !up && ['agent.replays', 'permission.modes'].includes(args.operation)) throw new Error('Muniment cannot reach its background service.')
+    return answer(command, args)
+  })
+  const view = render(AgentProfile, { agent, tauri: { invoke }, connected: false, onclose: vi.fn() })
+  const permissions = screen.getByRole('region', { name: 'Permissions' })
+  expect(within(permissions).getByText('Loading…')).toBeInTheDocument()
+  expect(invoke.mock.calls.some(([, args]) => args?.operation === 'permission.modes')).toBe(false)
+  up = true
+  await view.rerender({ connected: true })
+  await waitFor(() => expect(within(permissions).getByRole('button', { name: 'Permissions: Ask before changes' })).toBeInTheDocument())
+  expect(screen.queryByText('Muniment cannot reach its background service.')).not.toBeInTheDocument()
 })

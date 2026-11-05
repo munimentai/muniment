@@ -1171,3 +1171,185 @@ fn settle_paced(dialer: &Node, answerer: &Node, pacer: &mut link::Pacer) -> usiz
     }
     panic!("the exchange never settled");
 }
+
+#[test]
+fn a_replica_thread_takes_the_time_of_its_events_not_their_arrival() {
+    let b = Node::scoped("b");
+    let owner = uuid::Uuid::now_v7().to_string();
+    let thread = uuid::Uuid::now_v7().to_string();
+    assert!(sync::ensure_registration(
+        b.inner(),
+        &ThreadRegistration {
+            thread_id: thread.clone(),
+            kind: "agent".into(),
+            agent_id: Some(uuid::Uuid::now_v7().to_string()),
+            group_id: None,
+            updated_at: "2026-10-20T12:50:43Z".into(),
+            owner_runtime: Some(owner.clone()),
+        },
+    )
+    .unwrap());
+    // The owner posted days ago. The event arrives now.
+    let posted_at = "2026-10-20T12:51:00Z";
+    let message = uuid::Uuid::now_v7().to_string();
+    let envelope = crate::journal::ThreadEventEnvelope::new(
+        &message,
+        &thread,
+        crate::journal::replica::THREAD_MESSAGE_POSTED,
+        posted_at,
+        json!({
+            "message_id": message,
+            "author": {"kind": "agent"},
+            "text": "Morning report.",
+            "deps": {},
+            "origin_runtime": owner,
+        }),
+        provenance(),
+    );
+    sync::import(
+        b.inner(),
+        vec![ReplicatedEvent {
+            thread_id: thread.clone(),
+            origin: owner,
+            seq: 1,
+            kind: "thread".into(),
+            envelope: serde_json::to_value(&envelope).unwrap(),
+            prompt: None,
+        }],
+    )
+    .unwrap();
+    assert_eq!(b.posts(&thread), vec!["Morning report.".to_owned()]);
+    let summary = b
+        .inner()
+        .storage
+        .lock()
+        .unwrap()
+        .journal
+        .summaries_of_threads(&[thread])
+        .unwrap()
+        .remove(0);
+    assert_eq!(summary.updated_at, posted_at);
+}
+
+impl Node {
+    /// Creates the thread of an agent this member runs, titled, with one
+    /// post, and indexes it.
+    fn agent_thread(&self, title: &str, post: &str) -> String {
+        let agent = self.agent(title);
+        let thread = uuid::Uuid::now_v7().to_string();
+        {
+            let mut storage = self.inner().storage.lock().unwrap();
+            let at = self.inner().now_text();
+            storage
+                .journal
+                .create_thread_with_id(&thread, "/workspace", &at, provenance())
+                .unwrap();
+            storage
+                .journal
+                .append_thread_title_renamed(1, &thread, title, &at, &provenance())
+                .unwrap();
+        }
+        sync::register_agent_thread(self.inner(), &thread, &agent.agent_id).unwrap();
+        sync::post_as(self.inner(), &thread, json!({"kind": "agent"}), post).unwrap();
+        sync::scan_local(self.inner()).unwrap();
+        thread
+    }
+
+    fn delete_thread(&self, thread: &str) {
+        let mut storage = self.inner().storage.lock().unwrap();
+        let last = storage.journal.last_thread_seq(thread).unwrap();
+        storage
+            .journal
+            .append_thread_deleted(last, thread, &self.inner().now_text(), &provenance())
+            .unwrap();
+    }
+}
+
+#[test]
+fn an_agent_thread_its_primary_deleted_leaves_every_member() {
+    let a = Node::scoped("a");
+    let b = Node::scoped("b");
+    let thread = a.agent_thread("Tauri Morning", "Morning report.");
+    settle(&b, &a);
+    settle(&b, &a);
+    assert!(sync::registration(b.inner(), &thread).is_some());
+    assert!(b.listed().contains(&"Tauri Morning".to_owned()));
+
+    // The owner deletes the agent's thread on A, its primary.
+    a.delete_thread(&thread);
+    sync::scan_local(a.inner()).unwrap();
+    settle(&b, &a);
+    settle(&b, &a);
+
+    for node in [&a, &b] {
+        assert!(sync::registration(node.inner(), &thread).is_none());
+        assert!(!node.listed().contains(&"Tauri Morning".to_owned()));
+    }
+    assert!(b
+        .inner()
+        .storage
+        .lock()
+        .unwrap()
+        .journal
+        .thread_deleted(&thread)
+        .unwrap());
+}
+
+#[test]
+fn a_thread_deleted_here_stays_deleted_when_a_peer_sends_it_again() {
+    let a = Node::scoped("a");
+    let thread = a.agent_thread("Tauri Morning", "Morning report.");
+    a.delete_thread(&thread);
+    let held = |node: &Node| {
+        let mut storage = node.inner().storage.lock().unwrap();
+        storage.journal.last_thread_seq(&thread).unwrap()
+    };
+    let before = held(&a);
+
+    // A peer that still holds a copy, such as an older member, sends its
+    // registration and a new post before A's scan retires the thread.
+    let peer = uuid::Uuid::now_v7().to_string();
+    let message = uuid::Uuid::now_v7().to_string();
+    let envelope = crate::journal::ThreadEventEnvelope::new(
+        &message,
+        &thread,
+        crate::journal::replica::THREAD_MESSAGE_POSTED,
+        &a.inner().now_text(),
+        json!({
+            "message_id": message,
+            "author": {"kind": "agent"},
+            "text": "A late report.",
+            "deps": {},
+            "origin_runtime": peer,
+        }),
+        provenance(),
+    );
+    let event = ReplicatedEvent {
+        thread_id: thread.clone(),
+        origin: peer.clone(),
+        seq: 1,
+        kind: "thread".into(),
+        envelope: serde_json::to_value(&envelope).unwrap(),
+        prompt: None,
+    };
+    sync::import(a.inner(), vec![event.clone()]).unwrap();
+    assert_eq!(held(&a), before);
+
+    // A's scan retires the thread, and the peer's registration and events
+    // find nothing to land in.
+    sync::scan_local(a.inner()).unwrap();
+    assert!(sync::registration(a.inner(), &thread).is_none());
+    let registration = ThreadRegistration {
+        thread_id: thread.clone(),
+        kind: sync::PLAIN.into(),
+        agent_id: None,
+        group_id: None,
+        updated_at: a.inner().now_text(),
+        owner_runtime: Some(peer),
+    };
+    assert!(!sync::ensure_registration(a.inner(), &registration).unwrap());
+    sync::import(a.inner(), vec![event]).unwrap();
+    assert!(sync::registration(a.inner(), &thread).is_none());
+    assert_eq!(held(&a), before);
+    assert!(!a.listed().contains(&"Tauri Morning".to_owned()));
+}

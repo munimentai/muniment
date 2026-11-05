@@ -218,7 +218,11 @@ pub fn queue_message(active: &RunRegistry, request: ChatQueueRequest) -> Result<
             } else {
                 "The message could not be queued. Try again.".to_string()
             }
-        })
+        })?;
+    // The run's coordinator journals the message as the user wrote it, at
+    // the place in the reply where Pi took it.
+    adapter.record_steer(&request.message);
+    Ok(())
 }
 
 pub fn cancel_active_run(

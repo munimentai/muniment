@@ -442,6 +442,34 @@ fn brand_compiled_background_tasks(directory: &Path) -> io::Result<()> {
     Ok(())
 }
 
+// The pinned extension opens its task folder at every session start, so each
+// turn left an empty `.muniment/tasks/<run>` folder in the workspace. Every
+// task start opens the folder on its own, so the session start skips it. A
+// package whose sources no longer hold the call needs no change.
+const EAGER_TASK_FOLDER: &str = "await registry.ensureRuntimeDir(nextRegistryCtx);";
+const DEFERRED_TASK_FOLDER: &str = "/* Muniment opens the task folder with the first task. */";
+
+fn defer_background_task_folder(directory: &Path) -> io::Result<()> {
+    let package = directory.join("node_modules/pi-background-tasks");
+    for relative in ["src/extension.ts", "dist/src/extension.js"] {
+        let path = package.join(relative);
+        let source = match fs::read_to_string(&path) {
+            Ok(source) => source,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        if source.contains(EAGER_TASK_FOLDER) {
+            crate::model_router::config::write_private(
+                &path,
+                source
+                    .replace(EAGER_TASK_FOLDER, DEFERRED_TASK_FOLDER)
+                    .as_bytes(),
+            )?;
+        }
+    }
+    Ok(())
+}
+
 /// Acquire packages before RPC starts. The caller supplies the verified executable.
 pub fn prepare_pi_packages(agent_directory: &Path, executable: &Path) -> io::Result<()> {
     let directory = agent_directory.join("npm");
@@ -489,7 +517,8 @@ pub fn prepare_pi_packages(agent_directory: &Path, executable: &Path) -> io::Res
     }
     if fs::read(&marker).is_ok_and(|bytes| bytes == identity) && installed(&directory) {
         brand_background_task_paths(&directory)?;
-        return brand_compiled_background_tasks(&directory);
+        brand_compiled_background_tasks(&directory)?;
+        return defer_background_task_folder(&directory);
     }
     // A failed or interrupted install must retry, even if it wrote the top-level manifests.
     match fs::remove_file(&marker) {
@@ -519,6 +548,7 @@ pub fn prepare_pi_packages(agent_directory: &Path, executable: &Path) -> io::Res
     }
     brand_background_task_paths(&directory)?;
     brand_compiled_background_tasks(&directory)?;
+    defer_background_task_folder(&directory)?;
     let mut file = fs::File::create(marker)?;
     file.write_all(&identity)?;
     file.sync_all()
@@ -632,6 +662,41 @@ mod tests {
                 .unwrap();
         assert!(!registry.contains("'.pi'"));
         assert_eq!(registry.matches("'.muniment'").count(), 2);
+        fs::remove_dir_all(npm).unwrap();
+    }
+
+    #[test]
+    fn session_start_opens_no_task_folder_and_task_starts_still_do() {
+        let npm = std::env::temp_dir().join(format!("muniment-bg-{}", uuid::Uuid::new_v4()));
+        let package = npm.join("node_modules/pi-background-tasks");
+        fs::create_dir_all(package.join("src")).unwrap();
+        fs::create_dir_all(package.join("dist/src")).unwrap();
+        let session_start = "currentRegistryCtx = nextRegistryCtx;\n    await registry.ensureRuntimeDir(nextRegistryCtx);\n    if (disposed) return;";
+        let task_start = "const dir = await this.awaitTaskAdmissionBoundary(this.ensureRuntimeDir(ctx), admission);";
+        for relative in ["src/extension.ts", "dist/src/extension.js"] {
+            fs::write(
+                package.join(relative),
+                format!("{session_start}\n{task_start}"),
+            )
+            .unwrap();
+        }
+        for _ in 0..2 {
+            defer_background_task_folder(&npm).unwrap();
+            for relative in ["src/extension.ts", "dist/src/extension.js"] {
+                let source = fs::read_to_string(package.join(relative)).unwrap();
+                assert!(!source.contains(EAGER_TASK_FOLDER), "{source}");
+                assert_eq!(source.matches(DEFERRED_TASK_FOLDER).count(), 1);
+                assert!(source.contains("currentRegistryCtx = nextRegistryCtx;"));
+                assert!(source.contains(task_start));
+            }
+        }
+        fs::remove_file(package.join("dist/src/extension.js")).unwrap();
+        fs::write(package.join("src/extension.ts"), "a changed layout").unwrap();
+        defer_background_task_folder(&npm).unwrap();
+        assert_eq!(
+            fs::read_to_string(package.join("src/extension.ts")).unwrap(),
+            "a changed layout"
+        );
         fs::remove_dir_all(npm).unwrap();
     }
 

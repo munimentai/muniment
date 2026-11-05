@@ -55,8 +55,152 @@ pub struct RuntimeAttachState {
     pi_artifact: Mutex<Option<muniment_core::sidecar::pi_install::PiArtifactDescriptor>>,
     /// Set while an MCP poll pass runs.
     mcp_polling: Arc<AtomicBool>,
+    /// The schedule pass failures already logged.
+    schedule_failures: Arc<crate::agent_schedule::ScheduleFailures>,
     /// The pass that names session folders from older versions.
     session_names: Mutex<Option<std::thread::JoinHandle<()>>>,
+}
+
+/// The pass over Home at start: it removes the folders deleted agents and
+/// deleted threads left that hold only Muniment's own files, the day-old
+/// empty folders unsent chats left, and the memory indexes deleted agents
+/// left, forgets name records whose folder is gone,
+/// and names legacy session folders.
+fn tidy_home(profile: &Path) -> Result<(), String> {
+    match muniment_core::agents::remove_deleted_folders(profile) {
+        Ok(removed) if !removed.is_empty() => muniment_core::runtime_eprintln!(
+            "muniment-runtime: agent_folders removed={}",
+            removed.len()
+        ),
+        Ok(_) => {}
+        Err(error) => muniment_core::runtime_eprintln!(
+            "muniment-runtime: agent_folders outcome=failed error={error}"
+        ),
+    }
+    match muniment_core::agents::remove_deleted_memory(profile) {
+        Ok(removed) if !removed.is_empty() => muniment_core::runtime_eprintln!(
+            "muniment-runtime: agent_memory removed={}",
+            removed.len()
+        ),
+        Ok(_) => {}
+        Err(error) => muniment_core::runtime_eprintln!(
+            "muniment-runtime: agent_memory outcome=failed error={error}"
+        ),
+    }
+    match muniment_core::projects::remove_deleted_thread_folders(profile) {
+        Ok(removed) if !removed.is_empty() => muniment_core::runtime_eprintln!(
+            "muniment-runtime: thread_folders removed={}",
+            removed.len()
+        ),
+        Ok(_) => {}
+        Err(error) => muniment_core::runtime_eprintln!(
+            "muniment-runtime: thread_folders outcome=failed error={error}"
+        ),
+    }
+    match muniment_core::projects::remove_unsent_thread_folders(profile) {
+        Ok(removed) if !removed.is_empty() => muniment_core::runtime_eprintln!(
+            "muniment-runtime: unsent_thread_folders removed={}",
+            removed.len()
+        ),
+        Ok(_) => {}
+        Err(error) => muniment_core::runtime_eprintln!(
+            "muniment-runtime: unsent_thread_folders outcome=failed error={error}"
+        ),
+    }
+    match muniment_core::projects::forget_deleted_threads(profile) {
+        Ok(0) => {}
+        Ok(forgotten) => muniment_core::runtime_eprintln!(
+            "muniment-runtime: project_threads forgot_deleted={forgotten}"
+        ),
+        Err(error) => muniment_core::runtime_eprintln!(
+            "muniment-runtime: project_threads outcome=failed error={error}"
+        ),
+    }
+    muniment_core::projects::migrate_session_names(profile)
+}
+
+/// Gives back each ordinary thread an `agent-save` took over, deletes the
+/// creation chats that deleted agents left, which hold no run, and removes
+/// the Pi transcripts only deleted threads bound and the checkpoint records
+/// of deleted threads.
+fn remove_orphan_creation_threads(
+    storage: &muniment_core::run_events::SharedStorage,
+    profile: &Path,
+    runtime_version: &str,
+) {
+    let Ok(mut storage) = storage.lock() else {
+        return;
+    };
+    match muniment_core::journal::thread_mutation::repair_taken_over_threads(
+        &mut storage.journal,
+        profile,
+    ) {
+        Ok(repaired) if !repaired.is_empty() => muniment_core::runtime_eprintln!(
+            "muniment-runtime: taken_over_threads repaired={}",
+            repaired.len()
+        ),
+        Ok(_) => {}
+        Err(error) => muniment_core::runtime_eprintln!(
+            "muniment-runtime: taken_over_threads outcome=failed error={error}"
+        ),
+    }
+    match muniment_core::journal::thread_mutation::remove_orphan_creation_threads(
+        &mut storage.journal,
+        profile,
+        &crate::attach_boundaries::runtime_provenance(runtime_version),
+    ) {
+        Ok(removed) if !removed.is_empty() => muniment_core::runtime_eprintln!(
+            "muniment-runtime: creation_threads removed={}",
+            removed.len()
+        ),
+        Ok(_) => {}
+        Err(error) => muniment_core::runtime_eprintln!(
+            "muniment-runtime: creation_threads outcome=failed error={error}"
+        ),
+    }
+    match muniment_core::journal::thread_mutation::remove_deleted_thread_sessions(
+        &mut storage.journal,
+        profile,
+    ) {
+        Ok(0) => {}
+        Ok(removed) => muniment_core::runtime_eprintln!(
+            "muniment-runtime: deleted_thread_transcripts removed={removed}"
+        ),
+        Err(error) => muniment_core::runtime_eprintln!(
+            "muniment-runtime: deleted_thread_transcripts outcome=failed error={error}"
+        ),
+    }
+    match muniment_core::journal::thread_mutation::remove_deleted_thread_checkpoints(
+        &mut storage.journal,
+        profile,
+    ) {
+        Ok(0) => {}
+        Ok(removed) => muniment_core::runtime_eprintln!(
+            "muniment-runtime: deleted_thread_checkpoints removed={removed}"
+        ),
+        Err(error) => muniment_core::runtime_eprintln!(
+            "muniment-runtime: deleted_thread_checkpoints outcome=failed error={error}"
+        ),
+    }
+}
+
+/// Logs the open step that failed and its error, which names no secret.
+fn state_open_failed(step: &str, error: &str) {
+    muniment_core::runtime_eprintln!(
+        "muniment-runtime: state_open outcome=failed step={step} error={error}"
+    );
+}
+
+/// An error and each source under it, joined into one line.
+fn error_chain(error: &dyn std::error::Error) -> String {
+    let mut line = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        line.push_str(": ");
+        line.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    line
 }
 
 impl RuntimeAttachState {
@@ -66,12 +210,7 @@ impl RuntimeAttachState {
         profile_directory: impl AsRef<Path>,
         config_directory: impl AsRef<Path>,
     ) -> Result<Self, ProtocolError> {
-        Self::open_with_session_names(
-            host,
-            profile_directory,
-            config_directory,
-            muniment_core::projects::migrate_session_names,
-        )
+        Self::open_with_session_names(host, profile_directory, config_directory, tidy_home)
     }
 
     /// Opens the state like [`Self::open`] with the pass that names legacy
@@ -85,8 +224,12 @@ impl RuntimeAttachState {
     ) -> Result<Self, ProtocolError> {
         let profile_directory = profile_directory.as_ref().to_path_buf();
         let config_directory = config_directory.as_ref().to_path_buf();
-        let storage = open_profile_storage_as(&profile_directory, host.runtime_version)
-            .map_err(|_| ProtocolError::persistence_failed())?;
+        let storage =
+            open_profile_storage_as(&profile_directory, host.runtime_version).map_err(|error| {
+                state_open_failed("profile_storage", &error_chain(&error));
+                ProtocolError::persistence_failed()
+            })?;
+        remove_orphan_creation_threads(&storage, &profile_directory, host.runtime_version);
         // Session folders from older versions take their thread titles here,
         // so the runtime stays the only process that opens the journal. Home
         // can sit in a folder macOS guards, such as Documents, where a read
@@ -100,7 +243,10 @@ impl RuntimeAttachState {
                 );
             }
         });
-        let companion_registry = open_companion_registry(&profile_directory)?;
+        let companion_registry =
+            open_companion_registry(&profile_directory).inspect_err(|error| {
+                state_open_failed("companion_registry", &error.to_string());
+            })?;
         let drain_state = DrainState::new();
         let runtime_activity = RuntimeActivityRegistry::with_drain_state(&drain_state);
         let approval = SignedWorkspaceApproval::default();
@@ -128,7 +274,10 @@ impl RuntimeAttachState {
             Arc::clone(&storage),
             Arc::clone(&swarm_host) as Arc<dyn muniment_core::swarm::SwarmHost>,
         )
-        .map_err(|_| ProtocolError::persistence_failed())?;
+        .map_err(|error| {
+            state_open_failed("swarm", &error);
+            ProtocolError::persistence_failed()
+        })?;
 
         Ok(Self {
             memory_runtime: Arc::new(
@@ -164,6 +313,7 @@ impl RuntimeAttachState {
             schedule_pass: Mutex::new(()),
             pi_artifact: Mutex::new(None),
             mcp_polling: Arc::new(AtomicBool::new(false)),
+            schedule_failures: Arc::default(),
             session_names: Mutex::new(Some(session_names)),
         })
     }
@@ -402,6 +552,11 @@ impl RuntimeAttachState {
         self.approval.clone()
     }
 
+    /// Returns the profile directory this runtime state opened.
+    pub fn profile_directory(&self) -> &Path {
+        &self.profile_directory
+    }
+
     /// Returns the version the runtime announces on attach.
     pub fn runtime_version(&self) -> &'static str {
         self.host.runtime_version
@@ -491,6 +646,12 @@ impl RuntimeAttachState {
         self.runtime_activity.clone()
     }
 
+    /// Stops every idle Pi process, as the runtime drains or stops.
+    pub fn stop_idle_processes(&self) {
+        self.runtime
+            .stop_all(muniment_core::pi_execution::IdleStop::Shutdown);
+    }
+
     /// Returns the drain state an executable replacement sets.
     pub fn drain_state(&self) -> DrainState {
         self.drain_state.clone()
@@ -513,6 +674,10 @@ impl RuntimeAttachState {
 
     pub(crate) fn mcp_polling(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.mcp_polling)
+    }
+
+    pub(crate) fn schedule_failures(&self) -> Arc<crate::agent_schedule::ScheduleFailures> {
+        Arc::clone(&self.schedule_failures)
     }
 
     pub(crate) fn agent_profile(&self) -> &Path {

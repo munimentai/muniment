@@ -157,3 +157,138 @@ it('draws each tone in its status color', () => {
     unmount(ring)
   }
 })
+
+it('marks the Agents and Artifacts rows as the open row while their page shows, under the pointer too', async () => {
+  await mountWindow(false)
+  const sidebar = document.getElementById('sidebar')
+  const fill = (element) => getComputedStyle(element).backgroundColor
+  const probe = document.createElement('i')
+  probe.style.backgroundColor = 'var(--selected)'
+  document.body.append(probe)
+  for (const name of ['Agents', 'Artifacts']) {
+    const row = sidebar.querySelector(`button[aria-label="${name}"]`)
+    expect(row).not.toHaveAttribute('aria-current')
+    expect(getComputedStyle(row, '::before').content).toBe('none')
+    await userEvent.click(row)
+    await expect.poll(() => row.getAttribute('aria-current')).toBe('true')
+    // The pointer still rests on the row it pressed.
+    expect(fill(row)).toBe(fill(probe))
+    await userEvent.unhover(row)
+    await userEvent.hover(document.querySelector('.catalog-title'))
+    expect(fill(row)).toBe(fill(probe))
+    // The accent edge runs down its left side, as on an open thread's row.
+    const edge = getComputedStyle(row, '::before')
+    expect(edge.position).toBe('absolute')
+    expect(edge.width).toBe('2px')
+    for (const other of ['Agents', 'Artifacts'].filter((entry) => entry !== name)) expect(sidebar.querySelector(`button[aria-label="${other}"]`)).not.toHaveAttribute('aria-current')
+  }
+})
+
+// Starts a new thread and sends its first message, whose reply stays running.
+async function sendFirstMessage(text) {
+  const core = window.__TAURI__.core.invoke
+  window.__TAURI__.core.invoke = async (command, payload) => {
+    if (command === 'chat_new_thread') return 'fresh-1'
+    if (command === 'chat_submit') return { runId: 'run-fresh', attachments: [] }
+    if (command === 'chat_current_thread') return 'fresh-1'
+    return core(command, payload)
+  }
+  await userEvent.click(document.querySelector('button[aria-label="New thread"]'))
+  await expect.poll(() => document.querySelector('textarea')).toBeTruthy()
+  await userEvent.click(document.querySelector('textarea'))
+  await userEvent.keyboard(text)
+  await userEvent.keyboard('{Enter}')
+  await expect.poll(() => document.querySelector('[data-fresh-thread]')).toBeTruthy()
+  return document.querySelector('[data-fresh-thread]')
+}
+
+it('ends a new thread row\'s long title in an ellipsis and names its machine and time while the first reply runs', async () => {
+  await mountWindow(true)
+  const row = await sendFirstMessage(`Plan a starship tour for a ${LONG}`)
+  const title = row.querySelector('.thread-row-title')
+  expect(getComputedStyle(title).textOverflow).toBe('ellipsis')
+  expect(title.scrollWidth).toBeGreaterThan(title.clientWidth)
+  // The meta line names the machine and the time, as a listed row's does.
+  const meta = row.querySelector('.thread-row-meta')
+  expect(meta).not.toBeNull()
+  expect(meta.textContent).toContain('This computer')
+  expect(meta.querySelector('time').textContent).toBe('now')
+  expect(row.querySelector('.status-ring')).not.toBeNull()
+  expect(rect(title).right).toBeLessThanOrEqual(rect(row).right)
+})
+
+it('keeps a new thread row on one line with its time on this computer alone', async () => {
+  await mountWindow(false)
+  const row = await sendFirstMessage(`Plan a starship tour for a ${LONG}`)
+  const title = row.querySelector('.thread-row-title')
+  expect(getComputedStyle(title).textOverflow).toBe('ellipsis')
+  expect(row.querySelector('.thread-row-meta')).toBeNull()
+  const time = row.querySelector('time')
+  expect(time.textContent).toBe('now')
+  expect(Math.abs(rect(title).top + rect(title).height / 2 - (rect(time).top + rect(time).height / 2))).toBeLessThan(2)
+  expect(rect(title).right).toBeLessThanOrEqual(rect(time).left)
+})
+
+it('shows the start of a long new thread title in the title pill and ends it in an ellipsis', async () => {
+  await mountWindow(false)
+  const text = `Plan a starship tour for a ${LONG}`
+  await sendFirstMessage(text)
+  const pill = document.querySelector('.titlebar .thread-title')
+  await expect.poll(() => pill.textContent.trim().startsWith('Plan a starship tour')).toBe(true)
+  const style = getComputedStyle(pill)
+  expect(style.textOverflow).toBe('ellipsis')
+  expect(pill.scrollWidth).toBeGreaterThan(pill.clientWidth)
+  // The first character sits at the pill's start, inside its box.
+  const range = document.createRange()
+  range.setStart(pill.firstChild, 0)
+  range.setEnd(pill.firstChild, 1)
+  const first = range.getBoundingClientRect()
+  expect(first.left).toBeGreaterThanOrEqual(rect(pill).left)
+  expect(first.left - rect(pill).left).toBeLessThanOrEqual(parseFloat(style.paddingLeft) + parseFloat(style.borderLeftWidth) + 0.5)
+})
+
+it('ends the Agents and Artifacts labels in an ellipsis when the row is narrow', async () => {
+  await mountWindow(false)
+  for (const name of ['Agents', 'Artifacts']) {
+    const row = document.querySelector(`#sidebar button[aria-label="${name}"]`)
+    row.style.width = '56px'
+    const label = row.querySelector('span')
+    expect(label.scrollWidth).toBeGreaterThan(label.clientWidth)
+    expect(getComputedStyle(label).textOverflow).toBe('ellipsis')
+    expect(getComputedStyle(label).maskImage).toBe('none')
+  }
+})
+
+// The disabled title-bar actions control names why it waits, on hover and on
+// focus, and its reason draws over the thread panel under it.
+it('draws the reason on the disabled title thread actions over the thread panel, on hover and on focus', async () => {
+  await mountWindow(false)
+  const core = window.__TAURI__.core.invoke
+  window.__TAURI__.core.invoke = async (command, payload) => command === 'chat_new_thread' ? 'fresh-1' : command === 'chat_current_thread' ? 'fresh-1' : core(command, payload)
+  await userEvent.click(document.querySelector('button[aria-label="New thread"]'))
+  await expect.poll(() => document.querySelector('.title-thread-actions[aria-disabled="true"]')).toBeTruthy()
+  const control = document.querySelector('.title-thread-actions')
+  expect(control.dataset.tooltip).toBe('Send a message to use thread actions.')
+  const tip = () => getComputedStyle(control, '::after')
+  // A hit test finds what paints on top at the reason's place, so the probe
+  // lets the reason take the pointer.
+  const probe = document.createElement('style')
+  probe.textContent = '.title-thread-actions::after { pointer-events: auto !important; }'
+  document.head.append(probe)
+  try {
+    await userEvent.hover(control)
+    await expect.poll(() => tip().opacity).toBe('1')
+    expect(getComputedStyle(control).opacity).toBe('1')
+    const box = rect(control)
+    const at = document.elementFromPoint(box.left + 12, box.bottom + 6 + parseFloat(tip().height) / 2)
+    expect(at).toBe(control)
+    await userEvent.unhover(control)
+    await expect.poll(() => tip().opacity).toBe('0')
+    control.focus({ focusVisible: true })
+    await userEvent.keyboard('{Shift>}{Tab}{/Shift}{Tab}')
+    await expect.poll(() => document.activeElement).toBe(control)
+    await expect.poll(() => tip().opacity).toBe('1')
+  } finally {
+    probe.remove()
+  }
+})

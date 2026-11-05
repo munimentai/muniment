@@ -45,8 +45,21 @@ fn refused(error: &keyring::Error) -> bool {
     }
 }
 
+// A binary built for a test, or one whose state lies in a test root, runs
+// outside a test harness when a copy starts by hand. It refuses the login
+// keychain: it reads no saved session and saves none, and never raises the
+// keychain's prompt. A test run still meets the guard, which panics.
+fn keychain_refused_here() -> bool {
+    !muniment_core::state_root::keychain_allowed() && !muniment_core::state_root::is_test_run()
+}
+
+const KEYCHAIN_REFUSED: &str = "This build keeps no secrets in the login keychain.";
+
 impl NativeCredentialBackend for PlatformKeychain {
     fn get(&self, user: &str) -> Result<Option<String>, String> {
+        if keychain_refused_here() {
+            return Ok(None);
+        }
         muniment_core::state_root::guard_keychain(SERVICE);
         #[cfg(target_os = "macos")]
         if ACCESS_REFUSED.load(Ordering::SeqCst) {
@@ -73,6 +86,9 @@ impl NativeCredentialBackend for PlatformKeychain {
     }
 
     fn set(&self, user: &str, value: &str) -> Result<(), String> {
+        if keychain_refused_here() {
+            return Err(KEYCHAIN_REFUSED.into());
+        }
         muniment_core::state_root::guard_keychain(SERVICE);
         let entry = Entry::new(SERVICE, user).map_err(|error| error.to_string())?;
         #[cfg(target_os = "macos")]
@@ -91,6 +107,9 @@ impl NativeCredentialBackend for PlatformKeychain {
     }
 
     fn delete(&self, user: &str) -> Result<(), String> {
+        if keychain_refused_here() {
+            return Ok(());
+        }
         muniment_core::state_root::guard_keychain(SERVICE);
         match Entry::new(SERVICE, user)
             .map_err(|error| error.to_string())?

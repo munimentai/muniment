@@ -11,9 +11,9 @@
 //! fact saved before origins were recorded answers one inferred from its
 //! `source`, and `unknown` when the source names none. `origin_label` names
 //! the origin for display: "Added in Settings", "Added in a chat", "Added by
-//! <name> agent" with the agent's current name for an agent or agent
-//! profile origin, "Added by an agent" once that agent is deleted, and the
-//! `source` text for `unknown`. `memory_fact_save` records the user origin
+//! you" for an agent profile origin, "Added by <name> agent" with the
+//! agent's current name for an agent or agent import origin, "Added by an
+//! agent" once that agent is deleted, and the `source` text for `unknown`. `memory_fact_save` records the user origin
 //! itself, from Settings or, with `agent`, from that agent's profile.
 //!
 //! The pass that learns facts after each finished run can keep changes for

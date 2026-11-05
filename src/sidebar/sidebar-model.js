@@ -39,31 +39,59 @@ export function markRead(marks, threadId, at = new Date(), storage = localStorag
   return { ...marks, read: kept }
 }
 
+// The last time anything the sidebar or Notifications compares with a read
+// time changed on `threadId`, in milliseconds: the thread's row time in the
+// sidebar input, which holds its newest run, and every run the agent listing
+// or Needs you names on it. A failed run that posts no message moves only its
+// run's time, so a read time checked against the thread's summary alone left
+// that run unread. Zero when nothing names a time.
+export function threadChangedAt(threadId, { threads = [], latestRuns = {}, needsYou = [] } = {}) {
+  if (!threadId) return 0
+  const times = [threads.find((thread) => thread.id === threadId)?.updated_at]
+  for (const run of Object.values(latestRuns ?? {})) if (run?.thread_id === threadId) times.push(run.updated_at)
+  for (const item of needsYou) if (item?.run?.thread_id === threadId) times.push(item.run.updated_at, item.at)
+  return Math.max(0, ...times.map((at) => Date.parse(at ?? '')).filter(Number.isFinite))
+}
+
 const RUNNING = new Set(['queued', 'leased', 'running'])
 const FAILED = new Set(['failed', 'interrupted'])
 
-// The threads with a run in flight, with when that run started, and the
-// threads whose newest run failed, from the agent runs the window holds,
-// newest first.
+// The threads with a run in flight, with when that run started, the
+// threads whose newest run failed, and when each thread's newest run last
+// changed, from the agent runs the window holds, newest first.
 export function runStates(runs = []) {
   const working = new Set()
   const failed = new Set()
   const since = new Map()
+  const changed = new Map()
   const seen = new Set()
   for (const run of runs) {
     if (!run?.thread_id || seen.has(run.thread_id)) continue
     seen.add(run.thread_id)
+    if (run.updated_at) changed.set(run.thread_id, run.updated_at)
     if (RUNNING.has(run.status)) {
       working.add(run.thread_id)
       if (run.created_at) since.set(run.thread_id, run.created_at)
     } else if (FAILED.has(run.status)) failed.add(run.thread_id)
   }
-  return { working, failed, since }
+  return { working, failed, since, changed }
+}
+
+// The time a sidebar row shows: when the thread's run started while it
+// works, else the later of the thread's last change and its newest run's,
+// so a run that just ended reads `now` before the thread list reloads.
+export function rowTime(summary, runs, status) {
+  const id = summary?.threadId
+  if (status === 'working' && runs?.since?.get(id)) return runs.since.get(id)
+  const updated = summary?.updatedAt || ''
+  const ran = runs?.changed?.get(id) || ''
+  return Date.parse(ran) > (Date.parse(updated) || 0) ? ran : updated
 }
 
 // The items of the notifications page that point at a thread or an agent.
 export function attention(needsYou = []) {
-  return needsYou.filter((item) => item && item.kind !== 'offline').map((item) => ({
+  // A failed run's thread already reads Failed, so it keeps that word.
+  return needsYou.filter((item) => item && item.kind !== 'offline' && item.kind !== 'failed').map((item) => ({
     kind: item.kind,
     thread_id: item.run?.thread_id ?? item.approval?.thread_id ?? null,
     agent_id: item.agent_id ?? item.approval?.agent_id ?? null,
@@ -73,8 +101,10 @@ export function attention(needsYou = []) {
 // Core's input from the window's state. Each agent carries its color, which
 // its rows show. `agentChats` are agent creation chats as
 // { threadId, title, updatedAt, agentId }: a chat shows once it holds a
-// message, and a saved agent's chat sits with the agent.
-export function sidebarInput({ summaries = [], agentListing = null, agents = [], groups = [], agentChats = [], catalog = { projects: {}, threads: {} }, remote = [], organization = {}, marks = { read: {}, baseline: null }, working = [], failed = [], needsYou = [], current = null, query = '', machineOf = () => null }) {
+// message, and a saved agent's chat sits with the agent. `changed` is
+// `runStates().changed`: a thread whose newest run changed after its summary
+// sorts by that run, as its row time reads, before the thread list reloads.
+export function sidebarInput({ summaries = [], agentListing = null, agents = [], groups = [], agentChats = [], catalog = { projects: {}, threads: {} }, remote = [], organization = {}, marks = { read: {}, baseline: null }, working = [], failed = [], changed = new Map(), needsYou = [], current = null, query = '', machineOf = () => null }) {
   const threads = summaries.map((summary) => ({ id: summary.threadId, title: summary.title || '', updated_at: summary.updatedAt || '', machine: machineOf(summary.runtimeId) }))
   const known = new Set(threads.map((thread) => thread.id))
   for (const list of Object.values(agentListing?.threads ?? {})) {
@@ -98,6 +128,10 @@ export function sidebarInput({ summaries = [], agentListing = null, agents = [],
       if (chat.title) thread.title = chat.title
       if (Date.parse(chat.updatedAt ?? '') > (Date.parse(thread.updated_at) || 0)) thread.updated_at = chat.updatedAt
     }
+  }
+  for (const thread of threads) {
+    const ran = changed.get(thread.id)
+    if (Date.parse(ran ?? '') > (Date.parse(thread.updated_at) || 0)) thread.updated_at = ran
   }
   const projects = [
     ...Object.entries(catalog.projects ?? {}).map(([id, name]) => ({ id, name, owner: null })),

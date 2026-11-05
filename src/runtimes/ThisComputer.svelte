@@ -22,6 +22,10 @@
   const enabled = $derived(!!access?.settings?.enabled)
   const endpoints = $derived(access?.endpoints ?? [])
   const portValid = $derived(/^\d{1,5}$/.test(port.trim()) && Number(port) >= 1 && Number(port) <= 65535)
+  const addressList = (text) => text.split(/[\s,]+/).map((entry) => entry.trim()).filter(Boolean)
+  // Save waits for a change from the saved port and addresses.
+  const changed = $derived(!!access && (Number(port) !== (listenPort(access) ?? DEFAULT_SSH_PORT)
+    || addressList(addresses).join('\n') !== (access.settings?.endpoints ?? []).join('\n')))
 
   function apply(next) {
     access = next
@@ -45,7 +49,7 @@
   onMount(() => { void call('local_access_settings').then((next) => { if (next) apply(next) }) })
 
   async function save(nextEnabled, nextPort = null) {
-    const list = addresses.split(/[\s,]+/).map((entry) => entry.trim()).filter(Boolean)
+    const list = addressList(addresses)
     const next = await call('local_access_save', { enabled: nextEnabled, port: nextPort, endpoints: list })
     if (next) apply(next)
   }
@@ -55,7 +59,7 @@
   <Row title="Accept connections" description={enabled ? 'Your other machines can reach this computer.' : 'No other machine can reach this computer.'}>
     <Toggle checked={enabled} label="Accept connections" disabled={!access || busy} onchange={(next) => save(next)} />
   </Row>
-  <form class="local-form" aria-label="Listen port" onsubmit={(event) => { event.preventDefault(); if (portValid) void save(enabled, Number(port)) }}>
+  <form class="local-form" aria-label="Listen port" onsubmit={(event) => { event.preventDefault(); if (portValid && changed) void save(enabled, Number(port)) }}>
     <div class="field">
       <label for="{id}-port">Port</label>
       <input id="{id}-port" class="record" type="text" inputmode="numeric" autocomplete="off" disabled={busy} bind:value={port}>
@@ -64,7 +68,7 @@
       <label for="{id}-addresses">Addresses in the link</label>
       <input id="{id}-addresses" class="record" type="text" autocomplete="off" spellcheck="false" placeholder="Automatic" disabled={busy} bind:value={addresses}>
     </div>
-    <Button type="submit" disabled={!portValid || busy}>Save</Button>
+    <Button type="submit" disabled={!portValid || !changed || busy}>Save</Button>
   </form>
   {#if access?.error}<p class="line" role="alert">Connections cannot start. {errorLine(access.error)}</p>{/if}
   {#if access?.overridden}<p class="line">This runtime's host overrides some of these settings.</p>{/if}

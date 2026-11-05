@@ -30,3 +30,18 @@ it('lists checkboxes for several choices and names an empty list', async () => {
   render(ChoiceMenu, { label: 'Agents', multiple: true, options: [], empty: 'No other agents.', onchoose, onclose: vi.fn() })
   expect(screen.getByText('No other agents.')).toBeInTheDocument()
 })
+
+it('stops Escape at the menu, so the document keys of the page under it never see it', async () => {
+  const page = vi.fn()
+  document.addEventListener('keydown', page)
+  try {
+    const onclose = vi.fn()
+    render(ChoiceMenu, { label: 'Project', value: 'p', options: [{ value: 'p', label: 'Research' }], onchoose: vi.fn(), onclose })
+    await vi.waitFor(() => expect(screen.getByRole('menuitemradio', { name: 'Research' })).toHaveFocus())
+    await fireEvent.keyDown(document.activeElement, { key: 'Escape' })
+    expect(onclose).toHaveBeenCalledTimes(1)
+    expect(page).not.toHaveBeenCalled()
+  } finally {
+    document.removeEventListener('keydown', page)
+  }
+})

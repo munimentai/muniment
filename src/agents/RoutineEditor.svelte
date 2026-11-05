@@ -81,6 +81,8 @@
     return { destroy() { node.remove() } }
   }
 
+  // Escape from inside the panel stops at it, before the shell's document
+  // keys close the page under it. The window answers it from anywhere else.
   function keydown(event) {
     if (event.key === 'Escape' && !busy) { event.preventDefault(); event.stopPropagation(); onclose() }
   }
@@ -89,12 +91,13 @@
 <svelte:window onkeydown={keydown} />
 
 <div class="dialog-backdrop" use:portal use:dialogDismiss={{ onclose, disabled: busy }}>
-  <div data-panel="routine" data-panel-variant="overlay" class="dialog-panel" role="dialog" aria-modal="true" aria-labelledby={`${id}-title`} bind:this={panel}>
+  <!-- svelte-ignore a11y_interactive_supports_focus -->
+  <div data-panel="routine" data-panel-variant="overlay" class="dialog-panel" role="dialog" aria-modal="true" aria-labelledby={`${id}-title`} bind:this={panel} onkeydown={keydown}>
     <header><h2 id={`${id}-title`}>{original ? 'Edit routine' : 'New routine'}</h2><PopupClose label="Close routine" disabled={busy} onclick={onclose} /></header>
     <form onsubmit={save}>
       <div class="body">
         <div class="line">
-          <label class="grow">Name<input bind:value={name} maxlength="80" required disabled={busy} /></label>
+          <label class="grow">Name<input bind:value={name} maxlength="80" required spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" disabled={busy} /></label>
           <label class="switch"><Toggle bind:checked={enabled} label="Routine on" disabled={busy} />On</label>
         </div>
         <label>Starts on<select bind:value={kind} disabled={busy || (original && original.trigger.kind === 'webhook')}>
@@ -135,7 +138,7 @@
       </div>
       <div class="dialog-actions">
         {#if ondelete && original && !created}
-          {#if confirmDelete}<Button disabled={busy} onclick={remove}>Confirm delete</Button>{:else}<Button disabled={busy} onclick={() => { confirmDelete = true }}>Delete</Button>{/if}
+          {#if confirmDelete}<Button variant="danger" disabled={busy} onclick={remove}>Confirm delete</Button>{:else}<Button disabled={busy} onclick={() => { confirmDelete = true }}>Delete</Button>{/if}
         {/if}
         <span class="spacer"></span>
         {#if created}

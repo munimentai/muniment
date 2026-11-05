@@ -25,6 +25,9 @@ use crate::model_router::{config, family, quota};
 /// Percent left under which a window shows as low.
 pub const LOW_PERCENT: f64 = 20.0;
 const ROUTER_PROVIDER: &str = "muniment-router";
+/// How far apart two machines' starts of one day can lie: a daylight saving
+/// change moves a fixed offset's midnight by an hour, two in a few zones.
+const DAY_SKEW_MS: i64 = 2 * 60 * 60 * 1000;
 
 /// The span a summary covers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,9 +66,16 @@ pub struct Request {
     /// A provider family id such as `anthropic`. None is every provider.
     #[serde(default)]
     pub provider: Option<String>,
-    /// The client's offset from UTC, so days start at its midnight.
+    /// The client's offset from UTC, so days start at its midnight when
+    /// `time_zone` names no zone.
     #[serde(default)]
     pub utc_offset_minutes: i32,
+    /// The client's IANA time zone. Each day starts at its own midnight
+    /// there, so a daylight saving change moves no run to another day. A
+    /// runtime before this field refuses a request that holds it, so the
+    /// desktop asks such a runtime again without it.
+    #[serde(default)]
+    pub time_zone: Option<String>,
 }
 
 /// Token counts, summed.
@@ -427,6 +437,41 @@ pub struct Summary {
     pub unmetered: Vec<Unmetered>,
     /// Each account's reading, which [`merge`] pools across machines.
     pub windows: Vec<AccountWindow>,
+    /// The runs in the range this machine holds only as copies of another
+    /// swarm member's runs. The totals leave them out, and [`merge`] counts
+    /// them for a member whose own answer also counts its copies. None in an
+    /// answer whose totals count every copy it holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replicas: Option<Vec<HeldRun>>,
+    /// The fleet member id this machine's runs carry in the copies the other
+    /// members hold of them, once the machine is in a fleet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine_id: Option<String>,
+}
+
+/// One run a machine holds as a copy, with what it used, for [`merge`].
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct HeldRun {
+    pub run_id: String,
+    /// The swarm member that ran it.
+    pub origin: String,
+    /// The machine name that member last announced to the fleet, or empty.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub origin_name: String,
+    /// The start of the series bucket it falls in.
+    pub bucket_ms: i64,
+    pub provider: String,
+    pub model: String,
+    #[serde(default)]
+    pub agent: String,
+    #[serde(default)]
+    pub agent_label: String,
+    #[serde(default)]
+    pub project: String,
+    #[serde(default)]
+    pub project_label: String,
+    #[serde(flatten)]
+    pub amount: Amount,
 }
 
 /// What one finished run used.
@@ -439,6 +484,26 @@ pub struct RunUsage {
     pub model: String,
     pub tokens: Tokens,
     pub cost_usd: Option<f64>,
+    /// The swarm member that ran it, when this machine holds a copy.
+    pub origin: Option<String>,
+}
+
+/// The provider family a receipt's provider id names. A turn on a Claude
+/// Code account runs through the bridge provider, and its runs belong to
+/// the Anthropic account's card.
+pub fn family_id(provider: &str) -> String {
+    let provider = if provider == crate::models::claude_accounts::PROVIDER {
+        "anthropic"
+    } else {
+        family::family_for_pi_provider(provider)
+            .map(|family| family.id)
+            .unwrap_or(provider)
+    };
+    if provider.is_empty() {
+        "unknown".into()
+    } else {
+        provider.to_owned()
+    }
 }
 
 /// The provider family and model a receipt's `provider/model` names. A
@@ -449,15 +514,7 @@ pub fn split_model(model: &str) -> (String, String) {
         (ROUTER_PROVIDER, Some((family, model))) => (family, model),
         _ => (provider, rest),
     };
-    let provider = family::family_for_pi_provider(provider)
-        .map(|family| family.id)
-        .unwrap_or(provider);
-    let provider = if provider.is_empty() {
-        "unknown"
-    } else {
-        provider
-    };
-    (provider.to_owned(), rest.to_owned())
+    (family_id(provider), rest.to_owned())
 }
 
 fn count(value: &Value, field: &str) -> u64 {
@@ -491,6 +548,7 @@ pub fn run_usage(completed: &CompletedReceipt) -> Option<RunUsage> {
             reasoning: count(tokens, "reasoning"),
         },
         cost_usd,
+        origin: completed.origin.clone(),
     })
 }
 
@@ -506,6 +564,58 @@ fn cost(text: &str) -> Option<f64> {
 }
 
 /// The start of each bucket, oldest first, and the end of the last.
+/// The bucket starts and the end of `request`'s range as of `now_ms`: in
+/// its time zone when it names a known one, else at its fixed offset.
+fn request_buckets(request: &Request, now_ms: i64) -> (Vec<i64>, i64) {
+    match request
+        .time_zone
+        .as_deref()
+        .and_then(|zone| crate::agent_routines::parse_time_zone(zone).ok())
+    {
+        Some(zone) => zone_bucket_starts(request.range, now_ms, zone),
+        None => bucket_starts(request.range, now_ms, request.utc_offset_minutes),
+    }
+}
+
+/// The bucket starts in `zone`: whole hours back from the current hour, or
+/// each local midnight back from today's, so a day across a daylight saving
+/// change lasts 23 or 25 hours.
+fn zone_bucket_starts(range: Range, now_ms: i64, zone: chrono_tz::Tz) -> (Vec<i64>, i64) {
+    let now = Utc
+        .timestamp_millis_opt(now_ms)
+        .single()
+        .unwrap_or_else(Utc::now);
+    if range.hourly() {
+        let local = now.with_timezone(&zone);
+        let into_hour = Duration::minutes(i64::from(local.minute()))
+            + Duration::seconds(i64::from(local.second()))
+            + Duration::nanoseconds(i64::from(local.nanosecond()));
+        let last = now - into_hour;
+        let starts = (0..range.buckets())
+            .rev()
+            .map(|back| (last - Duration::hours(back)).timestamp_millis())
+            .collect();
+        return (starts, (last + Duration::hours(1)).timestamp_millis());
+    }
+    // A midnight that a daylight saving change skips starts the day at the
+    // first instant after the gap.
+    let midnight = |date: chrono::NaiveDate| {
+        let mut at = date.and_time(chrono::NaiveTime::MIN);
+        loop {
+            if let Some(start) = zone.from_local_datetime(&at).earliest() {
+                return start.with_timezone(&Utc).timestamp_millis();
+            }
+            at += Duration::minutes(15);
+        }
+    };
+    let today = now.with_timezone(&zone).date_naive();
+    let starts = (0..range.buckets())
+        .rev()
+        .map(|back| midnight(today - Duration::days(back)))
+        .collect();
+    (starts, midnight(today + Duration::days(1)))
+}
+
 fn bucket_starts(range: Range, now_ms: i64, offset_minutes: i32) -> (Vec<i64>, i64) {
     let offset = Duration::minutes(i64::from(offset_minutes));
     let now = Utc
@@ -589,6 +699,49 @@ impl Owners {
                 .and_then(|thread| self.thread_agents.get(thread))
         })
     }
+
+    /// The agent row a run counts under: its id and name, empty for none.
+    fn agent_row(&self, run: &RunUsage) -> (String, String) {
+        let agent = self.agent(run).cloned().unwrap_or_default();
+        let label = self.agent_names.get(&agent).cloned().unwrap_or_default();
+        (agent, label)
+    }
+
+    /// The project row a run counts under: its id and name, empty for none.
+    fn project_row(&self, run: &RunUsage) -> (String, String) {
+        let project = run
+            .thread_id
+            .as_ref()
+            .and_then(|thread| self.thread_projects.get(thread))
+            .cloned()
+            .unwrap_or_default();
+        let label = self
+            .project_names
+            .get(&project)
+            .cloned()
+            .unwrap_or_default();
+        (project, label)
+    }
+}
+
+/// Adds `amount` to the row `key` of `rows`, which takes `label` and
+/// `provider` when it is new.
+fn add_amount(
+    rows: &mut BTreeMap<String, Row>,
+    key: String,
+    label: String,
+    provider: Option<String>,
+    amount: &Amount,
+) {
+    rows.entry(key.clone())
+        .or_insert_with(|| Row {
+            key,
+            label,
+            provider,
+            ..Row::default()
+        })
+        .amount
+        .add(amount);
 }
 
 /// Sums `runs` into a summary for `request`, as of `now_ms`.
@@ -600,12 +753,13 @@ pub fn summarize(
     request: &Request,
     now_ms: i64,
 ) -> Summary {
-    let (starts, end_ms) = bucket_starts(request.range, now_ms, request.utc_offset_minutes);
+    let (starts, end_ms) = request_buckets(request, now_ms);
     let start_ms = starts.first().copied().unwrap_or(end_ms);
-    let in_range: Vec<&RunUsage> = runs
+    // A copy of another member's run counts on the member that ran it.
+    let (copies, in_range): (Vec<&RunUsage>, Vec<&RunUsage>) = runs
         .iter()
         .filter(|run| run.at_ms >= start_ms && run.at_ms < end_ms)
-        .collect();
+        .partition(|run| run.origin.is_some());
     let providers: BTreeSet<String> = in_range.iter().map(|run| run.provider.clone()).collect();
     let wanted = |provider: &str| {
         request
@@ -624,10 +778,37 @@ pub fn summarize(
     let mut models: BTreeMap<String, Row> = BTreeMap::new();
     let mut agents: BTreeMap<String, Row> = BTreeMap::new();
     let mut projects: BTreeMap<String, Row> = BTreeMap::new();
+    let bucket_of = |run: &RunUsage| {
+        starts
+            .partition_point(|start| *start <= run.at_ms)
+            .checked_sub(1)
+    };
+    let replicas = copies
+        .into_iter()
+        .filter(|run| wanted(&run.provider))
+        .filter_map(|run| {
+            let mut amount = Amount::default();
+            amount.record(run);
+            let (agent, agent_label) = owners.agent_row(run);
+            let (project, project_label) = owners.project_row(run);
+            Some(HeldRun {
+                run_id: run.run_id.clone(),
+                origin: run.origin.clone()?,
+                origin_name: String::new(),
+                bucket_ms: *starts.get(bucket_of(run)?)?,
+                provider: run.provider.clone(),
+                model: run.model.clone(),
+                agent,
+                agent_label,
+                project,
+                project_label,
+                amount,
+            })
+        })
+        .collect();
     for run in in_range.into_iter().filter(|run| wanted(&run.provider)) {
         total.record(run);
-        let index = starts.partition_point(|start| *start <= run.at_ms);
-        if let Some(bucket) = index.checked_sub(1).and_then(|index| series.get_mut(index)) {
+        if let Some(bucket) = bucket_of(run).and_then(|index| series.get_mut(index)) {
             bucket
                 .providers
                 .entry(run.provider.clone())
@@ -645,8 +826,7 @@ pub fn summarize(
             })
             .amount
             .record(run);
-        let agent = owners.agent(run).cloned().unwrap_or_default();
-        let agent_label = owners.agent_names.get(&agent).cloned().unwrap_or_default();
+        let (agent, agent_label) = owners.agent_row(run);
         agents
             .entry(agent.clone())
             .or_insert_with(|| Row {
@@ -656,17 +836,7 @@ pub fn summarize(
             })
             .amount
             .record(run);
-        let project = run
-            .thread_id
-            .as_ref()
-            .and_then(|thread| owners.thread_projects.get(thread))
-            .cloned()
-            .unwrap_or_default();
-        let project_label = owners
-            .project_names
-            .get(&project)
-            .cloned()
-            .unwrap_or_default();
+        let (project, project_label) = owners.project_row(run);
         projects
             .entry(project.clone())
             .or_insert_with(|| Row {
@@ -712,6 +882,8 @@ pub fn summarize(
         pools: pools(&windows, now_ms),
         unmetered,
         windows,
+        replicas: Some(replicas),
+        machine_id: None,
     }
 }
 
@@ -1084,12 +1256,13 @@ pub fn receipts(journal: &mut RunJournal, since: &str) -> Result<Vec<CompletedRe
 pub fn operation(
     profile: &Path,
     receipts: impl FnOnce(&str) -> Result<Vec<CompletedReceipt>, String>,
+    fleet: &Fleet<'_>,
     body: Value,
     now_ms: i64,
 ) -> Result<Value, String> {
     let request: Request =
         serde_json::from_value(body).map_err(|_| "The request is invalid.".to_string())?;
-    let (starts, _) = bucket_starts(request.range, now_ms, request.utc_offset_minutes);
+    let (starts, _) = request_buckets(&request, now_ms);
     let since = Utc
         .timestamp_millis_opt(starts.first().copied().unwrap_or(now_ms))
         .single()
@@ -1097,7 +1270,7 @@ pub fn operation(
         .to_rfc3339_opts(SecondsFormat::Secs, true);
     let runs: Vec<RunUsage> = receipts(&since)?.iter().filter_map(run_usage).collect();
     let (windows, unmetered) = account_windows(&crate::state_root::agent_directory(profile));
-    let summary = summarize(
+    let mut summary = summarize(
         &runs,
         &Owners::read(profile),
         windows,
@@ -1105,7 +1278,28 @@ pub fn operation(
         &request,
         now_ms,
     );
+    summary.machine_id = fleet.machine_id.clone();
+    for run in summary.replicas.iter_mut().flatten() {
+        run.origin_name = (fleet.member_name)(&run.origin).unwrap_or_default();
+    }
     serde_json::to_value(summary).map_err(|_| "Usage could not be read.".to_string())
+}
+
+/// What a runtime knows of its fleet for [`operation`]: its own member id,
+/// and the name each member last announced.
+pub struct Fleet<'a> {
+    pub machine_id: Option<String>,
+    pub member_name: &'a dyn Fn(&str) -> Option<String>,
+}
+
+impl Fleet<'_> {
+    /// A runtime in no fleet.
+    pub fn none() -> Fleet<'static> {
+        Fleet {
+            machine_id: None,
+            member_name: &|_| None,
+        }
+    }
 }
 
 /// One machine's answer for [`merge`].
@@ -1154,10 +1348,240 @@ fn add_rows(into: &mut BTreeMap<String, Row>, rows: Vec<Row>) {
     }
 }
 
+/// A summary with each provider id named by its family, as a runtime that
+/// names a Claude Code turn by its bridge provider answers, so one family
+/// shows once.
+fn by_family(mut summary: Summary) -> Summary {
+    for bucket in &mut summary.series {
+        let mut providers: BTreeMap<String, Amount> = BTreeMap::new();
+        for (provider, amount) in std::mem::take(&mut bucket.providers) {
+            providers
+                .entry(family_id(&provider))
+                .or_default()
+                .add(&amount);
+        }
+        bucket.providers = providers;
+    }
+    let mut models = BTreeMap::new();
+    for row in std::mem::take(&mut summary.breakdown.model) {
+        let Some(provider) = row.provider.as_deref().map(family_id) else {
+            add_rows(&mut models, vec![row]);
+            continue;
+        };
+        let model = row
+            .key
+            .split_once('/')
+            .map_or(row.label.as_str(), |(_, model)| model);
+        let key = format!("{provider}/{model}");
+        add_amount(&mut models, key, row.label, Some(provider), &row.amount);
+    }
+    summary.breakdown.model = models.into_values().collect();
+    let providers: BTreeSet<String> = summary.providers.iter().map(|p| family_id(p)).collect();
+    summary.providers = providers.into_iter().collect();
+    summary
+}
+
+/// The summary of `machine` with its runs read from the copies other
+/// machines hold of the runs it ran. An answer without replicas counts every
+/// copy it holds of another member's runs, which that member counts too.
+fn own_runs(mut summary: Summary, machine: &str, held: &BTreeMap<String, HeldRun>) -> Summary {
+    let mut series: BTreeMap<i64, BTreeMap<String, Amount>> = BTreeMap::new();
+    let mut models = BTreeMap::new();
+    let mut agents = BTreeMap::new();
+    let mut projects = BTreeMap::new();
+    let mut providers = BTreeSet::new();
+    let mut total = Amount::default();
+    for run in held.values().filter(|run| run.origin == machine) {
+        total.add(&run.amount);
+        series
+            .entry(run.bucket_ms)
+            .or_default()
+            .entry(run.provider.clone())
+            .or_default()
+            .add(&run.amount);
+        add_amount(
+            &mut models,
+            format!("{}/{}", run.provider, run.model),
+            run.model.clone(),
+            Some(run.provider.clone()),
+            &run.amount,
+        );
+        add_amount(
+            &mut agents,
+            run.agent.clone(),
+            run.agent_label.clone(),
+            None,
+            &run.amount,
+        );
+        add_amount(
+            &mut projects,
+            run.project.clone(),
+            run.project_label.clone(),
+            None,
+            &run.amount,
+        );
+        providers.insert(run.provider.clone());
+    }
+    summary.totals = Totals::of(&total);
+    summary.series = series
+        .into_iter()
+        .map(|(start_ms, providers)| Bucket {
+            start_ms,
+            providers,
+        })
+        .collect();
+    summary.breakdown = Breakdown {
+        model: ranked(models),
+        agent: ranked(agents),
+        project: ranked(projects),
+        machine: Vec::new(),
+    };
+    summary.providers = providers.into_iter().collect();
+    summary
+}
+
+/// A fleet member the window does not ask, by the name the window shows.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+pub struct Member {
+    pub id: String,
+    pub name: String,
+}
+
+/// What the joined view counts.
+#[derive(Clone, Debug, Default)]
+pub struct Scope {
+    /// The one machine the machine filter names, or None for every machine.
+    /// The other answers count only the copies they hold of its runs.
+    pub machine: Option<String>,
+    /// The names of the fleet members the window does not ask.
+    pub members: Vec<Member>,
+}
+
+/// The name of a member the window does not ask and no copy names.
+pub const UNLISTED_MACHINE: &str = "Another machine";
+
+/// The row name of a member whose runs count from the copies others hold:
+/// a machine asked that failed to answer by its window name, else an
+/// offline member.
+fn absent_name(
+    origin: &str,
+    scope: &Scope,
+    failed: &BTreeMap<String, String>,
+    held: &BTreeMap<String, HeldRun>,
+) -> String {
+    if let Some(name) = failed.get(origin) {
+        return format!("{name} (did not answer)");
+    }
+    let name = scope
+        .members
+        .iter()
+        .find(|member| member.id == origin)
+        .map(|member| member.name.clone())
+        .filter(|name| !name.trim().is_empty())
+        .or_else(|| {
+            held.values()
+                .find(|run| run.origin == origin && !run.origin_name.trim().is_empty())
+                .map(|run| run.origin_name.clone())
+        })
+        .unwrap_or_else(|| UNLISTED_MACHINE.to_owned());
+    format!("{name} (offline)")
+}
+
+/// The joined series bucket that `start_ms` falls in. A runtime before the
+/// time zone field starts its days at a fixed offset, an hour off the zone's
+/// own midnight across a daylight saving change, so its day joins the day
+/// that starts within that hour.
+fn series_bucket(
+    series: &mut BTreeMap<i64, BTreeMap<String, Amount>>,
+    start_ms: i64,
+    day: bool,
+) -> &mut BTreeMap<String, Amount> {
+    let start = if day {
+        series
+            .range(start_ms - DAY_SKEW_MS..=start_ms + DAY_SKEW_MS)
+            .next()
+            .map_or(start_ms, |(start, _)| *start)
+    } else {
+        start_ms
+    };
+    series.entry(start).or_default()
+}
+
+/// Joins the answers of every machine, as [`merge_scoped`] does with no
+/// machine filter.
+pub fn merge(answers: Vec<MachineAnswer>, now_ms: i64) -> FleetSummary {
+    merge_scoped(answers, &Scope::default(), now_ms)
+}
+
 /// Joins the answers of several machines: sums, the series by bucket, the
 /// breakdowns by key, a machine row each, and each account's newest reading
-/// pooled once however many machines hold it.
-pub fn merge(answers: Vec<MachineAnswer>, now_ms: i64) -> FleetSummary {
+/// pooled once however many machines hold it. Each run counts once, on the
+/// machine that ran it: an answer leaves out the copies it holds, and an
+/// answer that counts its copies takes its runs from the copies the other
+/// machines hold of them, each run id once. A member the window did not ask,
+/// or one that failed to answer, counts from the copies the others hold,
+/// under a row of its own, so no held run drops out. A machine filter counts
+/// the named machine alone: its own answer, or the copies the others hold of
+/// its runs when it gives none, so the window asks every machine it reaches.
+pub fn merge_scoped(answers: Vec<MachineAnswer>, scope: &Scope, now_ms: i64) -> FleetSummary {
+    let mut held: BTreeMap<String, HeldRun> = BTreeMap::new();
+    let mut copies_listed = false;
+    for replicas in answers
+        .iter()
+        .filter_map(|answer| answer.summary.as_ref().ok()?.replicas.as_ref())
+    {
+        copies_listed = true;
+        for run in replicas {
+            held.entry(run.run_id.clone())
+                .or_insert_with(|| run.clone());
+        }
+    }
+    // Each machine that answers counts its own runs, under the id the window
+    // names it by and under the member id its copies carry. A machine that
+    // failed to answer counts from the copies the others hold.
+    let failed: BTreeMap<String, String> = answers
+        .iter()
+        .filter(|answer| answer.summary.is_err())
+        .map(|answer| (answer.id.clone(), answer.name.clone()))
+        .collect();
+    let mut asked: BTreeSet<String> = answers
+        .iter()
+        .filter(|answer| answer.summary.is_ok())
+        .map(|answer| answer.id.clone())
+        .collect();
+    asked.extend(
+        answers
+            .iter()
+            .filter_map(|answer| answer.summary.as_ref().ok()?.machine_id.clone()),
+    );
+    let absent: BTreeSet<String> = held
+        .values()
+        .map(|run| run.origin.clone())
+        .filter(|origin| !asked.contains(origin))
+        .filter(|origin| match &scope.machine {
+            Some(machine) => machine == origin,
+            None => true,
+        })
+        .collect();
+    let template = answers
+        .iter()
+        .find_map(|answer| answer.summary.as_ref().ok())
+        .map(|summary| Summary {
+            range: summary.range,
+            start_ms: summary.start_ms,
+            end_ms: summary.end_ms,
+            bucket: summary.bucket.clone(),
+            ..Summary::default()
+        })
+        .unwrap_or_default();
+    let absent: Vec<(String, String, Summary)> = absent
+        .into_iter()
+        .map(|origin| {
+            let name = absent_name(&origin, scope, &failed, &held);
+            let summary = own_runs(template.clone(), &origin, &held);
+            (origin, name, summary)
+        })
+        .collect();
     let mut joined = Summary::default();
     let mut total = Amount::default();
     let mut series: BTreeMap<i64, BTreeMap<String, Amount>> = BTreeMap::new();
@@ -1169,7 +1593,30 @@ pub fn merge(answers: Vec<MachineAnswer>, now_ms: i64) -> FleetSummary {
     let mut unmetered: BTreeMap<(String, String, String, String), Unmetered> = BTreeMap::new();
     let mut windows: Vec<AccountWindow> = Vec::new();
     let mut machines = Vec::new();
-    for answer in answers {
+    // Every bucket of the range shows, an empty one as zero, whatever the
+    // machine filter or the copies leave out: each answer's series names
+    // every bucket start of its range.
+    for summary in answers
+        .iter()
+        .filter_map(|answer| answer.summary.as_ref().ok())
+    {
+        let day = summary.bucket == "day";
+        for bucket in &summary.series {
+            series_bucket(&mut series, bucket.start_ms, day);
+        }
+    }
+    let answers = answers
+        .into_iter()
+        .map(|answer| (answer, false))
+        .chain(absent.into_iter().map(|(id, name, summary)| {
+            let answer = MachineAnswer {
+                id,
+                name,
+                summary: Ok(summary),
+            };
+            (answer, true)
+        }));
+    for (answer, from_copies) in answers {
         let summary = match answer.summary {
             Ok(summary) => summary,
             Err(error) => {
@@ -1182,21 +1629,40 @@ pub fn merge(answers: Vec<MachineAnswer>, now_ms: i64) -> FleetSummary {
                 continue;
             }
         };
-        machines.push(MachineState {
-            id: answer.id.clone(),
-            name: answer.name.clone(),
-            state: "ok".into(),
-            error: None,
-        });
+        if !from_copies {
+            machines.push(MachineState {
+                id: answer.id.clone(),
+                name: answer.name.clone(),
+                state: "ok".into(),
+                error: None,
+            });
+        }
         if joined.range.is_none() {
             joined.range = summary.range;
             joined.start_ms = summary.start_ms;
             joined.end_ms = summary.end_ms;
             joined.bucket = summary.bucket.clone();
         }
+        // Under a machine filter the other machines answer only for the
+        // copies they hold of the named machine's runs.
+        if !from_copies
+            && scope
+                .machine
+                .as_ref()
+                .is_some_and(|machine| machine != &answer.id)
+        {
+            continue;
+        }
+        let summary = if !from_copies && summary.replicas.is_none() && copies_listed {
+            own_runs(summary, &answer.id, &held)
+        } else {
+            summary
+        };
+        let summary = by_family(summary);
         let mut machine = Amount::default();
+        let day = summary.bucket == "day";
         for bucket in summary.series {
-            let held = series.entry(bucket.start_ms).or_default();
+            let held = series_bucket(&mut series, bucket.start_ms, day);
             for (provider, amount) in bucket.providers {
                 machine.add(&amount);
                 held.entry(provider).or_default().add(&amount);
@@ -1280,6 +1746,7 @@ mod tests {
                 .unwrap()
                 .to_rfc3339_opts(SecondsFormat::Millis, true),
             receipt,
+            origin: None,
         }
     }
 
@@ -1301,7 +1768,209 @@ mod tests {
             range,
             provider: None,
             utc_offset_minutes: 0,
+            time_zone: None,
         }
+    }
+
+    fn ms(at: &str) -> i64 {
+        DateTime::parse_from_rfc3339(at).unwrap().timestamp_millis()
+    }
+
+    fn zoned(range: Range, zone: &str, offset: i32) -> Request {
+        Request {
+            time_zone: Some(zone.into()),
+            utc_offset_minutes: offset,
+            ..request(range)
+        }
+    }
+
+    fn times(starts: &[i64]) -> Vec<String> {
+        starts
+            .iter()
+            .map(|start| crate::agent_runs::timestamp(start / 1000))
+            .collect()
+    }
+
+    #[test]
+    fn days_start_at_the_zones_own_midnight_across_both_daylight_saving_changes() {
+        // New York leaves daylight time at 06:00Z on Nov 1 and enters it at
+        // 07:00Z on Mar 8.
+        let (starts, end) = request_buckets(
+            &zoned(Range::Week, "America/New_York", -300),
+            ms("2026-11-03T15:00:00Z"),
+        );
+        assert_eq!(
+            times(&starts),
+            [
+                "2026-10-28T04:00:00Z",
+                "2026-10-29T04:00:00Z",
+                "2026-10-30T04:00:00Z",
+                "2026-10-31T04:00:00Z",
+                "2026-11-01T04:00:00Z",
+                "2026-11-02T05:00:00Z",
+                "2026-11-03T05:00:00Z",
+            ]
+        );
+        assert_eq!(end, ms("2026-11-04T05:00:00Z"));
+        let (spring, _) = request_buckets(
+            &zoned(Range::Week, "America/New_York", -240),
+            ms("2026-03-09T15:00:00Z"),
+        );
+        assert_eq!(
+            times(&spring[4..]),
+            [
+                "2026-03-07T05:00:00Z",
+                "2026-03-08T05:00:00Z",
+                "2026-03-09T04:00:00Z"
+            ]
+        );
+        // Sydney leaves daylight time at 16:00Z on Apr 4 and enters it at
+        // 16:00Z on Oct 3.
+        let (autumn, _) = request_buckets(
+            &zoned(Range::Week, "Australia/Sydney", 600),
+            ms("2026-04-06T02:00:00Z"),
+        );
+        assert_eq!(
+            times(&autumn[4..]),
+            [
+                "2026-04-03T13:00:00Z",
+                "2026-04-04T13:00:00Z",
+                "2026-04-05T14:00:00Z"
+            ]
+        );
+        let (sydney_spring, _) = request_buckets(
+            &zoned(Range::Week, "Australia/Sydney", 660),
+            ms("2026-10-05T02:00:00Z"),
+        );
+        assert_eq!(
+            times(&sydney_spring[4..]),
+            [
+                "2026-10-02T14:00:00Z",
+                "2026-10-03T14:00:00Z",
+                "2026-10-04T13:00:00Z"
+            ]
+        );
+        // Hours stay whole hours of the zone, and an unknown zone keeps the
+        // fixed offset.
+        let (hours, end) = request_buckets(
+            &zoned(Range::Day, "Asia/Kolkata", 330),
+            ms("2026-11-01T15:10:00Z"),
+        );
+        assert_eq!(hours.len(), 24);
+        assert_eq!(end, ms("2026-11-01T15:30:00Z"));
+        assert_eq!(
+            request_buckets(
+                &zoned(Range::Week, "Mars/Base", -300),
+                ms("2026-11-03T15:00:00Z")
+            ),
+            bucket_starts(Range::Week, ms("2026-11-03T15:00:00Z"), -300)
+        );
+    }
+
+    #[test]
+    fn todays_early_runs_count_on_today_after_the_change_to_standard_time() {
+        let runs = [
+            run(
+                "early",
+                ms("2026-11-01T04:10:00Z"),
+                "anthropic/claude",
+                1,
+                None,
+            ),
+            run(
+                "before",
+                ms("2026-11-01T03:50:00Z"),
+                "anthropic/claude",
+                2,
+                None,
+            ),
+        ];
+        let now = ms("2026-11-01T15:00:00Z");
+        let day = |request: &Request| {
+            let summary = summarize(
+                &runs,
+                &Owners::default(),
+                Vec::new(),
+                Vec::new(),
+                request,
+                now,
+            );
+            summary
+                .series
+                .iter()
+                .map(|bucket| {
+                    bucket
+                        .providers
+                        .get("anthropic")
+                        .map_or(0, |amount| amount.processed)
+                })
+                .collect::<Vec<_>>()
+        };
+        let zoned = day(&zoned(Range::Week, "America/New_York", -300));
+        assert_eq!(
+            &zoned[5..],
+            [
+                run("x", 0, "anthropic/claude", 2, None).tokens.processed(),
+                run("x", 0, "anthropic/claude", 1, None).tokens.processed()
+            ]
+        );
+        // The offset alone counts both on yesterday.
+        let fixed = day(&Request {
+            utc_offset_minutes: -300,
+            ..request(Range::Week)
+        });
+        assert_eq!(fixed[6], 0);
+    }
+
+    #[test]
+    fn an_older_runtimes_fixed_offset_days_join_the_zones_days() {
+        let now = ms("2026-11-03T15:00:00Z");
+        let used = |at: &str| run("x", ms(at), "anthropic/claude", 1, None);
+        let zoned_summary = summarize(
+            &[used("2026-10-30T12:00:00Z")],
+            &Owners::default(),
+            Vec::new(),
+            Vec::new(),
+            &zoned(Range::Week, "America/New_York", -300),
+            now,
+        );
+        let fixed_summary = summarize(
+            &[used("2026-10-30T12:00:00Z")],
+            &Owners::default(),
+            Vec::new(),
+            Vec::new(),
+            &Request {
+                utc_offset_minutes: -300,
+                ..request(Range::Week)
+            },
+            now,
+        );
+        let joined = merge(
+            vec![
+                MachineAnswer {
+                    id: "local".into(),
+                    name: "This computer".into(),
+                    summary: Ok(zoned_summary),
+                },
+                MachineAnswer {
+                    id: "hub".into(),
+                    name: "Factory hub".into(),
+                    summary: Ok(fixed_summary),
+                },
+            ],
+            now,
+        )
+        .summary;
+        assert_eq!(joined.series.len(), 7);
+        let oct_30 = joined
+            .series
+            .iter()
+            .find(|bucket| bucket.start_ms == ms("2026-10-30T04:00:00Z"))
+            .unwrap();
+        assert_eq!(
+            oct_30.providers["anthropic"].processed,
+            2 * used("2026-10-30T12:00:00Z").tokens.processed()
+        );
     }
 
     #[test]
@@ -1843,6 +2512,18 @@ mod tests {
     }
 
     #[test]
+    fn a_claude_code_turn_counts_under_its_anthropic_account() {
+        assert_eq!(
+            split_model("claude-bridge/claude-opus-4-8"),
+            ("anthropic".to_owned(), "claude-opus-4-8".to_owned())
+        );
+        assert_eq!(
+            split_model("openai-codex/gpt-6"),
+            ("openai".to_owned(), "gpt-6".to_owned())
+        );
+    }
+
+    #[test]
     fn a_local_server_shows_the_name_the_models_page_shows() {
         let agent = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
         std::fs::create_dir_all(&agent).unwrap();
@@ -1996,6 +2677,7 @@ mod tests {
         let answer = operation(
             &profile,
             |_| Ok(Vec::new()),
+            &Fleet::none(),
             json!({"range": "24h", "utc_offset_minutes": 0}),
             NOW,
         )
@@ -2006,5 +2688,749 @@ mod tests {
             assert!(answer.get(key).is_some(), "the answer lacks {key}");
         }
         let _ = std::fs::remove_dir_all(profile);
+    }
+
+    fn copied(run_id: &str, at_ms: i64, model: &str, input: u64, origin: &str) -> RunUsage {
+        RunUsage {
+            origin: Some(origin.into()),
+            ..run(run_id, at_ms, model, input, None)
+        }
+    }
+
+    fn answer(id: &str, name: &str, summary: Summary) -> MachineAnswer {
+        MachineAnswer {
+            id: id.into(),
+            name: name.into(),
+            summary: Ok(summary),
+        }
+    }
+
+    /// The answer of a runtime that counts every copy it holds and names a
+    /// Claude Code turn by its bridge provider, as it reaches the desktop.
+    fn older_answer(runs: &[RunUsage]) -> Summary {
+        let runs: Vec<RunUsage> = runs
+            .iter()
+            .map(|run| RunUsage {
+                origin: None,
+                provider: if run.model.starts_with("claude-fable") {
+                    "claude-bridge".into()
+                } else {
+                    run.provider.clone()
+                },
+                ..run.clone()
+            })
+            .collect();
+        let summary = summarize(
+            &runs,
+            &Owners::default(),
+            Vec::new(),
+            Vec::new(),
+            &request(Range::Day),
+            NOW,
+        );
+        let mut wire = serde_json::to_value(summary).unwrap();
+        wire.as_object_mut().unwrap().remove("replicas");
+        serde_json::from_value(wire).unwrap()
+    }
+
+    fn machine_row<'a>(joined: &'a Summary, id: &str) -> &'a Row {
+        joined
+            .breakdown
+            .machine
+            .iter()
+            .find(|row| row.key == id)
+            .unwrap()
+    }
+
+    #[test]
+    fn a_copy_of_another_members_run_counts_on_the_member_that_ran_it() {
+        let mut owners = Owners::default();
+        owners.run_agents.insert("copy".into(), "agent-1".into());
+        owners.agent_names.insert("agent-1".into(), "Scout".into());
+        let summary = summarize(
+            &[
+                run("own", NOW - HOUR, "openai-codex/gpt", 50, None),
+                copied("copy", NOW - HOUR, "anthropic/claude", 70, "hub-runtime"),
+                copied(
+                    "old",
+                    NOW - 30 * HOUR,
+                    "anthropic/claude",
+                    70,
+                    "hub-runtime",
+                ),
+            ],
+            &owners,
+            Vec::new(),
+            Vec::new(),
+            &request(Range::Day),
+            NOW,
+        );
+        assert_eq!(summary.totals.runs, 1);
+        assert_eq!(summary.providers, ["openai"]);
+        assert_eq!(summary.breakdown.model.len(), 1);
+        let replicas = summary.replicas.unwrap();
+        assert_eq!(replicas.len(), 1);
+        let copy = &replicas[0];
+        assert_eq!(
+            (copy.run_id.as_str(), copy.origin.as_str()),
+            ("copy", "hub-runtime")
+        );
+        assert_eq!(
+            (copy.agent.as_str(), copy.agent_label.as_str()),
+            ("agent-1", "Scout")
+        );
+        assert_eq!(copy.amount.runs, 1);
+        assert_eq!(copy.amount.processed, 180);
+        assert!(summary
+            .series
+            .iter()
+            .any(|bucket| bucket.start_ms == copy.bucket_ms));
+    }
+
+    #[test]
+    fn an_older_member_that_counts_the_copies_it_holds_counts_each_run_once() {
+        let mine = [
+            run("a", NOW - HOUR, "openai-codex/gpt", 50, None),
+            run(
+                "b",
+                NOW - 2 * HOUR,
+                "claude-bridge/claude-fable-5-1",
+                30,
+                None,
+            ),
+        ];
+        let hubs = run("h", NOW - 3 * HOUR, "openai-codex/gpt", 20, None);
+        // This computer holds a copy of the hub's run, and the hub holds
+        // copies of both of this computer's runs.
+        let mut local_runs = mine.to_vec();
+        local_runs.push(RunUsage {
+            origin: Some("hub-runtime".into()),
+            ..hubs.clone()
+        });
+        let local = summarize(
+            &local_runs,
+            &Owners::default(),
+            Vec::new(),
+            Vec::new(),
+            &request(Range::Day),
+            NOW,
+        );
+        let hub = older_answer(&[mine[0].clone(), mine[1].clone(), hubs.clone()]);
+        assert!(hub.replicas.is_none());
+        assert!(hub.providers.contains(&"claude-bridge".to_string()));
+        let joined = merge(
+            vec![
+                answer("local", "This computer", local),
+                answer("hub-runtime", "Factory hub", hub),
+            ],
+            NOW,
+        )
+        .summary;
+        let processed =
+            |runs: &[&RunUsage]| -> u64 { runs.iter().map(|run| run.tokens.processed()).sum() };
+        assert_eq!(joined.totals.runs, 3);
+        assert_eq!(
+            joined.totals.processed,
+            processed(&[&mine[0], &mine[1], &hubs])
+        );
+        assert_eq!(machine_row(&joined, "local").amount.runs, 2);
+        assert_eq!(
+            machine_row(&joined, "local").amount.processed,
+            processed(&[&mine[0], &mine[1]])
+        );
+        assert_eq!(machine_row(&joined, "hub-runtime").amount.runs, 1);
+        assert_eq!(
+            machine_row(&joined, "hub-runtime").amount.processed,
+            processed(&[&hubs])
+        );
+        assert_eq!(joined.providers, ["anthropic", "openai"]);
+        let fable: Vec<&Row> = joined
+            .breakdown
+            .model
+            .iter()
+            .filter(|row| row.label == "claude-fable-5-1")
+            .collect();
+        assert_eq!(fable.len(), 1);
+        assert_eq!(fable[0].key, "anthropic/claude-fable-5-1");
+        assert_eq!(fable[0].amount.runs, 1);
+        let series_runs: u64 = joined
+            .series
+            .iter()
+            .flat_map(|bucket| bucket.providers.values())
+            .map(|amount| amount.runs)
+            .sum();
+        assert_eq!(series_runs, 3);
+        assert!(joined
+            .series
+            .iter()
+            .all(|bucket| !bucket.providers.contains_key("claude-bridge")));
+    }
+
+    #[test]
+    fn a_run_two_machines_hold_copies_of_counts_once_on_the_member_that_ran_it() {
+        let hubs = run("h", NOW - HOUR, "openai-codex/gpt", 20, None);
+        let holder = |id: &str| {
+            let copy = RunUsage {
+                origin: Some("hub-runtime".into()),
+                ..hubs.clone()
+            };
+            answer(
+                id,
+                id,
+                summarize(
+                    &[copy],
+                    &Owners::default(),
+                    Vec::new(),
+                    Vec::new(),
+                    &request(Range::Day),
+                    NOW,
+                ),
+            )
+        };
+        let joined = merge(
+            vec![
+                holder("local"),
+                holder("laptop"),
+                answer(
+                    "hub-runtime",
+                    "Factory hub",
+                    older_answer(std::slice::from_ref(&hubs)),
+                ),
+            ],
+            NOW,
+        )
+        .summary;
+        assert_eq!(joined.totals.runs, 1);
+        assert_eq!(machine_row(&joined, "hub-runtime").amount.runs, 1);
+        assert_eq!(machine_row(&joined, "local").amount.runs, 0);
+        assert_eq!(machine_row(&joined, "laptop").amount.runs, 0);
+    }
+
+    #[test]
+    fn an_older_answer_alone_keeps_its_runs_under_one_name_per_family() {
+        let joined = merge(
+            vec![answer(
+                "hub-runtime",
+                "Factory hub",
+                older_answer(&[
+                    run("b", NOW - HOUR, "claude-bridge/claude-fable-5-1", 30, None),
+                    run("c", NOW - HOUR, "anthropic/claude-opus", 30, None),
+                ]),
+            )],
+            NOW,
+        )
+        .summary;
+        assert_eq!(joined.totals.runs, 2);
+        assert_eq!(joined.providers, ["anthropic"]);
+        let bucket = joined
+            .series
+            .iter()
+            .find(|bucket| !bucket.providers.is_empty())
+            .unwrap();
+        assert_eq!(bucket.providers.keys().collect::<Vec<_>>(), ["anthropic"]);
+        assert_eq!(bucket.providers["anthropic"].runs, 2);
+    }
+
+    const DOCKER: &str = "docker-member";
+
+    /// This computer's answer: its own runs, the copies it holds of the
+    /// offline Docker container's runs, and its fleet member id.
+    fn this_computer(own: &[RunUsage], docker: &[RunUsage]) -> Summary {
+        let mut runs = own.to_vec();
+        runs.extend(docker.iter().map(|run| RunUsage {
+            origin: Some(DOCKER.into()),
+            ..run.clone()
+        }));
+        Summary {
+            machine_id: Some("local-member".into()),
+            windows: vec![window("mine", 40.0, HOUR)],
+            ..summarize(
+                &runs,
+                &Owners::default(),
+                Vec::new(),
+                Vec::new(),
+                &request(Range::Month),
+                NOW,
+            )
+        }
+    }
+
+    fn docker_scope(machine: Option<&str>) -> Scope {
+        Scope {
+            machine: machine.map(str::to_owned),
+            members: vec![Member {
+                id: DOCKER.into(),
+                name: "Docker container".into(),
+            }],
+        }
+    }
+
+    fn total_series_runs(joined: &Summary) -> u64 {
+        joined
+            .series
+            .iter()
+            .flat_map(|bucket| bucket.providers.values())
+            .map(|amount| amount.runs)
+            .sum()
+    }
+
+    #[test]
+    fn an_offline_members_runs_count_from_the_copies_this_computer_holds() {
+        let own = [
+            run("a", NOW - HOUR, "openai-codex/gpt", 50, None),
+            run("b", NOW - 3 * 24 * HOUR, "openai-codex/gpt", 40, None),
+        ];
+        let docker = [
+            run("d1", NOW - 12 * 24 * HOUR, "anthropic/claude", 30, None),
+            run("d2", NOW - 10 * 24 * HOUR, "anthropic/claude", 20, None),
+        ];
+        let hubs = run("h", NOW - 2 * HOUR, "openai-codex/gpt", 10, None);
+        // The hub answers with its own run, a copy of one of this computer's
+        // runs under this computer's member id, and a copy of one of the
+        // Docker container's runs.
+        let hub = summarize(
+            &[
+                hubs.clone(),
+                RunUsage {
+                    origin: Some("local-member".into()),
+                    ..own[0].clone()
+                },
+                RunUsage {
+                    origin: Some(DOCKER.into()),
+                    ..docker[0].clone()
+                },
+            ],
+            &Owners::default(),
+            Vec::new(),
+            Vec::new(),
+            &request(Range::Month),
+            NOW,
+        );
+        let fleet = merge_scoped(
+            vec![
+                answer("local", "This computer", this_computer(&own, &docker)),
+                answer("hub-runtime", "Factory hub", hub),
+            ],
+            &docker_scope(None),
+            NOW,
+        );
+        let joined = fleet.summary;
+        assert_eq!(joined.totals.runs, 5);
+        assert_eq!(total_series_runs(&joined), 5);
+        assert_eq!(machine_row(&joined, "local").amount.runs, 2);
+        assert_eq!(machine_row(&joined, "hub-runtime").amount.runs, 1);
+        let row = machine_row(&joined, DOCKER);
+        assert_eq!(row.label, "Docker container (offline)");
+        assert_eq!(row.amount.runs, 2);
+        assert_eq!(
+            row.amount.processed,
+            docker.iter().map(|run| run.tokens.processed()).sum::<u64>()
+        );
+        assert_eq!(joined.breakdown.machine.len(), 3);
+        assert_eq!(joined.providers, ["anthropic", "openai"]);
+        let claude = joined
+            .breakdown
+            .model
+            .iter()
+            .find(|row| row.key == "anthropic/claude")
+            .unwrap();
+        assert_eq!(claude.amount.runs, 2);
+        // The offline member is a row of the breakdown, not a machine that
+        // failed to answer.
+        assert!(!fleet.partial);
+        assert_eq!(fleet.machines.len(), 2);
+    }
+
+    #[test]
+    fn an_offline_member_with_copies_on_this_computer_alone_counts_them() {
+        let own = [run("a", NOW - HOUR, "openai-codex/gpt", 50, None)];
+        let docker = [
+            run("d1", NOW - 12 * 24 * HOUR, "anthropic/claude", 30, None),
+            run("d2", NOW - 10 * 24 * HOUR, "anthropic/claude", 20, None),
+            run("d3", NOW - 10 * 24 * HOUR, "anthropic/claude", 25, None),
+        ];
+        let joined = merge(
+            vec![answer(
+                "local",
+                "This computer",
+                this_computer(&own, &docker),
+            )],
+            NOW,
+        )
+        .summary;
+        assert_eq!(joined.totals.runs, 4);
+        assert_eq!(machine_row(&joined, "local").amount.runs, 1);
+        let row = machine_row(&joined, DOCKER);
+        assert_eq!(row.amount.runs, 3);
+        // No window names it and no copy carries its name.
+        assert_eq!(row.label, format!("{UNLISTED_MACHINE} (offline)"));
+    }
+
+    #[test]
+    fn a_copy_names_an_unlisted_member_by_the_name_its_fleet_announced() {
+        let docker = [run("d1", NOW - HOUR, "anthropic/claude", 30, None)];
+        let mut local = this_computer(&[], &docker);
+        for run in local.replicas.iter_mut().flatten() {
+            run.origin_name = "Old laptop".into();
+        }
+        let joined = merge(vec![answer("local", "This computer", local)], NOW).summary;
+        assert_eq!(machine_row(&joined, DOCKER).label, "Old laptop (offline)");
+    }
+
+    #[test]
+    fn the_machine_filter_on_an_offline_member_counts_only_its_copies() {
+        let own = [run("a", NOW - HOUR, "openai-codex/gpt", 50, None)];
+        let docker = [
+            run("d1", NOW - 12 * 24 * HOUR, "anthropic/claude", 30, None),
+            run("d2", NOW - 10 * 24 * HOUR, "anthropic/claude", 20, None),
+        ];
+        let fleet = merge_scoped(
+            vec![answer(
+                "local",
+                "This computer",
+                this_computer(&own, &docker),
+            )],
+            &docker_scope(Some(DOCKER)),
+            NOW,
+        );
+        let joined = fleet.summary;
+        assert_eq!(joined.totals.runs, 2);
+        assert_eq!(total_series_runs(&joined), 2);
+        assert_eq!(joined.range, Some(Range::Month));
+        assert_eq!(joined.breakdown.machine.len(), 1);
+        assert_eq!(
+            machine_row(&joined, DOCKER).label,
+            "Docker container (offline)"
+        );
+        assert_eq!(joined.providers, ["anthropic"]);
+        assert!(joined.accounts.is_empty());
+        assert_eq!(fleet.machines.len(), 1);
+    }
+
+    #[test]
+    fn the_machine_filter_on_this_computer_leaves_out_the_copies_it_holds() {
+        let own = [run("a", NOW - HOUR, "openai-codex/gpt", 50, None)];
+        let docker = [run("d1", NOW - HOUR, "anthropic/claude", 30, None)];
+        let joined = merge_scoped(
+            vec![answer(
+                "local",
+                "This computer",
+                this_computer(&own, &docker),
+            )],
+            &docker_scope(Some("local")),
+            NOW,
+        )
+        .summary;
+        assert_eq!(joined.totals.runs, 1);
+        assert_eq!(joined.breakdown.machine.len(), 1);
+        assert_eq!(joined.providers, ["openai"]);
+    }
+
+    #[test]
+    fn a_member_that_failed_to_answer_stays_named_and_counts_from_the_copies_held() {
+        let own = [run("a", NOW - HOUR, "openai-codex/gpt", 50, None)];
+        let docker = [
+            run("d1", NOW - HOUR, "anthropic/claude", 30, None),
+            run("d2", NOW - 2 * HOUR, "anthropic/claude", 20, None),
+        ];
+        let fleet = merge_scoped(
+            vec![
+                answer("local", "This computer", this_computer(&own, &docker)),
+                MachineAnswer {
+                    id: DOCKER.into(),
+                    name: "Docker container".into(),
+                    summary: Err("The request timed out.".into()),
+                },
+            ],
+            &Scope::default(),
+            NOW,
+        );
+        // The note still names the machine that did not answer.
+        assert!(fleet.partial);
+        let state = fleet
+            .machines
+            .iter()
+            .find(|machine| machine.id == DOCKER)
+            .unwrap();
+        assert_eq!(state.state, "error");
+        let joined = fleet.summary;
+        assert_eq!(joined.totals.runs, 3);
+        assert_eq!(total_series_runs(&joined), 3);
+        assert_eq!(machine_row(&joined, "local").amount.runs, 1);
+        let row = machine_row(&joined, DOCKER);
+        assert_eq!(row.label, "Docker container (did not answer)");
+        assert_eq!(row.amount.runs, 2);
+        assert_eq!(joined.breakdown.machine.len(), 2);
+    }
+
+    #[test]
+    fn a_member_that_failed_to_answer_with_no_copies_held_has_no_row() {
+        let own = [run("a", NOW - HOUR, "openai-codex/gpt", 50, None)];
+        let fleet = merge_scoped(
+            vec![
+                answer("local", "This computer", this_computer(&own, &[])),
+                MachineAnswer {
+                    id: DOCKER.into(),
+                    name: "Docker container".into(),
+                    summary: Err("The request timed out.".into()),
+                },
+            ],
+            &Scope::default(),
+            NOW,
+        );
+        assert!(fleet.partial);
+        assert_eq!(fleet.summary.totals.runs, 1);
+        assert_eq!(fleet.summary.breakdown.machine.len(), 1);
+    }
+
+    #[test]
+    fn the_answer_names_its_member_id_and_the_member_each_copy_came_from() {
+        let profile = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let receipt = json!({"model": "anthropic/claude", "tokens": {"input": 3}});
+        let names = |id: &str| (id == DOCKER).then(|| "Docker container".to_owned());
+        let answer = operation(
+            &profile,
+            |_| {
+                Ok(vec![
+                    completed("own", NOW - HOUR, receipt.clone()),
+                    CompletedReceipt {
+                        origin: Some(DOCKER.into()),
+                        ..completed("copy", NOW - 2 * HOUR, receipt.clone())
+                    },
+                ])
+            },
+            &Fleet {
+                machine_id: Some("local-member".into()),
+                member_name: &names,
+            },
+            json!({"range": "24h", "utc_offset_minutes": 0}),
+            NOW,
+        )
+        .unwrap();
+        let summary: Summary = serde_json::from_value(answer).unwrap();
+        assert_eq!(summary.machine_id.as_deref(), Some("local-member"));
+        assert_eq!(summary.totals.runs, 1);
+        let replicas = summary.replicas.unwrap();
+        assert_eq!(replicas.len(), 1);
+        assert_eq!(replicas[0].origin, DOCKER);
+        assert_eq!(replicas[0].origin_name, "Docker container");
+        let _ = std::fs::remove_dir_all(profile);
+    }
+
+    #[test]
+    fn the_machine_filter_on_a_machine_that_fails_counts_the_copies_others_hold() {
+        let own = [run("a", NOW - HOUR, "openai-codex/gpt", 50, None)];
+        let docker = [
+            run("d1", NOW - HOUR, "anthropic/claude", 30, None),
+            run("d2", NOW - 2 * HOUR, "anthropic/claude", 20, None),
+        ];
+        let fleet = merge_scoped(
+            vec![
+                answer("local", "This computer", this_computer(&own, &docker)),
+                MachineAnswer {
+                    id: DOCKER.into(),
+                    name: "Docker container".into(),
+                    summary: Err("The request timed out.".into()),
+                },
+            ],
+            &Scope {
+                machine: Some(DOCKER.into()),
+                members: Vec::new(),
+            },
+            NOW,
+        );
+        assert!(fleet.partial);
+        let joined = fleet.summary;
+        assert_eq!(joined.totals.runs, 2);
+        assert_eq!(total_series_runs(&joined), 2);
+        assert_eq!(joined.breakdown.machine.len(), 1);
+        assert_eq!(
+            machine_row(&joined, DOCKER).label,
+            "Docker container (did not answer)"
+        );
+        assert_eq!(joined.providers, ["anthropic"]);
+        assert!(joined.accounts.is_empty());
+    }
+
+    #[test]
+    fn the_machine_filter_on_a_machine_that_answers_counts_its_own_runs_alone() {
+        let own = [run("a", NOW - HOUR, "openai-codex/gpt", 50, None)];
+        let docker = [run("d1", NOW - HOUR, "anthropic/claude", 30, None)];
+        let hubs = run("h", NOW - 2 * HOUR, "openai-codex/gpt", 10, None);
+        let hub = summarize(
+            &[
+                hubs.clone(),
+                RunUsage {
+                    origin: Some("local-member".into()),
+                    ..own[0].clone()
+                },
+            ],
+            &Owners::default(),
+            Vec::new(),
+            Vec::new(),
+            &request(Range::Month),
+            NOW,
+        );
+        let answers = || {
+            vec![
+                answer("local", "This computer", this_computer(&own, &docker)),
+                answer("hub-runtime", "Factory hub", hub.clone()),
+            ]
+        };
+        let filtered = |machine: &str| {
+            merge_scoped(
+                answers(),
+                &Scope {
+                    machine: Some(machine.into()),
+                    members: Vec::new(),
+                },
+                NOW,
+            )
+            .summary
+        };
+        let local = filtered("local");
+        assert_eq!(local.totals.runs, 1);
+        assert_eq!(local.breakdown.machine.len(), 1);
+        assert_eq!(machine_row(&local, "local").amount.runs, 1);
+        assert_eq!(local.windows.len(), 1);
+        let hub_view = filtered("hub-runtime");
+        assert_eq!(hub_view.totals.runs, 1);
+        assert_eq!(hub_view.breakdown.machine.len(), 1);
+        assert_eq!(machine_row(&hub_view, "hub-runtime").amount.runs, 1);
+        assert!(hub_view.windows.is_empty());
+    }
+
+    #[test]
+    fn the_machine_filter_on_an_older_member_reads_its_runs_from_the_copies_others_hold() {
+        let mine = run("a", NOW - HOUR, "openai-codex/gpt", 50, None);
+        let hubs = run("h", NOW - 2 * HOUR, "openai-codex/gpt", 20, None);
+        let local = this_computer(std::slice::from_ref(&mine), &[]);
+        let mut local = local;
+        let copy = summarize(
+            &[RunUsage {
+                origin: Some("hub-runtime".into()),
+                ..hubs.clone()
+            }],
+            &Owners::default(),
+            Vec::new(),
+            Vec::new(),
+            &request(Range::Month),
+            NOW,
+        );
+        local.replicas = copy.replicas;
+        // The older hub counts the copy it holds of this computer's run.
+        let hub = older_answer(&[mine.clone(), hubs.clone()]);
+        let joined = merge_scoped(
+            vec![
+                answer("local", "This computer", local),
+                answer("hub-runtime", "Factory hub", hub),
+            ],
+            &Scope {
+                machine: Some("hub-runtime".into()),
+                members: Vec::new(),
+            },
+            NOW,
+        )
+        .summary;
+        assert_eq!(joined.totals.runs, 1);
+        assert_eq!(machine_row(&joined, "hub-runtime").amount.runs, 1);
+    }
+
+    /// The bucket starts the joined series holds, oldest first.
+    fn series_starts(joined: &Summary) -> Vec<i64> {
+        joined.series.iter().map(|bucket| bucket.start_ms).collect()
+    }
+
+    #[test]
+    fn a_filtered_range_shows_every_bucket_with_sparse_data_as_zero() {
+        for range in [Range::Week, Range::Month] {
+            let (starts, _) = request_buckets(&request(range), NOW);
+            let own = [run("a", NOW - HOUR, "openai-codex/gpt", 50, None)];
+            let docker = [
+                run("d1", NOW - 2 * 24 * HOUR, "anthropic/claude", 30, None),
+                run("d2", NOW - 3 * 24 * HOUR, "anthropic/claude", 20, None),
+            ];
+            let hubs = run("h", NOW - 5 * 24 * HOUR, "openai-codex/gpt", 10, None);
+            let mut runs = own.to_vec();
+            runs.extend(docker.iter().map(|run| RunUsage {
+                origin: Some(DOCKER.into()),
+                ..run.clone()
+            }));
+            runs.push(RunUsage {
+                origin: Some("hub-runtime".into()),
+                ..hubs.clone()
+            });
+            let local = Summary {
+                machine_id: Some("local-member".into()),
+                ..summarize(
+                    &runs,
+                    &Owners::default(),
+                    Vec::new(),
+                    Vec::new(),
+                    &request(range),
+                    NOW,
+                )
+            };
+            // An older hub lists no copies, so its runs count from the copy
+            // this computer holds.
+            let hub = Summary {
+                replicas: None,
+                ..summarize(
+                    &[hubs],
+                    &Owners::default(),
+                    Vec::new(),
+                    Vec::new(),
+                    &request(range),
+                    NOW,
+                )
+            };
+            let answers = || {
+                vec![
+                    answer("local", "This computer", local.clone()),
+                    answer("hub-runtime", "Factory hub", hub.clone()),
+                ]
+            };
+            // The offline member's copies, this computer's own runs, and an
+            // older hub's runs, each under its filter, and no filter.
+            for machine in [Some(DOCKER), Some("local"), Some("hub-runtime"), None] {
+                let joined = merge_scoped(answers(), &docker_scope(machine), NOW).summary;
+                assert_eq!(series_starts(&joined), starts, "{range:?} {machine:?}");
+                let filled = joined
+                    .series
+                    .iter()
+                    .filter(|bucket| !bucket.providers.is_empty())
+                    .count();
+                let expected = match machine {
+                    Some(DOCKER) => 2,
+                    Some(_) => 1,
+                    None => 4,
+                };
+                assert_eq!(filled, expected, "{range:?} {machine:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_filter_on_an_offline_member_alone_keeps_the_answers_buckets() {
+        let docker = [run(
+            "d1",
+            NOW - 10 * 24 * HOUR,
+            "anthropic/claude",
+            30,
+            None,
+        )];
+        let joined = merge_scoped(
+            vec![answer(
+                "local",
+                "This computer",
+                this_computer(&[], &docker),
+            )],
+            &docker_scope(Some(DOCKER)),
+            NOW,
+        )
+        .summary;
+        let (starts, _) = request_buckets(&request(Range::Month), NOW);
+        assert_eq!(series_starts(&joined), starts);
+        assert_eq!(total_series_runs(&joined), 1);
     }
 }

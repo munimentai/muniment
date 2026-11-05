@@ -203,6 +203,13 @@ pub enum PiChatEvent {
     /// The turn failed, with the provider's own sentence when it gave one.
     Failed(Option<String>),
     UsageLimit,
+    /// Pi failed a model call and tries it again after a delay: `attempt` of
+    /// its `max_attempts` retries, after the call failed with `error`.
+    Retrying {
+        attempt: u32,
+        max_attempts: u32,
+        error: String,
+    },
     /// A valid Pi event for another part of the agent lifecycle.
     Interleaved,
 }
@@ -357,6 +364,27 @@ pub fn parse_frame(frame: &Value) -> Result<PiChatEvent, &'static str> {
             }
         }
         Some("agent_start") => Ok(PiChatEvent::TurnStarted),
+        Some("auto_retry_start") => Ok(PiChatEvent::Retrying {
+            attempt: frame
+                .get("attempt")
+                .and_then(Value::as_u64)
+                .map_or(1, |n| n.min(u64::from(u32::MAX)) as u32),
+            max_attempts: frame
+                .get("maxAttempts")
+                .and_then(Value::as_u64)
+                .map_or(1, |n| n.min(u64::from(u32::MAX)) as u32),
+            error: frame
+                .get("errorMessage")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .chars()
+                .take(500)
+                .collect(),
+        }),
+        // A retry that answered returns the run to the model's thought.
+        Some("auto_retry_end") if frame.get("success").and_then(Value::as_bool) == Some(true) => {
+            Ok(PiChatEvent::RoutingStage("thinking".into()))
+        }
         Some("message_end")
             if frame.pointer("/message/role").and_then(Value::as_str) == Some("assistant") =>
         {
@@ -476,9 +504,15 @@ pub fn parse_frame(frame: &Value) -> Result<PiChatEvent, &'static str> {
             let error_message = last_message
                 .and_then(|message| message.get("errorMessage"))
                 .and_then(Value::as_str);
+            let provider = last_message
+                .and_then(|message| message.get("provider"))
+                .and_then(Value::as_str);
             match stop_reason {
                 Some("error") if error_message
                     .is_some_and(|message| message.contains("This provider has no remaining allowance.")) => Ok(PiChatEvent::UsageLimit),
+                Some("error") if error_message.is_some_and(refuses_tool_calls) => Ok(PiChatEvent::Failed(Some(
+                    tool_calls_refused_detail(crate::state_root::state_directory().as_deref(), provider),
+                ))),
                 Some("error") => Ok(PiChatEvent::Failed(error_message.and_then(provider_error_detail))),
                 Some("length") => Ok(PiChatEvent::Failed(None)),
                 Some("aborted") => Ok(PiChatEvent::Cancelled),
@@ -499,7 +533,31 @@ const PROVIDER_DETAIL_CHARS: usize = 300;
 /// message of a JSON error body after an HTTP status, such as
 /// `400: {"message": ...}`, or the text itself. It comes back on one line,
 /// with credentials removed, and at most 300 characters long.
+/// Whether a provider's error says the request never reached the server:
+/// the connection was refused, timed out or found no host.
+pub fn connection_failure(text: &str) -> bool {
+    const SIGNS: [&str; 9] = [
+        "connection error",
+        "econnrefused",
+        "connection refused",
+        "enotfound",
+        "eai_again",
+        "etimedout",
+        "connecttimeout",
+        "unable to connect",
+        "fetch failed",
+    ];
+    let text = text.to_ascii_lowercase();
+    SIGNS.iter().any(|sign| text.contains(sign))
+}
+
 pub fn provider_error_detail(text: &str) -> Option<String> {
+    if let Some(provider) = refused_key_provider(text) {
+        return Some(key_failure_detail(
+            crate::state_root::state_directory().as_deref(),
+            provider,
+        ));
+    }
     let body = text
         .split_once(':')
         .filter(|(status, _)| !status.is_empty() && status.bytes().all(|b| b.is_ascii_digit()))
@@ -521,11 +579,126 @@ pub fn provider_error_detail(text: &str) -> Option<String> {
         return None;
     }
     Some(if clean.chars().count() > PROVIDER_DETAIL_CHARS {
+        // The cut falls between words, so no word shows half.
         let cut: String = clean.chars().take(PROVIDER_DETAIL_CHARS - 1).collect();
+        let whole = clean
+            .chars()
+            .nth(PROVIDER_DETAIL_CHARS - 1)
+            .is_some_and(char::is_whitespace);
+        let cut = match cut.rfind(char::is_whitespace) {
+            Some(at) if !whole => &cut[..at],
+            _ => cut.as_str(),
+        };
         format!("{}…", cut.trim_end())
     } else {
         clean.to_owned()
     })
+}
+
+/// Whether a provider's refusal says the server takes no tool calls: vLLM
+/// started without `--enable-auto-tool-choice` and `--tool-call-parser`
+/// answers 400 to any request with tools, and Ollama names a model that
+/// does not support tools.
+pub fn refuses_tool_calls(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    [
+        "--enable-auto-tool-choice",
+        "--tool-call-parser",
+        "does not support tools",
+        "does not support tool calling",
+        "tool calling is not supported",
+        "tools are not supported",
+    ]
+    .iter()
+    .any(|sign| text.contains(sign))
+}
+
+/// The sentence a run carries when the endpoint `provider` refused tool
+/// calls, under its name when the state root at `state` names it.
+fn tool_calls_refused_detail(state: Option<&Path>, provider: Option<&str>) -> String {
+    let name = provider.map_or_else(
+        || "The server".to_owned(),
+        |provider| endpoint_name(state, provider),
+    );
+    format!(
+        "{name} does not accept tool calls. Turn on tool calling on the server (for vLLM: --enable-auto-tool-choice --tool-call-parser <parser>) or turn off tools for this endpoint in Settings → Models."
+    )
+}
+
+/// The name the record at `state` gives the endpoint `provider`, else its id.
+fn endpoint_name(state: Option<&Path>, provider: &str) -> String {
+    state
+        .and_then(|state| {
+            crate::models::pi_models::read_record(&crate::state_root::agent_directory(state)).ok()
+        })
+        .and_then(|record| {
+            record
+                .get("names")
+                .and_then(|names| names.get(provider))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| provider.to_owned())
+}
+
+/// The sentence a run carries when the runtime's `secret get` answered no
+/// key for the endpoint `provider`, under its name when the state root at
+/// `state` names it. Pi drops the command's exit status, so the stale-key
+/// mark the runtime keeps under `state` tells a stale key from a refusal: a
+/// stale key never comes back, and the person enters it again.
+fn key_failure_detail(state: Option<&Path>, provider: &str) -> String {
+    let name = endpoint_name(state, provider);
+    if state.is_some_and(|state| crate::state_root::endpoint_key_stale(state, provider)) {
+        format!(
+            "The saved key for {name} is out of date. Enter the key again in Settings → Models, then send the message again."
+        )
+    } else {
+        format!(
+            "The keychain refused the key for {name}. Answer its prompt if one is open, or choose Try again in Settings → Machines, then send the message again."
+        )
+    }
+}
+
+/// The provider whose key Pi failed to read through the runtime's
+/// `secret get` command, from Pi's error, which names the command. Pi wraps
+/// the sentence, as in `API key auth failed for provider <id>: Failed to
+/// resolve API key for provider "<id>" from shell command: "<runtime>"
+/// secret get <id>`, so the sentence counts wherever it stands. The runtime
+/// answers that command from the keychain, so the failure is the keychain's
+/// refusal or a prompt still open, and the command text stays out of the
+/// reply. A command the user wrote keeps Pi's own sentence.
+fn refused_key_provider(text: &str) -> Option<&str> {
+    const RESOLVE: &str = "Failed to resolve API key for provider \"";
+    let (_, rest) = text.split_once(RESOLVE)?;
+    let (provider, command) = rest.split_once('"')?;
+    if provider.is_empty()
+        || !provider
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        return None;
+    }
+    let command = command.strip_prefix(" from shell command: ")?;
+    let (program, arguments) = match command.strip_prefix('"') {
+        Some(quoted) => quoted.split_once('"')?,
+        None => command.split_once(' ')?,
+    };
+    let name = program.rsplit(['/', '\\']).next()?;
+    if !matches!(name, "muniment-runtime" | "muniment-runtime.exe") {
+        return None;
+    }
+    let after = arguments
+        .trim_start()
+        .strip_prefix("secret get ")?
+        .strip_prefix(provider)?;
+    // A timeout or an exit status may follow the command, never more of the id.
+    after
+        .chars()
+        .next()
+        .is_none_or(|next| !(next.is_ascii_alphanumeric() || matches!(next, '-' | '_' | '.')))
+        .then_some(provider)
 }
 
 /// Reads the token counts of a compaction result: `tokensBefore` and, when Pi
@@ -730,6 +903,9 @@ pub struct PiRunAdapter {
     /// A compaction outcome that waits for the session file to be known.
     compaction: Mutex<Option<crate::engine::CompactionOutcome>>,
     pending_terminal: Mutex<Option<PiChatEvent>>,
+    /// The messages the user sent during this turn that Pi took, in order,
+    /// until the run's coordinator journals them.
+    steered: Mutex<Vec<String>>,
 }
 
 impl PiRunAdapter {
@@ -796,6 +972,7 @@ impl PiRunAdapter {
             session: Mutex::new(None),
             compaction: Mutex::new(None),
             pending_terminal: Mutex::new(None),
+            steered: Mutex::new(Vec::new()),
             first_event_deadline: Mutex::new(Some(deadline)),
         };
         let response = std::thread::scope(|scope| {
@@ -890,6 +1067,7 @@ impl PiRunAdapter {
             session: Mutex::new(None),
             compaction: Mutex::new(None),
             pending_terminal: Mutex::new(None),
+            steered: Mutex::new(Vec::new()),
             first_event_deadline: Mutex::new(None),
         };
         // A pre-correlated frame reaches the subscribers, so the answer
@@ -1039,6 +1217,13 @@ impl PiRunAdapter {
         Err("Pi cancellation did not finish".into())
     }
 
+    /// Stops Pi's waiting retry, so the failure it retried ends the turn.
+    pub fn stop_retry(&self, transport: &PiRpcTransport) -> Result<(), String> {
+        transport
+            .call(json!({"type": "abort_retry"}), Duration::from_secs(2))
+            .map(|_| ())
+    }
+
     /// Queues a message for delivery during the active turn. Success only
     /// confirms that Pi queued it; stream completion continues through `next`.
     pub fn steer(
@@ -1052,6 +1237,24 @@ impl PiRunAdapter {
             .call(command.into_value(), timeout)
             .map_err(|_| QUEUE_COMMAND_FAILED.to_string())?;
         require_queue_ack(&response, "steer")
+    }
+
+    /// Keeps a message Pi took during this turn for the run's journal.
+    pub fn record_steer(&self, message: &str) {
+        self.steered
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(message.to_owned());
+    }
+
+    /// The messages Pi took since the last call, oldest first.
+    pub fn take_steered(&self) -> Vec<String> {
+        std::mem::take(
+            &mut *self
+                .steered
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
     }
 
     /// Queues a message for delivery after the active turn finishes.
@@ -1341,6 +1544,7 @@ mod tests {
             session: Mutex::new(None),
             compaction: Mutex::new(None),
             pending_terminal: Mutex::new(None),
+            steered: Mutex::new(Vec::new()),
             first_event_deadline: Mutex::new(Some(Instant::now() + Duration::from_secs(1))),
         };
         drop(sender);
@@ -1363,6 +1567,7 @@ mod tests {
                 session: Mutex::new(None),
                 compaction: Mutex::new(None),
                 pending_terminal: Mutex::new(None),
+                steered: Mutex::new(Vec::new()),
                 first_event_deadline: Mutex::new(Some(Instant::now() + timeout)),
             },
         )
@@ -1849,6 +2054,134 @@ mod tests {
     }
 
     #[test]
+    fn a_refused_endpoint_key_reads_as_the_keychain_refusal_without_the_command() {
+        // Pi's errorMessage for a declined key and for the first send while
+        // the prompt is open: the command exits with the refused or the
+        // pending status, and Pi names the command either way.
+        let live = r#"API key auth failed for provider custom-live28: Failed to resolve API key for provider "custom-live28" from shell command: "/Applications/muniment.app/Contents/Library/LaunchServices/muniment-runtime" secret get custom-live28"#;
+        let detail = provider_error_detail(live).unwrap();
+        assert_eq!(
+            detail,
+            "The keychain refused the key for custom-live28. Answer its prompt if one is open, or choose Try again in Settings → Machines, then send the message again."
+        );
+        assert!(!detail.contains("muniment-runtime") && !detail.contains("secret get"));
+        let event = parse_frame(&json!({"type": "agent_end", "messages": [
+            {"role": "assistant", "stopReason": "error", "errorMessage": live}
+        ]}))
+        .unwrap();
+        assert_eq!(event, PiChatEvent::Failed(Some(detail)));
+        for error in [
+            // Pi's inner sentence alone, and with a timeout after the command.
+            r#"Failed to resolve API key for provider "custom-live27" from shell command: "/Applications/muniment.app/Contents/MacOS/muniment-runtime" secret get custom-live27"#,
+            r#"API key auth failed for provider custom-live27: Failed to resolve API key for provider "custom-live27" from shell command: "/Applications/muniment.app/Contents/Library/LaunchServices/muniment-runtime" secret get custom-live27: Command timed out"#,
+            r#"API key auth failed for provider custom-live27: Failed to resolve API key for provider "custom-live27" from shell command: "C:\Program Files\Muniment\muniment-runtime.exe" secret get custom-live27"#,
+        ] {
+            let detail = provider_error_detail(error).unwrap();
+            assert!(
+                detail.starts_with("The keychain refused the key for custom-live27."),
+                "{error}"
+            );
+        }
+        // A command the user wrote, another program's `secret get`, or a key
+        // for another provider keeps Pi's own sentence.
+        for own in [
+            r#"API key auth failed for provider custom-own: Failed to resolve API key for provider "custom-own" from shell command: op read key"#,
+            r#"API key auth failed for provider custom-own: Failed to resolve API key for provider "custom-own" from shell command: "/usr/local/bin/vault" secret get custom-own"#,
+            r#"API key auth failed for provider custom-own: Failed to resolve API key for provider "custom-own" from shell command: "/opt/muniment-runtime" secret get custom-other"#,
+            r#"API key auth failed for provider custom-own: Failed to resolve API key for provider "custom-own" from shell command: "/opt/muniment-runtime" secret get custom-own-two"#,
+        ] {
+            assert!(
+                provider_error_detail(own)
+                    .unwrap()
+                    .contains("Failed to resolve API key"),
+                "{own}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stale_endpoint_key_reads_as_out_of_date_under_the_endpoint_name() {
+        let state = std::env::temp_dir().join(format!(
+            "muniment-stale-key-detail-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let agent = crate::state_root::agent_directory(&state);
+        std::fs::create_dir_all(&agent).unwrap();
+        std::fs::write(
+            agent.join(crate::models::pi_models::RECORD_FILE),
+            r#"{"names":{"custom-live30":"Live30"}}"#,
+        )
+        .unwrap();
+        // A refusal names the endpoint by its name.
+        assert_eq!(
+            key_failure_detail(Some(&state), "custom-live30"),
+            "The keychain refused the key for Live30. Answer its prompt if one is open, or choose Try again in Settings → Machines, then send the message again."
+        );
+        // A stale key asks for the key again in Models, and never for a retry.
+        let marks = crate::state_root::stale_endpoint_keys(&state);
+        std::fs::create_dir_all(&marks).unwrap();
+        std::fs::write(marks.join("custom-live30"), b"").unwrap();
+        let stale = key_failure_detail(Some(&state), "custom-live30");
+        assert_eq!(
+            stale,
+            "The saved key for Live30 is out of date. Enter the key again in Settings → Models, then send the message again."
+        );
+        assert!(!stale.contains("Machines") && !stale.contains("custom-live30"));
+        // An endpoint with no name reads by its id.
+        std::fs::write(marks.join("custom-unnamed"), b"").unwrap();
+        assert!(key_failure_detail(Some(&state), "custom-unnamed")
+            .starts_with("The saved key for custom-unnamed is out of date."));
+        assert!(key_failure_detail(None, "custom-live30")
+            .starts_with("The keychain refused the key for custom-live30."));
+        let _ = std::fs::remove_dir_all(state);
+    }
+
+    #[test]
+    fn a_server_without_tool_calling_reads_as_a_plain_sentence_under_its_name() {
+        let state = std::env::temp_dir().join(format!(
+            "muniment-tool-calls-detail-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let agent = crate::state_root::agent_directory(&state);
+        std::fs::create_dir_all(&agent).unwrap();
+        std::fs::write(
+            agent.join(crate::models::pi_models::RECORD_FILE),
+            r#"{"names":{"custom-do-test":"DO Test"}}"#,
+        )
+        .unwrap();
+        // vLLM's two refusals, Pi's wording of them, and Ollama's.
+        for error in [
+            r#"400 "auto" tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set"#,
+            r#"400: {"object":"error","message":"\"auto\" tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set","type":"BadRequestError","param":null,"code":400}"#,
+            r#"400 tool_choice=function "x" requires --tool-call-parser to be set"#,
+            "registry.ollama.ai/library/gemma:2b does not support tools",
+        ] {
+            assert!(refuses_tool_calls(error), "{error}");
+        }
+        assert!(!refuses_tool_calls("400 model gone"));
+        assert!(!refuses_tool_calls(
+            "This model's maximum context length is 32768 tokens"
+        ));
+        assert_eq!(
+            tool_calls_refused_detail(Some(&state), Some("custom-do-test")),
+            "DO Test does not accept tool calls. Turn on tool calling on the server (for vLLM: --enable-auto-tool-choice --tool-call-parser <parser>) or turn off tools for this endpoint in Settings → Models."
+        );
+        assert!(tool_calls_refused_detail(None, None)
+            .starts_with("The server does not accept tool calls."));
+        // The run fails with the sentence, never with vLLM's own text.
+        let event = parse_frame(&json!({"type": "agent_end", "messages": [{
+            "role": "assistant", "stopReason": "error", "provider": "custom-do-test",
+            "errorMessage": r#"400 "auto" tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set"#
+        }]}))
+        .unwrap();
+        let PiChatEvent::Failed(Some(detail)) = event else {
+            panic!("{event:?}");
+        };
+        assert!(detail.contains("does not accept tool calls") && !detail.contains("\"auto\""));
+        let _ = std::fs::remove_dir_all(state);
+    }
+
+    #[test]
     fn a_provider_error_crosses_as_its_cleaned_sentence() {
         assert_eq!(
             parse_frame(&json!({"type":"agent_end", "messages":[{
@@ -1876,6 +2209,8 @@ mod tests {
         let long = provider_error_detail(&"word ".repeat(200)).unwrap();
         assert_eq!(long.chars().count(), PROVIDER_DETAIL_CHARS);
         assert!(long.ends_with('…'));
+        let words = provider_error_detail(&"abcdefg ".repeat(60)).unwrap();
+        assert!(words.ends_with("abcdefg…"), "{words}");
         assert_eq!(provider_error_detail("   "), None);
     }
 

@@ -15,8 +15,9 @@ pub use jsonrpc::{
 };
 pub use pi::{
     parse_pi_timeout, pi_readiness_probe, pi_sidecar_config, pi_startup_timeout,
-    validate_pi_session, PiRpcTransport, PiRpcWiring, PiSessionLocator, DEFAULT_PI_TIMEOUT,
-    PI_FIRST_EVENT_TIMEOUT_ENV, PI_NPM_PACKAGE, PI_STARTUP_TIMEOUT_ENV, PI_VERSION,
+    retarget_pi_session, validate_pi_session, PiRpcTransport, PiRpcWiring, PiSessionLocator,
+    DEFAULT_PI_TIMEOUT, PI_FIRST_EVENT_TIMEOUT_ENV, PI_NPM_PACKAGE, PI_STARTUP_TIMEOUT_ENV,
+    PI_VERSION,
 };
 pub use supervisor::{
     ProbeOutcome, RestartPolicy, SidecarConfig, SidecarEvent, SidecarEventCause, SidecarStatus,

@@ -18,31 +18,37 @@
   import UsageBreakdown from './UsageBreakdown.svelte'
   import { accountCache } from '../lib/account-cache.js'
   import { LOCAL_RUNTIME_ID } from '../runtimes/runtimes.js'
-  import { BREAKDOWNS, USAGE_RANGES, USAGE_VIEWS, machineRefs, providerOptions, readUsage, totalTiles } from './usage.js'
+  import { keepUsageView, usageView } from './usage-view.js'
+  import { BREAKDOWNS, USAGE_RANGES, USAGE_VIEWS, failedNote, machineRefs, offlineMembers, providerOptions, readUsage, totalTiles } from './usage.js'
 
-  let { tauri, runtimeList = null, folderAccess = null, onconnect = null } = $props()
-  let view = $state('limits')
-  let range = $state('7d')
-  let machine = $state('')
-  let provider = $state('')
-  let breakdown = $state('model')
+  let { tauri, runtimeList = null, folderAccess = null, inventory = null, onconnect = null } = $props()
+  // The view starts where the session left it and follows every change.
+  const start = usageView()
+  let view = $state(start.view)
+  let range = $state(start.range)
+  let machine = $state(start.machine)
+  let provider = $state(start.provider)
+  let breakdown = $state(start.breakdown)
+  $effect(() => keepUsageView({ view, range, machine, provider, breakdown }))
   let summary = $state(null)
   let loading = $state(false)
   let error = $state('')
   let now = $state(Date.now())
   const machines = $derived(machineRefs(runtimeList))
-  const asked = $derived(machine ? machines.filter((entry) => entry.id === machine) : machines)
-  const machineOptions = $derived([{ value: '', label: 'All machines' }, ...machines.map((entry) => ({ value: entry.id, label: entry.name }))])
+  // A machine filter still asks every machine that answers: a machine that
+  // gives no answer counts from the copies the others hold of its runs.
+  const members = $derived(offlineMembers(runtimeList))
+  const machineOptions = $derived([{ value: '', label: 'All machines' }, ...machines.map((entry) => ({ value: entry.id, label: entry.name })), ...members.map((entry) => ({ value: entry.id, label: `${entry.name} (offline)` }))])
   const failed = $derived((summary?.machines ?? []).filter((entry) => entry.state !== 'ok'))
   const rows = $derived(breakdown === 'machine' ? summary?.breakdown?.machine ?? [] : summary?.breakdown?.[breakdown] ?? [])
-  const breakdowns = $derived(machines.length > 1 ? BREAKDOWNS : BREAKDOWNS.filter((entry) => entry.value !== 'machine'))
+  const breakdowns = $derived(machines.length + members.length > 1 ? BREAKDOWNS : BREAKDOWNS.filter((entry) => entry.value !== 'machine'))
   let request = 0
 
   async function refresh() {
     const ticket = ++request
     loading = true
     try {
-      const next = await readUsage(tauri, asked, { range, provider: provider || null })
+      const next = await readUsage(tauri, machines, { range, provider: provider || null, machine, members })
       if (ticket !== request) return
       summary = next
       error = ''
@@ -60,7 +66,19 @@
     await refresh()
   }
 
-  $effect(() => { void range; void provider; void asked.map((entry) => entry.id).join(); void refresh() })
+  $effect(() => { void range; void provider; void machine; void machines.map((entry) => entry.id).join(); void refresh() })
+  // A filter keeps one line, and a name its width clips ends in an ellipsis
+  // with the whole name on hover. The action sets the attribute, so its
+  // styles name it as global, or the compiler drops them as unused.
+  function fullName(node) {
+    const hover = () => {
+      const label = node.querySelector('button[aria-haspopup] > span')
+      if (label && label.scrollWidth > label.clientWidth) node.dataset.tooltip = label.textContent
+      else delete node.dataset.tooltip
+    }
+    node.addEventListener('pointerenter', hover)
+    return { destroy: () => node.removeEventListener('pointerenter', hover) }
+  }
   onMount(() => {
     const poll = () => { if (!document.hidden) void refresh() }
     const timer = setInterval(poll, 60_000)
@@ -75,9 +93,9 @@
       <div class="crumbs">
         <h2>Usage</h2>
         <span class="sep" aria-hidden="true">›</span>
-        <span class="filter"><ChoiceField label="Machine" hideLabel inline={false} value={machine} options={machineOptions} onchange={(value) => { machine = value; if (breakdown === 'machine' && value) breakdown = 'model' }} /></span>
+        <span class="filter" use:fullName><ChoiceField label="Machine" hideLabel inline={false} value={machine} options={machineOptions} onchange={(value) => { machine = value; if (breakdown === 'machine' && value) breakdown = 'model' }} /></span>
         <span class="sep" aria-hidden="true">›</span>
-        <span class="filter"><ChoiceField label="Provider" hideLabel inline={false} value={provider} options={providerOptions(summary)} onchange={(value) => { provider = value }} /></span>
+        <span class="filter" use:fullName><ChoiceField label="Provider" hideLabel inline={false} value={provider} options={providerOptions(summary, inventory)} onchange={(value) => { provider = value }} /></span>
       </div>
       <div class="controls">
         <SegmentedField label="Usage view" hideLabel value={view} options={USAGE_VIEWS} onchange={(value) => { view = value }} />
@@ -87,7 +105,7 @@
     </div>
 
     {#if error}<p class="note error" role="alert">{error}</p>{/if}
-    {#each failed as entry (entry.id)}<p class="note" role="status"><LucideIcon name="globe-off" size={14} />{entry.id === LOCAL_RUNTIME_ID && folderAccess ? folderAccess.message : `${entry.name} did not answer. The totals leave it out.`}</p>{/each}
+    {#each failed as entry (entry.id)}<p class="note" role="status"><LucideIcon name="globe-off" size={14} />{entry.id === LOCAL_RUNTIME_ID && folderAccess ? folderAccess.message : failedNote(entry, summary)}</p>{/each}
 
     {#if !summary && !error}
       <p class="note" role="status">Reading usage…</p>
@@ -107,11 +125,11 @@
       </dl>
       {#if view === 'cost'}<p class="estimate">API estimate from each model's list price. Subscriptions bill differently.<InfoTip text="Each finished run's receipt carries the catalog price of its tokens. A run that failed or stopped keeps no receipt." label="About the estimate" /></p>{/if}
       <Group heading={view === 'cost' ? 'Cost by provider' : 'Tokens by provider'} plain>
-        {#if summary.totals.runs}<UsageChart series={summary.series} bucket={summary.bucket} {view} />{:else}<p class="note">No finished runs in this range.</p>{/if}
+        {#if summary.totals.runs}<UsageChart series={summary.series} bucket={summary.bucket} {view} {inventory} />{:else}<p class="note">No finished runs in this range.</p>{/if}
       </Group>
       <Group heading="Breakdown" plain>
         {#snippet actions()}<SegmentedField label="Breakdown" hideLabel value={breakdown} options={breakdowns} onchange={(value) => { breakdown = value }} />{/snippet}
-        <UsageBreakdown {rows} {breakdown} {view} />
+        <UsageBreakdown {rows} {breakdown} {view} {inventory} />
       </Group>
     {/if}
   </PanelPage>
@@ -123,7 +141,13 @@
   .crumbs, .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
   h2 { margin: 0; color: var(--ink); font: 600 var(--text-17) var(--font-heading, var(--font-human)); }
   .sep { color: var(--muted); }
-  .filter { width: 170px; }
+  .filter { position: relative; width: 170px; }
+  .filter :global(button[aria-haspopup] > span) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* The open menu widens past its filter to keep each name on one line, and a name past its cap ends in an ellipsis. */
+  .filter :global([role="menu"]) { right: auto; min-width: 100%; width: max-content; max-width: 320px; box-sizing: border-box; }
+  .filter :global([role="menuitemradio"] > span) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .filter:global([data-tooltip])::after { content: attr(data-tooltip); position: absolute; z-index: 4; left: 0; top: calc(100% + 6px); padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); font: var(--text-12) var(--font-human); white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity 80ms ease; }
+  .filter:global([data-tooltip]):hover:not(:has([aria-expanded="true"]))::after { opacity: 1; transition-delay: 350ms; }
   .note { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--muted); font-size: var(--text-13); }
   .note.error { color: var(--danger); }
   .limits { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr)); align-items: start; gap: 12px; }

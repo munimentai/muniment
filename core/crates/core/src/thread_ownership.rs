@@ -62,7 +62,7 @@ mod tests {
     use uuid::Uuid;
 
     fn journal_file() -> PathBuf {
-        std::env::temp_dir().join(format!(
+        crate::state_root::test_root().join(format!(
             "muniment-thread-ownership-{}.sqlite3",
             Uuid::new_v4()
         ))

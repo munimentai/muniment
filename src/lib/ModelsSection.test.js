@@ -48,10 +48,17 @@ it('offers the servers found on this computer under Connect account and connects
   const found = await screen.findByRole('region', { name: 'Found on this computer' })
   expect(found).toHaveTextContent('oMLX')
   expect(found).not.toHaveTextContent('Connected one')
+  // macOS autocorrect never changes a provider query, so the first click picks a result.
+  for (const [name, value] of [['spellcheck', 'false'], ['autocorrect', 'off'], ['autocapitalize', 'off'], ['autocomplete', 'off']]) expect(screen.getByRole('searchbox', { name: 'Search providers' })).toHaveAttribute(name, value)
   // A server without a key file opens the custom endpoint form with its name and address.
   await fireEvent.click(within(found).getByRole('button', { name: /LM Studio/ }))
   expect(screen.getByLabelText('Name')).toHaveValue('LM Studio')
   expect(screen.getByLabelText('Server URL')).toHaveValue('http://127.0.0.1:1234/v1')
+  // macOS autocorrect and spelling never change a model id, an address or a name as it is typed.
+  for (const field of ['Name', 'Server URL', 'Models, one per line']) {
+    for (const [name, value] of [['spellcheck', 'false'], ['autocorrect', 'off'], ['autocapitalize', 'off']]) expect(screen.getByLabelText(field)).toHaveAttribute(name, value)
+  }
+  expect(screen.getByLabelText('Models, one per line')).toHaveAttribute('autocomplete', 'off')
   await fireEvent.click(screen.getByRole('button', { name: 'Back' }))
   await fireEvent.click(within(await screen.findByRole('region', { name: 'Found on this computer' })).getByRole('button', { name: /oMLX/ }))
   expect(tauri.invoke).toHaveBeenCalledWith('onboarding_connect_server', { id: 'omlx', baseUrl: 'http://127.0.0.1:8000/v1', key: null, keyFromFile: true })
@@ -78,7 +85,12 @@ it('shows each Anthropic account Claude Code signed in to as its own card, and a
   // The accounts are the cards. No Claude Code connection row stands over them.
   expect(within(group).queryByTestId('provider-connection')).not.toBeInTheDocument()
   await fireEvent.click(within(group).getByRole('button', { name: 'Disconnect home@example.test' }))
-  expect(tauri.invoke).toHaveBeenCalledWith('model_router_remove_account', { id: 'a2' })
+  // Disconnect asks once, names the provider, since one email can sign in to
+  // several, and removes nothing until the user confirms.
+  const dialog = await screen.findByRole('dialog', { name: 'Disconnect the Anthropic account home@example.test?' })
+  expect(tauri.invoke).not.toHaveBeenCalledWith('model_router_remove_account', expect.anything())
+  await fireEvent.click(within(dialog).getByRole('button', { name: 'Disconnect' }))
+  await waitFor(() => expect(tauri.invoke).toHaveBeenCalledWith('model_router_remove_account', { id: 'a2' }))
   await fireEvent.click(within(group).getByRole('button', { name: 'Add another Claude Pro or Max account' }))
   expect(tauri.invoke).toHaveBeenCalledWith('model_router_subscription_start', { provider: 'anthropic', runtime: 'local' })
 })
@@ -104,8 +116,146 @@ it('lists the Anthropic accounts on its connect page, each with Disconnect, and 
   await fireEvent.click(screen.getByRole('button', { name: 'Add another account' }))
   expect(tauri.invoke).toHaveBeenCalledWith('local_mode_account_login_start', { provider: 'anthropic', runtime: 'box' })
   await fireEvent.click(screen.getByRole('button', { name: 'Disconnect work@example.test' }))
-  expect(tauri.invoke).toHaveBeenCalledWith('model_router_remove_account', { id: 'a1' })
+  await fireEvent.click(within(await screen.findByRole('dialog', { name: 'Disconnect the Anthropic account work@example.test?' })).getByRole('button', { name: 'Disconnect' }))
+  await waitFor(() => expect(tauri.invoke).toHaveBeenCalledWith('model_router_remove_account', { id: 'a1' }))
   await waitFor(() => expect(screen.queryByText('work@example.test')).toBeNull())
+})
+
+it('offers only a fresh sign-in after a cancelled Claude Code sign-in, never its stale page', async () => {
+  const router = { families: [{ id: 'anthropic', name: 'Anthropic' }], subscriptions: [{ provider: 'anthropic', family: 'anthropic', label: 'Claude Pro or Max' }], accounts: [claudeAccount('a1', 'work@example.test')] }
+  const claude = { providers: [{ id: 'claude-bridge', name: 'Anthropic', source: 'account', base_url: null, models: [] }], hidden: [], shown: [], default_provider: null, default_model: null }
+  const tauri = { invoke: vi.fn(async (command) => {
+    if (command === 'local_mode_provider_inventory') return claude
+    if (command === 'model_router_settings') return router
+    return null
+  }) }
+  let emit
+  const listen = async (_event, handler) => { emit = handler; return () => {} }
+  render(ModelsSection, { props: { tauri, listen, inventory: claude, connect: 'anthropic' } })
+  await fireEvent.click(await screen.findByRole('button', { name: 'Add another account' }))
+  await waitFor(() => expect(emit).toBeTypeOf('function'))
+  emit({ payload: { provider: 'anthropic', stage: 'event', event: { type: 'auth_url', url: 'https://claude.example/oauth' } } })
+  expect(await screen.findByRole('button', { name: 'Open again' })).toBeInTheDocument()
+  // The browser tab closed, and the sign-in ended.
+  emit({ payload: { provider: 'anthropic', stage: 'cancelled' } })
+  expect(await screen.findByText('The sign-in was cancelled.')).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Open again' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Copy sign-in link' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Open the sign-in page' })).toBeNull()
+  tauri.invoke.mockClear()
+  await fireEvent.click(screen.getByRole('button', { name: 'Sign in again' }))
+  expect(tauri.invoke).toHaveBeenCalledWith('local_mode_account_login_start', { provider: 'anthropic', runtime: 'local' })
+})
+
+it('disconnects a provider connection only after the dialog confirms it, and Cancel keeps it', async () => {
+  const keyed = { providers: [{ id: 'openai', name: 'OpenAI', source: 'key', base_url: null, models: [{ id: 'gpt-5.5' }] }], hidden: [], shown: [], default_provider: null, default_model: null }
+  const tauri = { invoke: vi.fn(async (command) => {
+    if (command === 'local_mode_provider_inventory') return keyed
+    if (command === 'model_router_settings') return { families: [], subscriptions: [], accounts: [] }
+    return null
+  }) }
+  render(ModelsSection, { props: { tauri, listen: async () => () => {}, inventory: keyed } })
+  await fireEvent.click(await screen.findByRole('button', { name: 'Disconnect OpenAI' }))
+  const dialog = await screen.findByRole('dialog', { name: 'Disconnect OpenAI?' })
+  expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveFocus()
+  await fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  expect(tauri.invoke).not.toHaveBeenCalledWith('local_mode_disconnect_provider', expect.anything())
+  await fireEvent.click(screen.getByRole('button', { name: 'Disconnect OpenAI' }))
+  await fireEvent.click(within(await screen.findByRole('dialog', { name: 'Disconnect OpenAI?' })).getByRole('button', { name: 'Disconnect' }))
+  await waitFor(() => expect(tauri.invoke).toHaveBeenCalledWith('local_mode_disconnect_provider', { provider: 'openai' }))
+})
+
+it('says where an endpoint key stays when the keychain keeps it after a disconnect', async () => {
+  const keyed = { providers: [{ id: 'custom-live27', name: 'Live27', source: 'endpoint', base_url: 'https://live27.example/v1', models: [{ id: 'm' }] }], hidden: [], shown: [], default_provider: null, default_model: null }
+  const kept = 'Its key stays in the keychain. To remove it, open Keychain Access, search for the endpoint service, and delete the item for custom-live27.'
+  const tauri = { invoke: vi.fn(async (command) => {
+    if (command === 'local_mode_provider_inventory') return keyed
+    if (command === 'model_router_settings') return { families: [], subscriptions: [], accounts: [] }
+    if (command === 'local_mode_disconnect_provider') return kept
+    return null
+  }) }
+  render(ModelsSection, { props: { tauri, listen: async () => () => {}, inventory: keyed } })
+  await fireEvent.click(await screen.findByRole('button', { name: 'Disconnect Live27' }))
+  await fireEvent.click(within(await screen.findByRole('dialog', { name: 'Disconnect Live27?' })).getByRole('button', { name: 'Disconnect' }))
+  expect(await screen.findByText(`Live27 is disconnected. ${kept}`)).toBeInTheDocument()
+})
+
+it('marks an endpoint row Disconnecting… until the runtime answers, then drops it before it says so', async () => {
+  const keyed = { providers: [{ id: 'custom-live29', name: 'Live29', source: 'custom', base_url: 'https://live29.example/v1', models: [{ id: 'm' }] }], hidden: [], shown: [], default_provider: null, default_model: null }
+  let answer
+  let gone = false
+  const tauri = { invoke: vi.fn(async (command) => {
+    // The reread after the disconnect never answers, so the row leaves on the runtime's answer alone.
+    if (command === 'local_mode_provider_inventory') return gone ? new Promise(() => {}) : keyed
+    if (command === 'model_router_settings') return { families: [], subscriptions: [], accounts: [] }
+    if (command === 'local_mode_disconnect_provider') return new Promise((resolve) => { answer = resolve })
+    return null
+  }) }
+  render(ModelsSection, { props: { tauri, listen: async () => () => {}, inventory: keyed } })
+  await fireEvent.click(await screen.findByRole('button', { name: 'Disconnect Live29' }))
+  await fireEvent.click(within(await screen.findByRole('dialog', { name: 'Disconnect Live29?' })).getByRole('button', { name: 'Disconnect' }))
+  const row = screen.getByRole('region', { name: 'Live29' })
+  expect(await within(row).findByText('Disconnecting…')).toBeInTheDocument()
+  expect(within(row).getByRole('button', { name: 'Disconnect Live29' })).toBeDisabled()
+  expect(within(row).getByRole('button', { name: 'Edit Live29' })).toBeDisabled()
+  expect(screen.queryByText('Live29 is disconnected.')).toBeNull()
+  gone = true
+  answer(null)
+  expect(await screen.findByText('Live29 is disconnected.')).toBeInTheDocument()
+  expect(screen.queryByRole('region', { name: 'Live29' })).toBeNull()
+})
+
+it('says on the endpoint card that the key stays in memory when the keychain refused it', async () => {
+  const notice = 'The key is kept until Muniment quits; the keychain refused it.'
+  const keyed = { providers: [
+    { id: 'custom-live28', name: 'Live28', source: 'custom', base_url: 'https://live28.example/v1', models: [{ id: 'm' }], key_notice: notice },
+    { id: 'custom-other', name: 'Other', source: 'custom', base_url: 'https://other.example/v1', models: [{ id: 'm' }] }
+  ], hidden: [], shown: [], default_provider: null, default_model: null }
+  const tauri = { invoke: vi.fn(async (command) => {
+    if (command === 'local_mode_provider_inventory') return keyed
+    if (command === 'model_router_settings') return { families: [], subscriptions: [], accounts: [] }
+    return null
+  }) }
+  render(ModelsSection, { props: { tauri, listen: async () => () => {}, inventory: keyed } })
+  const card = await screen.findByRole('region', { name: 'Live28' })
+  expect(within(card).getByText(notice)).toBeInTheDocument()
+  expect(within(screen.getByRole('region', { name: 'Other' })).queryByText(notice)).not.toBeInTheDocument()
+})
+
+it('says on the endpoint card that its server did not answer and that its saved models stay', () => {
+  const down = { providers: [
+    { id: 'custom-dead', name: 'Dead box', source: 'custom', base_url: 'http://192.0.2.1:8000/v1', unreachable: true, models: [{ id: 'kept' }] },
+    { id: 'custom-other', name: 'Other', source: 'custom', base_url: 'https://other.example/v1', models: [{ id: 'm' }] }
+  ], hidden: [], shown: [], default_provider: null, default_model: null }
+  const tauri = { invoke: vi.fn(async (command) => {
+    if (command === 'local_mode_provider_inventory') return down
+    if (command === 'model_router_settings') return { families: [], subscriptions: [], accounts: [] }
+    return null
+  }) }
+  render(ModelsSection, { props: { tauri, listen: async () => () => {}, inventory: down } })
+  const card = screen.getByRole('region', { name: 'Dead box' })
+  expect(within(card).getByText('Not answering at 192.0.2.1:8000. Its saved models stay.')).toBeInTheDocument()
+  expect(within(card).getByText('1 model')).toBeInTheDocument()
+  expect(within(screen.getByRole('region', { name: 'Other' })).queryByTestId('endpoint-not-answering')).toBeNull()
+})
+
+it('asks for the key again in the edit form when the saved key is stale', async () => {
+  const keyed = { providers: [
+    { id: 'custom-live30', name: 'Live30', source: 'custom', base_url: 'https://live30.example/v1', models: [{ id: 'm' }], key_notice: 'The keychain holds an older key for this endpoint. Enter the key again.', key_state: 'stale' },
+    { id: 'custom-other', name: 'Other', source: 'custom', base_url: 'https://other.example/v1', models: [{ id: 'm' }] }
+  ], hidden: [], shown: [], default_provider: null, default_model: null }
+  const tauri = { invoke: vi.fn(async (command) => {
+    if (command === 'local_mode_provider_inventory') return keyed
+    if (command === 'model_router_settings') return { families: [], subscriptions: [], accounts: [] }
+    return null
+  }) }
+  render(ModelsSection, { props: { tauri, listen: async () => () => {}, inventory: keyed } })
+  await fireEvent.click(within(await screen.findByRole('region', { name: 'Live30' })).getByRole('button', { name: 'Edit Live30' }))
+  expect(screen.getByLabelText('API key (optional)')).toHaveAttribute('placeholder', 'The saved key is out of date. Enter the key again.')
+  await fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+  await fireEvent.click(within(await screen.findByRole('region', { name: 'Other' })).getByRole('button', { name: 'Edit Other' }))
+  expect(screen.getByLabelText('API key (optional)')).toHaveAttribute('placeholder', 'Leave blank to keep the saved key')
 })
 
 it('draws the stored rows core answers at once while the full read waits, then takes the full read', async () => {
@@ -172,4 +322,106 @@ it('shows a Claude Code connection from before as one row that signs in again as
   await fireEvent.click(within(row).getByRole('button', { name: 'Sign in again' }))
   expect(tauri.invoke).toHaveBeenCalledWith('local_mode_account_login_start', { provider: 'anthropic', runtime: 'local' })
   expect(await screen.findByRole('heading', { name: 'Connect Anthropic' })).toBeInTheDocument()
+})
+
+it('closes the decision-model Disconnect dialog on Cancel and on Escape, and disconnects nothing', async () => {
+  const router = { families: [], subscriptions: [], accounts: [], classifier_connections: [{ id: 'jev', name: 'Jev · TypeSafe API', catalog_id: 'openai', active: true, connection: { kind: 'key' } }] }
+  const tauri = { invoke: vi.fn(async (command) => {
+    if (command === 'local_mode_provider_inventory') return inventory
+    if (command === 'model_router_settings') return router
+    return null
+  }) }
+  render(ModelsSection, { props: { tauri, listen: async () => () => {}, inventory } })
+  const unplug = await screen.findByRole('button', { name: 'Disconnect Jev · TypeSafe API' })
+  await fireEvent.click(unplug)
+  let dialog = await screen.findByRole('dialog', { name: 'Disconnect Jev · TypeSafe API?' })
+  expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveFocus()
+  await fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  // A click leaves focus on the page in WebKit, as here, and focus still returns to the button that asked.
+  expect(unplug).toHaveFocus()
+  document.activeElement.blur()
+  await fireEvent.click(unplug)
+  dialog = await screen.findByRole('dialog')
+  await fireEvent.keyDown(document.activeElement, { key: 'Escape' })
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  expect(unplug).toHaveFocus()
+  expect(tauri.invoke).not.toHaveBeenCalledWith('model_router_disconnect_classifier', expect.anything())
+})
+
+it('fills the Edit form with the endpoint models and keeps them on a save with no change', async () => {
+  const tauri = bridge()
+  const base = tauri.invoke.getMockImplementation()
+  tauri.invoke.mockImplementation(async (command, payload) => command === 'local_mode_store_endpoint' ? 'custom-omlx' : base(command, payload))
+  render(ModelsSection, { props: { tauri, listen: async () => () => {}, inventory } })
+  await fireEvent.click(within(screen.getByRole('region', { name: 'oMLX' })).getByRole('button', { name: 'Edit oMLX' }))
+  expect(screen.getByLabelText('Models, one per line')).toHaveValue('Qwen3.8-27B-4bit\ngemma-4-26b-a4b-it-4bit')
+  await fireEvent.click(screen.getByRole('button', { name: 'Save endpoint' }))
+  await waitFor(() => expect(tauri.invoke).toHaveBeenCalledWith('local_mode_store_endpoint', expect.objectContaining({
+    kind: 'custom', name: 'oMLX', models: ['Qwen3.8-27B-4bit', 'gemma-4-26b-a4b-it-4bit'],
+  })))
+})
+
+it('shows Saving… on a disabled Save while a save waits, then restores the button with the error', async () => {
+  const tauri = bridge()
+  const base = tauri.invoke.getMockImplementation()
+  let refuse
+  tauri.invoke.mockImplementation((command, payload) => command === 'local_mode_store_endpoint'
+    ? new Promise((_, reject) => { refuse = reject })
+    : base(command, payload))
+  render(ModelsSection, { props: { tauri, listen: async () => () => {}, inventory } })
+  await fireEvent.click(within(screen.getByRole('region', { name: 'oMLX' })).getByRole('button', { name: 'Edit oMLX' }))
+  await fireEvent.click(screen.getByRole('button', { name: 'Save endpoint' }))
+  const busy = await screen.findByRole('button', { name: 'Saving…' })
+  expect(busy).toBeDisabled()
+  expect(busy).toHaveAttribute('aria-busy', 'true')
+  expect(screen.queryByRole('button', { name: 'Save endpoint' })).toBeNull()
+  refuse(new Error('Muniment cannot save provider settings. Check folder access, then retry.'))
+  expect(await screen.findByText('Muniment cannot save provider settings. Check folder access, then retry.')).toBeInTheDocument()
+  const save = screen.getByRole('button', { name: 'Save endpoint' })
+  expect(save).toBeEnabled()
+  expect(save).toHaveAttribute('aria-busy', 'false')
+})
+
+it('saves an edited endpoint with its kept models and a model added to the list', async () => {
+  const tauri = bridge()
+  const base = tauri.invoke.getMockImplementation()
+  tauri.invoke.mockImplementation(async (command, payload) => command === 'local_mode_store_endpoint' ? 'custom-omlx' : base(command, payload))
+  render(ModelsSection, { props: { tauri, listen: async () => () => {}, inventory } })
+  await fireEvent.click(within(screen.getByRole('region', { name: 'oMLX' })).getByRole('button', { name: 'Edit oMLX' }))
+  const field = screen.getByLabelText('Models, one per line')
+  await fireEvent.input(field, { target: { value: `${field.value}\nqwen3-coder` } })
+  await fireEvent.click(screen.getByRole('button', { name: 'Save endpoint' }))
+  // Core carries the kept models' limits forward and asks the server for the new one's.
+  await waitFor(() => expect(tauri.invoke).toHaveBeenCalledWith('local_mode_store_endpoint', expect.objectContaining({
+    models: ['Qwen3.8-27B-4bit', 'gemma-4-26b-a4b-it-4bit', 'qwen3-coder'],
+  })))
+})
+
+it('saves a pasted chat completions URL as the server base URL and sends the endpoint tools setting', async () => {
+  const tauri = bridge()
+  const base = tauri.invoke.getMockImplementation()
+  tauri.invoke.mockImplementation(async (command, payload) => command === 'local_mode_store_endpoint' ? 'custom-omlx' : base(command, payload))
+  render(ModelsSection, { props: { tauri, listen: async () => () => {}, inventory } })
+  await fireEvent.click(within(screen.getByRole('region', { name: 'oMLX' })).getByRole('button', { name: 'Edit oMLX' }))
+  const url = screen.getByLabelText('Server URL')
+  await fireEvent.input(url, { target: { value: 'http://host:8000/v1/chat/completions' } })
+  await fireEvent.blur(url)
+  // The field shows the URL that saves.
+  expect(url).toHaveValue('http://host:8000/v1')
+  const tools = screen.getByRole('switch', { name: 'Send tools' })
+  expect(tools).toHaveAttribute('aria-checked', 'true')
+  await fireEvent.click(tools)
+  await fireEvent.click(screen.getByRole('button', { name: 'Save endpoint' }))
+  await waitFor(() => expect(tauri.invoke).toHaveBeenCalledWith('local_mode_store_endpoint', expect.objectContaining({
+    baseUrl: 'http://host:8000/v1', toolsOff: true,
+  })))
+})
+
+it('opens the Edit form of an endpoint whose tools are off with Send tools off', async () => {
+  const tauri = bridge()
+  const off = { ...inventory, providers: inventory.providers.map((provider) => provider.id === 'custom-omlx' ? { ...provider, tools_off: true } : provider) }
+  render(ModelsSection, { props: { tauri, listen: async () => () => {}, inventory: off } })
+  await fireEvent.click(within(screen.getByRole('region', { name: 'oMLX' })).getByRole('button', { name: 'Edit oMLX' }))
+  expect(screen.getByRole('switch', { name: 'Send tools' })).toHaveAttribute('aria-checked', 'false')
 })

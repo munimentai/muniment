@@ -585,6 +585,9 @@ pub struct PiSessionBinding {
 /// The webview-facing chat projection derived from journal events.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ChatProjection {
+    /// When the run started: its `run.started` event's `recorded_at`. The
+    /// live reply time counts from it, and the local receipt times from it.
+    pub started_at: Option<String>,
     pub prompt_accepted: bool,
     pub turn_started: bool,
     pub routing_stage: Option<String>,
@@ -603,6 +606,20 @@ pub struct ChatProjection {
     pub attachments: Vec<ProjectedAttachment>,
     pub recalls: Vec<ProjectedRecall>,
     pub applied_diffs: Vec<ProjectedAppliedDiff>,
+    /// The messages the user sent during the reply, in the order the
+    /// runtime took them.
+    pub steers: Vec<ProjectedSteer>,
+}
+
+/// A message the user sent during the reply. `text_offset` is the reply
+/// text's length in UTF-16 code units when the runtime took it, and
+/// `sent_at` is when the journal recorded it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProjectedSteer {
+    pub text: String,
+    pub text_offset: usize,
+    pub sent_at: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -704,6 +721,11 @@ pub fn project_chat_fragment(events: &[EventEnvelope]) -> Result<ChatProjection,
             "model.stream.delta" => chat.text.push_str(&field(event, "text")?),
             "memory.recalled" => chat.recalls.push(projected_recall(event)?),
             "code.diff.applied" => chat.applied_diffs.push(projected_applied_diff(event)?),
+            super::pi_translation::RUN_STEERED => chat.steers.push(ProjectedSteer {
+                text: field(event, "text")?,
+                text_offset: chat.text.encode_utf16().count(),
+                sent_at: event.recorded_at.clone(),
+            }),
             "tool.effect.started" => chat.tool_activity.push(ToolActivity {
                 text_offset: chat.text.encode_utf16().count(),
                 parent_effect_id: parent_effect(event, &chat.tool_activity)?,
@@ -768,6 +790,7 @@ pub(crate) struct ChatCheckpoint {
     attachments_len: usize,
     recalls_len: usize,
     applied_diffs_len: usize,
+    steers_len: usize,
 }
 
 impl ChatProjector {
@@ -786,6 +809,11 @@ impl ChatProjector {
             .tool_activity
             .iter()
             .map(|activity| activity.display_name.as_deref().unwrap_or_default())
+    }
+
+    /// When the run started, its `run.started` event's `recorded_at`.
+    pub fn started_at(&self) -> Option<&str> {
+        self.chat.started_at.as_deref()
     }
 
     /// The run status after the last applied event.
@@ -823,6 +851,7 @@ impl ChatProjector {
             attachments_len: self.chat.attachments.len(),
             recalls_len: self.chat.recalls.len(),
             applied_diffs_len: self.chat.applied_diffs.len(),
+            steers_len: self.chat.steers.len(),
         }
     }
 
@@ -852,12 +881,14 @@ impl ChatProjector {
         self.chat
             .applied_diffs
             .truncate(checkpoint.applied_diffs_len);
+        self.chat.steers.truncate(checkpoint.steers_len);
     }
 
     pub fn apply(&mut self, event: &EventEnvelope) -> Result<(), ReduceError> {
         self.reducer.apply(event)?;
         match event.event_type.as_str() {
             "run.started" => {
+                self.chat.started_at = Some(event.recorded_at.clone());
                 self.chat.prompt_storage_notice = optional_field(event, "prompt_storage_notice")?;
             }
             "chat.prompt.storage_notice" => {
@@ -887,12 +918,14 @@ impl ChatProjector {
             "model.routing.stage" => {
                 let stage = field(event, "stage")?;
                 // `folder-access` names an operating system consent prompt
-                // the run waits on, and `routing` ends that wait.
+                // the run waits on, and `routing` ends that wait. `retrying:`
+                // names the model call Pi tries again and its server.
                 if matches!(
                     stage.as_str(),
                     "choosing-model" | "waiting-for-account" | "fallback" | "thinking"
                 ) || stage == "folder-access"
                     || stage.starts_with("folder-access:")
+                    || stage.starts_with("retrying:")
                 {
                     self.chat.routing_stage = Some(stage);
                 } else if stage == "routing" {
@@ -907,6 +940,11 @@ impl ChatProjector {
             }
             "memory.recalled" => self.chat.recalls.push(projected_recall(event)?),
             "code.diff.applied" => self.chat.applied_diffs.push(projected_applied_diff(event)?),
+            super::pi_translation::RUN_STEERED => self.chat.steers.push(ProjectedSteer {
+                text: field(event, "text")?,
+                text_offset: self.text_utf16_len,
+                sent_at: event.recorded_at.clone(),
+            }),
             crate::code_diff_journal::DIFF_EVENT_TYPE
             | crate::code_diff_journal::WRITE_PLAN_EVENT_TYPE => {
                 if let Some(effect_id) = event.correlation_id.as_deref() {
@@ -1431,9 +1469,24 @@ mod tests {
     }
 
     #[test]
+    fn the_chat_projection_names_when_the_run_started() {
+        let run_id = Uuid::now_v7().to_string();
+        let mut projector = crate::journal::reducer::ChatProjector::new();
+        assert_eq!(projector.started_at(), None);
+        projector
+            .apply(&envelope(&run_id, 1, "run.started", json!({})))
+            .unwrap();
+        assert_eq!(projector.started_at(), Some("2026-08-05T00:00:00Z"));
+        assert_eq!(
+            projector.projection().unwrap().started_at.as_deref(),
+            Some("2026-08-05T00:00:00Z")
+        );
+    }
+
+    #[test]
     fn completed_receipts_lists_each_finished_run_after_the_bound() {
-        let path =
-            std::env::temp_dir().join(format!("muniment-receipts-{}.sqlite3", Uuid::now_v7()));
+        let path = crate::state_root::test_root()
+            .join(format!("muniment-receipts-{}.sqlite3", Uuid::now_v7()));
         let mut journal =
             RunJournal::open_with_busy_timeout(&path, Duration::from_secs(60)).unwrap();
         let with_receipt = Uuid::now_v7().to_string();
@@ -1451,10 +1504,29 @@ mod tests {
                 .append(1, &envelope(&run_id, 2, "run.completed", receipt))
                 .unwrap();
         }
+        // A copy of another member's run names the member that ran it.
+        let copy = Uuid::now_v7().to_string();
+        journal
+            .append_new_run("workspace", &envelope(&copy, 1, "run.started", json!({})))
+            .unwrap();
+        let mut completed = envelope(
+            &copy,
+            2,
+            "run.completed",
+            json!({"receipt": {"model": "anthropic/claude", "tokens": {"input": 4}}}),
+        );
+        completed
+            .provenance
+            .extra
+            .insert("swarm_origin".into(), json!("hub-runtime"));
+        journal.append(1, &completed).unwrap();
         let receipts = journal.completed_receipts("2026-08-01T00:00:00Z").unwrap();
-        assert_eq!(receipts.len(), 1);
+        assert_eq!(receipts.len(), 2);
         assert_eq!(receipts[0].run_id, with_receipt);
         assert_eq!(receipts[0].receipt["tokens"]["input"], 3);
+        assert_eq!(receipts[0].origin, None);
+        assert_eq!(receipts[1].run_id, copy);
+        assert_eq!(receipts[1].origin.as_deref(), Some("hub-runtime"));
         assert!(journal
             .completed_receipts("2026-09-01T00:00:00Z")
             .unwrap()

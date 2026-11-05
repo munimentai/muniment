@@ -21,9 +21,14 @@ pub const STUCK_CANCEL_REASON: &str =
 pub const UNATTENDED_DENY_REASON: &str =
     "Nobody answered in time, so Muniment denied the action and paused the run. Post in its thread to continue.";
 
+/// The message a run start answers when the journal rejects the thread.
+const THREAD_NOT_FOUND: &str = "The thread was not found.";
+
 /// How recently a client must have used the runtime for a run a person
 /// started to count as attended.
 const ATTENDED_WITHIN_SECONDS: i64 = 120;
+/// What a run reads when it failed before it reached its thread.
+const START_FAILED: &str = "The run could not start.";
 
 /// How a run ended in the journal, as the queue reads it.
 enum JournalOutcome {
@@ -40,9 +45,54 @@ enum JournalOutcome {
     },
 }
 
+/// Logs a failure that repeats on each pass once: the first failure logs,
+/// later failures stay quiet, and the next success logs that it cleared. A
+/// full disk then fills no log every 15 seconds.
+#[derive(Default)]
+pub(crate) struct FailureLog(std::sync::atomic::AtomicBool);
+
+impl FailureLog {
+    /// Logs `error` unless a failure is already logged and not yet cleared.
+    /// Answers whether it logged.
+    fn failed(&self, step: &str, error: &str) -> bool {
+        let first = !self.0.swap(true, Ordering::AcqRel);
+        if first {
+            muniment_core::runtime_eprintln!("agent_schedule: {step} failed error={error}");
+        }
+        first
+    }
+
+    /// Logs that a logged failure cleared. Answers whether it logged.
+    fn succeeded(&self, step: &str) -> bool {
+        let cleared = self.0.swap(false, Ordering::AcqRel);
+        if cleared {
+            muniment_core::runtime_eprintln!("agent_schedule: {step} recovered");
+        }
+        cleared
+    }
+
+    fn record<T>(&self, step: &str, result: &Result<T, String>) {
+        match result {
+            Ok(_) => self.succeeded(step),
+            Err(error) => self.failed(step, error),
+        };
+    }
+}
+
+/// The schedule pass steps whose failures log once until they clear.
+#[derive(Default)]
+pub(crate) struct ScheduleFailures {
+    pass: FailureLog,
+    repair: FailureLog,
+    poll: FailureLog,
+}
+
 impl RuntimeAttachState {
-    pub(crate) fn check_agent_schedules(&self) -> Result<(), String> {
-        self.check_agent_schedules_with(self.boundaries())
+    /// One pass of the agent run queue. A failure logs once until a pass
+    /// succeeds again.
+    pub(crate) fn check_agent_schedules(&self) {
+        let result = self.check_agent_schedules_with(self.boundaries());
+        self.schedule_failures().pass.record("pass", &result);
     }
 
     /// One pass of the agent run queue through a caller-selected boundary.
@@ -59,6 +109,11 @@ impl RuntimeAttachState {
         {
             return Ok(());
         }
+        // The repairs a list leaves undone. A failure, such as a full disk,
+        // waits for a later pass and stops no schedule.
+        self.schedule_failures()
+            .repair
+            .record("agent repair", &agents::mend(profile));
         let store = RunStore::open(profile)?;
         let listing = agents::list(profile)?;
         for error in &listing.errors {
@@ -102,17 +157,17 @@ impl RuntimeAttachState {
         let runtime_id = self
             .remote_access()
             .map(|access| access.runtime_info().runtime_id);
+        let failures = self.schedule_failures();
         std::thread::spawn(move || {
             let here = |agent: &Agent| agents::runs_routines_here(agent, runtime_id.as_deref());
-            if let Err(error) = muniment_core::agent_poll::poll_due(
+            let result = muniment_core::agent_poll::poll_due(
                 &profile,
                 &agents,
                 &here,
                 agent_runs::now(),
                 &muniment_core::agent_poll::installed_call,
-            ) {
-                muniment_core::runtime_eprintln!("agent_schedule: mcp poll failed error={error}");
-            }
+            );
+            failures.poll.record("mcp poll", &result);
             polling.store(false, Ordering::Release);
         });
     }
@@ -271,7 +326,7 @@ impl RuntimeAttachState {
                     next.lease_expires_at = None;
                     if run.attempt >= MAX_ATTEMPTS {
                         next.status = RunStatus::Failed;
-                        next.error = Some("The run could not start.".into());
+                        next.error = Some(START_FAILED.into());
                     } else {
                         next.status = RunStatus::Queued;
                     }
@@ -335,7 +390,14 @@ impl RuntimeAttachState {
                             .into(),
                     );
                 }
-                JournalOutcome::Ended { .. } if live => {}
+                // A reply that ended is final at once, while its driver
+                // still does the post-run work. A run that stopped for
+                // attention waits until its driver lets it go, since the
+                // driver may still resume it.
+                JournalOutcome::Ended {
+                    status: RunStatus::Interrupted,
+                    ..
+                } if live => {}
                 JournalOutcome::Ended {
                     status,
                     text,
@@ -417,6 +479,7 @@ impl RuntimeAttachState {
                     Ok(agents::ensure_primary(state, &agent.id))
                 })?,
             };
+            let thread = self.live_primary(&agent.id, thread)?;
             if let Some(thread) = &thread {
                 let thread_busy = registry.thread_run(thread).is_some()
                     || active.iter().any(|run| {
@@ -455,16 +518,69 @@ impl RuntimeAttachState {
                     run.lease_owner = None;
                     run.lease_expires_at = None;
                 }
+                // The run never reached its thread, so its error says the
+                // run did not start, apart from a reply that failed there.
                 Err(error) => {
+                    let error = match run.thread_id.clone() {
+                        Some(thread) if error == THREAD_NOT_FOUND => {
+                            self.forget_agent_thread(&agent.id, &thread, "rejected_at_start")?;
+                            format!("{error} The agent's next run starts a new thread.")
+                        }
+                        _ => error,
+                    };
                     run.status = RunStatus::Failed;
                     run.lease_owner = None;
                     run.lease_expires_at = None;
-                    run.error = Some(error);
+                    run.error = Some(format!("{START_FAILED} {error}"));
                 }
             }
             store.save(&mut run)?;
             agents::mirror_run(profile, &run)?;
         }
+        Ok(())
+    }
+
+    /// Answers the thread a run of `agent_id` uses when the journal still
+    /// holds it. A thread the journal lacks or deleted leaves the agent's
+    /// state, and the run starts a new primary thread instead.
+    fn live_primary(
+        &self,
+        agent_id: &str,
+        thread: Option<String>,
+    ) -> Result<Option<String>, String> {
+        let Some(thread) = thread else {
+            return Ok(None);
+        };
+        let live = self
+            .agent_storage()
+            .lock()
+            .map_err(|_| "Conversation history is unavailable.".to_owned())?
+            .journal
+            .thread_exists(&thread)
+            .map_err(|error| format!("Conversation history could not be read: {error:?}"))?;
+        if live {
+            return Ok(Some(thread));
+        }
+        self.forget_agent_thread(agent_id, &thread, "missing_or_deleted")?;
+        Ok(None)
+    }
+
+    /// Drops a thread an agent cannot run in from the agent state and logs
+    /// why, so the agent's next run starts a new primary thread.
+    fn forget_agent_thread(
+        &self,
+        agent_id: &str,
+        thread: &str,
+        reason: &str,
+    ) -> Result<(), String> {
+        let primaries = agents::with_state(self.agent_profile(), |state| {
+            Ok(agents::forget_thread(state, thread))
+        })?;
+        muniment_core::runtime_eprintln!(
+            "agent_schedule: agent thread replaced agent={agent_id} thread={thread} \
+             reason={reason} primary_of={}",
+            primaries.join(",")
+        );
         Ok(())
     }
 
@@ -549,4 +665,22 @@ pub(crate) fn refine_proposals(profile: &std::path::Path, agent_id: &str) {
             muniment_core::runtime_eprintln!("agent_schedule: proposals not refined error={error}");
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FailureLog;
+
+    #[test]
+    fn a_repeated_failure_logs_once_until_it_clears() {
+        let log = FailureLog::default();
+        assert!(!log.succeeded("pass"));
+        assert!(log.failed("pass", "The disk is full."));
+        for _ in 0..3 {
+            assert!(!log.failed("pass", "The disk is full."));
+        }
+        assert!(log.succeeded("pass"));
+        assert!(!log.succeeded("pass"));
+        assert!(log.failed("pass", "The disk is full."));
+    }
 }

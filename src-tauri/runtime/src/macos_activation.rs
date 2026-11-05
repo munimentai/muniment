@@ -2,6 +2,8 @@ use std::io;
 use std::path::Path;
 #[cfg(target_os = "macos")]
 use std::path::PathBuf;
+#[cfg(any(target_os = "macos", test))]
+use std::time::{Duration, Instant};
 
 #[cfg(any(target_os = "macos", test))]
 use muniment_runtime_core::MacosAttachBindFailure;
@@ -208,17 +210,67 @@ mod macos_os_log {
     }
 }
 
-/// Names the diagnostic event for one attach bind failure.
+/// Names the diagnostic event the bind records for one attach bind failure.
+/// A contended lock records none here: the runtime yields to the runtime that
+/// holds it, and the activation records that one `instance_lock_wait` line.
 #[cfg(any(target_os = "macos", test))]
-fn bind_failure_event(failure: MacosAttachBindFailure) -> MacosDiagnosticEvent {
+fn bind_failure_event(failure: MacosAttachBindFailure) -> Option<MacosDiagnosticEvent> {
     match failure {
-        MacosAttachBindFailure::Contended => MacosDiagnosticEvent::InstanceLockWait,
-        MacosAttachBindFailure::Unavailable => MacosDiagnosticEvent::SocketBindFailed,
-        MacosAttachBindFailure::SocketPathTooLong => MacosDiagnosticEvent::SocketPathTooLong,
+        MacosAttachBindFailure::Contended => None,
+        MacosAttachBindFailure::Unavailable => Some(MacosDiagnosticEvent::SocketBindFailed),
+        MacosAttachBindFailure::SocketPathTooLong => Some(MacosDiagnosticEvent::SocketPathTooLong),
         MacosAttachBindFailure::DesktopExecutableCheckFailed => {
-            MacosDiagnosticEvent::DesktopExecutableCheckFailed
+            Some(MacosDiagnosticEvent::DesktopExecutableCheckFailed)
         }
-        MacosAttachBindFailure::StateOpenFailed => MacosDiagnosticEvent::StateOpenFailed,
+        MacosAttachBindFailure::StateOpenFailed => Some(MacosDiagnosticEvent::StateOpenFailed),
+    }
+}
+
+/// How long a runtime that finds another runtime serving the endpoint waits
+/// for it before it yields. launchd starts the service as soon as the user
+/// turns it on in Login Items, while the desktop's child still serves, and the
+/// desktop stops that child once no agent run is in progress.
+#[cfg(any(target_os = "macos", test))]
+const CONTENDED_BIND_WAIT: Duration = Duration::from_secs(30);
+/// How often the waiting runtime looks for the endpoint file. The runtime that
+/// serves removes it as it stops.
+#[cfg(any(target_os = "macos", test))]
+const ENDPOINT_FILE_POLL: Duration = Duration::from_millis(100);
+/// How often the waiting runtime binds again while the endpoint file stays.
+/// Each bind connects once, and only a connection proves the endpoint live,
+/// since a killed runtime leaves its file behind.
+#[cfg(any(target_os = "macos", test))]
+const CONTENDED_BIND_RETRY: Duration = Duration::from_secs(2);
+
+/// Binds the endpoint, and while another runtime serves it, binds again once
+/// its file is gone or every [`CONTENDED_BIND_RETRY`], for up to `wait`. The
+/// contended failure stands after the wait.
+#[cfg(any(target_os = "macos", test))]
+fn bind_when_free<T>(
+    mut bind: impl FnMut() -> Result<T, MacosAttachBindFailure>,
+    endpoint_present: impl Fn() -> bool,
+    wait: Duration,
+    now: impl Fn() -> Instant,
+    mut sleep: impl FnMut(Duration),
+) -> Result<T, MacosAttachBindFailure> {
+    let started = now();
+    loop {
+        let bound = bind();
+        if bound.as_ref().err() != Some(&MacosAttachBindFailure::Contended) {
+            return bound;
+        }
+        let attempted = now();
+        loop {
+            if now().saturating_duration_since(started) >= wait {
+                return bound;
+            }
+            sleep(ENDPOINT_FILE_POLL);
+            if !endpoint_present()
+                || now().saturating_duration_since(attempted) >= CONTENDED_BIND_RETRY
+            {
+                break;
+            }
+        }
     }
 }
 
@@ -251,20 +303,40 @@ impl WindowsAttachFactory for SystemMacosAttachFactory {
     type Acceptor = MacosAttachAcceptor;
 
     fn bind(&self) -> Result<Self::Acceptor, WindowsAttachBindFailure> {
-        MacosAttachAcceptor::bind(
-            self.host.clone(),
-            &self.profile_directory,
-            &self.config_directory,
+        let endpoint = muniment_runtime_core::macos_attach_socket_path(&self.profile_directory);
+        let mut waiting = false;
+        bind_when_free(
+            || {
+                let bound = MacosAttachAcceptor::bind(
+                    self.host.clone(),
+                    &self.profile_directory,
+                    &self.config_directory,
+                );
+                if matches!(bound, Err(MacosAttachBindFailure::Contended)) && !waiting {
+                    waiting = true;
+                    muniment_core::runtime_eprintln!(
+                        "muniment-runtime: waiting for the runtime that serves the endpoint"
+                    );
+                }
+                bound
+            },
+            || std::fs::symlink_metadata(&endpoint).is_ok(),
+            CONTENDED_BIND_WAIT,
+            Instant::now,
+            std::thread::sleep,
         )
         .map_err(|error| {
-            muniment_core::runtime_eprintln!(
-                "muniment-runtime: attach bind failed reason={error:?}"
-            );
-            let event = bind_failure_event(error);
-            if let Ok(directory) = crate::effective_user_macos_log_directory() {
-                let _ = write_macos_diagnostic(directory, event);
-            } else {
-                emit_macos_unified_log(event);
+            // A runtime that still finds another one serving after the wait
+            // yields to it, and the activation records that one wait line.
+            if let Some(event) = bind_failure_event(error) {
+                muniment_core::runtime_eprintln!(
+                    "muniment-runtime: attach bind failed reason={error:?}"
+                );
+                if let Ok(directory) = crate::effective_user_macos_log_directory() {
+                    let _ = write_macos_diagnostic(directory, event);
+                } else {
+                    emit_macos_unified_log(event);
+                }
             }
             match error {
                 MacosAttachBindFailure::Contended => WindowsAttachBindFailure::Contended,
@@ -347,13 +419,11 @@ mod tests {
                 MacosAttachBindFailure::StateOpenFailed,
                 MacosDiagnosticEvent::StateOpenFailed,
             ),
-            (
-                MacosAttachBindFailure::Contended,
-                MacosDiagnosticEvent::InstanceLockWait,
-            ),
         ] {
-            assert_eq!(bind_failure_event(failure), event);
+            assert_eq!(bind_failure_event(failure), Some(event));
         }
+        // A contended lock is a yield, which the activation records once.
+        assert_eq!(bind_failure_event(MacosAttachBindFailure::Contended), None);
     }
 
     #[test]
@@ -421,5 +491,113 @@ mod tests {
             MacosStartDecision::Run
         );
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// A clock that sleeps by moving forward.
+    struct Clock(std::cell::Cell<Instant>);
+
+    impl Clock {
+        fn now(&self) -> Instant {
+            self.0.get()
+        }
+
+        fn sleep(&self, duration: Duration) {
+            self.0.set(self.0.get() + duration);
+        }
+    }
+
+    #[test]
+    fn a_contended_bind_waits_for_the_serving_runtime_to_stop() {
+        let clock = Clock(std::cell::Cell::new(Instant::now()));
+        let started = clock.now();
+        let binds = std::cell::Cell::new(0);
+        // The child removes its endpoint 4.7 seconds after the service starts.
+        let stopped = started + Duration::from_millis(4700);
+        let bound = bind_when_free(
+            || {
+                binds.set(binds.get() + 1);
+                if clock.now() < stopped {
+                    Err(MacosAttachBindFailure::Contended)
+                } else {
+                    Ok(clock.now())
+                }
+            },
+            || clock.now() < stopped,
+            CONTENDED_BIND_WAIT,
+            || clock.now(),
+            |duration| clock.sleep(duration),
+        )
+        .unwrap();
+        // The bind follows the file's removal within one poll, and the live
+        // endpoint sees one connection every two seconds meanwhile.
+        assert!(bound >= stopped && bound - stopped <= ENDPOINT_FILE_POLL);
+        assert_eq!(binds.get(), 4);
+    }
+
+    #[test]
+    fn a_stale_endpoint_file_is_bound_at_the_next_retry() {
+        let clock = Clock(std::cell::Cell::new(Instant::now()));
+        let started = clock.now();
+        let free = started + Duration::from_millis(300);
+        let bound = bind_when_free(
+            || {
+                if clock.now() < free {
+                    Err(MacosAttachBindFailure::Contended)
+                } else {
+                    Ok(clock.now())
+                }
+            },
+            || true,
+            CONTENDED_BIND_WAIT,
+            || clock.now(),
+            |duration| clock.sleep(duration),
+        )
+        .unwrap();
+        assert!(bound - started >= CONTENDED_BIND_RETRY);
+        assert!(bound - started <= CONTENDED_BIND_RETRY + ENDPOINT_FILE_POLL);
+    }
+
+    #[test]
+    fn a_runtime_that_keeps_serving_wins_after_the_bounded_wait() {
+        let clock = Clock(std::cell::Cell::new(Instant::now()));
+        let started = clock.now();
+        let binds = std::cell::Cell::new(0);
+        let result: Result<(), _> = bind_when_free(
+            || {
+                binds.set(binds.get() + 1);
+                Err(MacosAttachBindFailure::Contended)
+            },
+            || true,
+            CONTENDED_BIND_WAIT,
+            || clock.now(),
+            |duration| clock.sleep(duration),
+        );
+        assert_eq!(result, Err(MacosAttachBindFailure::Contended));
+        assert!(clock.now() - started >= CONTENDED_BIND_WAIT);
+        assert!(clock.now() - started <= CONTENDED_BIND_WAIT + ENDPOINT_FILE_POLL);
+        assert!(binds.get() <= 16);
+    }
+
+    #[test]
+    fn other_bind_failures_and_a_free_endpoint_do_not_wait() {
+        let clock = Clock(std::cell::Cell::new(Instant::now()));
+        let started = clock.now();
+        for outcome in [
+            Ok(()),
+            Err(MacosAttachBindFailure::Unavailable),
+            Err(MacosAttachBindFailure::StateOpenFailed),
+        ] {
+            assert_eq!(
+                bind_when_free(
+                    || outcome,
+                    || true,
+                    CONTENDED_BIND_WAIT,
+                    || clock.now(),
+                    |_| panic!("only a contended bind waits"),
+                ),
+                outcome
+            );
+        }
+        assert_eq!(clock.now(), started);
     }
 }

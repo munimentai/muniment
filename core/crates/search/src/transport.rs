@@ -261,8 +261,10 @@ fn curl_command(program: &Path) -> Command {
 }
 
 /// The system `curl` program, run once per request with no shell. Its cookie
-/// jar and the response body live in a private directory that the transport
-/// removes when it drops.
+/// jar and the response body live in a private directory that the first
+/// request creates and the transport removes when it drops. A transport that
+/// never fetches, such as one a server holds when its process exits, leaves
+/// no directory behind.
 pub struct SystemCurl {
     program: PathBuf,
     compressed: bool,
@@ -277,13 +279,20 @@ impl SystemCurl {
             "muniment-search-curl-{}",
             uuid::Uuid::now_v7().simple()
         ));
-        create_private_directory(&directory)?;
         Ok(SystemCurl {
             program: curl.path.clone(),
             compressed: curl.compressed,
             directory,
             protocols: "=https",
         })
+    }
+
+    /// Creates the private directory once, before the first request.
+    fn ensure_directory(&self) -> std::io::Result<()> {
+        match create_private_directory(&self.directory) {
+            Err(error) if error.kind() != std::io::ErrorKind::AlreadyExists => Err(error),
+            _ => Ok(()),
+        }
     }
 
     fn jar(&self) -> PathBuf {
@@ -317,6 +326,9 @@ impl Drop for SystemCurl {
 
 impl Transport for SystemCurl {
     fn get(&mut self, url: &str, referer: Option<&str>) -> Result<Response, TransportError> {
+        self.ensure_directory().map_err(|error| {
+            TransportError::Other(format!("curl has no private directory: {error}"))
+        })?;
         let body_path = self.body();
         let _ = std::fs::remove_file(&body_path);
         let arguments = curl_arguments(
@@ -604,6 +616,8 @@ mod tests {
         })
         .unwrap();
         let directory = transport.directory.clone();
+        assert!(!directory.exists());
+        transport.ensure_directory().unwrap();
         assert!(directory.is_dir());
         #[cfg(unix)]
         {

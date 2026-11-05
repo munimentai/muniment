@@ -17,7 +17,7 @@
   import AgentCard from '../agents/AgentCard.svelte'
   import { agentMachine } from '../agents/agent-runtime.js'
   import { loadModes } from '../agents/permission-modes.js'
-  import { pickerGroups } from '../lib/provider-catalog.js'
+  import { modelDisplayName, pickerGroups } from '../lib/provider-catalog.js'
   import { machineName } from '../runtimes/runtimes.js'
   import { sourceLine } from './sources.js'
   import { untrack } from 'svelte'
@@ -50,7 +50,7 @@
   const machines = $derived((runtimeList?.runtimes ?? []).filter((runtime) => !runtime.local))
   // Each default's value and where it comes from: this project, or the
   // machine's default when the project names none.
-  const modelLabel = (provider, model) => modelGroups.flatMap((group) => group.models).find((entry) => entry.provider === provider && entry.choice === model)?.label ?? model
+  const modelLabel = (provider, model) => modelGroups.flatMap((group) => group.models).find((entry) => entry.provider === provider && entry.choice === model)?.label ?? modelDisplayName(inventory, provider, model)
   const modelSource = $derived(settings?.model
     ? `${modelLabel(settings.model.provider, settings.model.model)} · this project`
     : sourceLine(inventory?.default_model ? modelLabel(inventory.default_provider, inventory.default_model) : '', 'default'))

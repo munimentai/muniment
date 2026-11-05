@@ -472,6 +472,8 @@ pub trait ThreadListService {
         Err(ProtocolError::unsupported_operation())
     }
 
+    /// Deletes a thread and answers the response body: the folder that
+    /// stays with the user's files and the words that say so, or nothing.
     fn delete_thread(
         &mut self,
         _workspace: &str,
@@ -479,7 +481,7 @@ pub trait ThreadListService {
         _request_id: &super::Id,
         _idempotency_key: &super::Id,
         _provenance: CompanionProvenance,
-    ) -> Result<(), ProtocolError> {
+    ) -> Result<serde_json::Value, ProtocolError> {
         Err(ProtocolError::unsupported_operation())
     }
 

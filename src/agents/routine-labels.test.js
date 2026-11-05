@@ -74,6 +74,16 @@ it('names the next run in local time with no time zone', () => {
   expect(nextRunLabel({ routines: [cron('UTC', { next_fire_at: next })] }, now)).toBe(runTimeLabel(next * 1000, now))
   expect(nextRunLabel({ routines: [cron('UTC')] }, now)).toBe('Every day at 02:00')
   expect(nextRunLabel({ routines: [cron('UTC')] }, now)).not.toMatch(/UTC|GMT/)
+  expect(nextRunLabel({ routines: [{ id: 'hook', enabled: true, trigger: { kind: 'webhook', preset: 'github' } }] }, now)).toBe('Webhook · GitHub')
   expect(nextRunLabel({ routines: [cron('UTC', { enabled: false })] }, now)).toBe('Manual')
   expect(nextRunLabel({ paused_reason: 'budget', routines: [cron('UTC')] }, now)).toBe('Paused')
+})
+
+it('names a just-saved schedule\'s next run from the time core\'s save reports', async () => {
+  await saveTimeSetting(null, { zone: 'America/New_York', clock: '12h' })
+  // Sunday 1 November 2026 at 10:00 in New York. Core's save times a Monday 9:00 AM schedule for tomorrow.
+  const now = Date.parse('2026-11-01T15:00:00Z')
+  const monday = { id: 'brief', enabled: true, trigger: { kind: 'cron', expr: '0 9 * * 1', tz: 'America/New_York' } }
+  const fired = Date.parse('2026-11-02T14:00:00Z')
+  expect(nextRunLabel({ routines: [{ ...monday, next_fire_at: fired / 1000 }] }, now)).toBe('Tomorrow at 9:00 AM')
 })

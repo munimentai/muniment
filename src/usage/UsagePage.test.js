@@ -2,12 +2,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte'
 import '@testing-library/jest-dom/vitest'
 import UsagePage from './UsagePage.svelte'
+import { resetUsageView } from './usage-view.js'
 import LimitBanner from './LimitBanner.svelte'
 import LimitCard from './LimitCard.svelte'
 import { machineRows } from '../runtimes/machines.js'
-import { composerLimit, compactTokens, dollars, isUsageShortcut, machineRefs, meterLevel, providerLabel, resetsIn, rowLabel, totalTiles, unmeteredSubtitle, windowLabel } from './usage.js'
+import { composerLimit, compactTokens, dollars, failedNote, isUsageShortcut, machineRefs, meterLevel, providerLabel, resetsIn, rowLabel, totalTiles, unmeteredSubtitle, windowLabel } from './usage.js'
 
-afterEach(cleanup)
+afterEach(() => { cleanup(); resetUsageView() })
 
 const NOW = Date.UTC(2026, 9, 17, 12)
 const HOUR = 3_600_000
@@ -18,7 +19,7 @@ const summary = (extra = {}) => ({
   range: '7d', bucket: 'day',
   totals: { processed: 15_300_000, cached_input: 9_500_000, uncached_input: 4_600_000, output: 1_200_000, cache_hit_percent: 67.4, runs: 50, cost_usd: 12.5, unpriced_runs: 3 },
   series: [{ start_ms: NOW - 24 * HOUR, providers: { anthropic: amount(900, 0.2) } }, { start_ms: NOW, providers: { anthropic: amount(300, 0.1), openai: amount(600, 0.3) } }],
-  breakdown: { model: [{ key: 'anthropic/claude', label: 'claude', provider: 'anthropic', ...amount(1200, 0.3) }], agent: [{ key: '', label: '', ...amount(1200, 0.3) }], project: [], machine: [{ key: 'local', label: 'This computer', ...amount(1200, 0.3) }] },
+  breakdown: { model: [{ key: 'anthropic/claude-fable-5-1', label: 'claude-fable-5-1', provider: 'anthropic', ...amount(1200, 0.3) }], agent: [{ key: '', label: '', ...amount(1200, 0.3) }], project: [], machine: [{ key: 'local', label: 'This computer', ...amount(1200, 0.3) }] },
   providers: ['anthropic', 'openai'],
   accounts: [
     account([limit(), limit({ kind: 'weekly', remaining_percent: 80, resets_at_ms: NOW + 50 * HOUR }), limit({ kind: 'weekly', scope: 'Fable', remaining_percent: 12, status: 'low' })]),
@@ -49,8 +50,22 @@ describe('usage words', () => {
     expect(dollars(0.004)).toBe('<$0.01')
     expect(dollars(1234.5)).toBe('$1,234.50')
     expect(rowLabel({ key: '' }, 'agent')).toBe('No agent')
+    // A model row reads by the composer's name for the model, not its id.
+    expect(rowLabel({ key: 'xai/grok-4.20-multi-agent-0309', label: 'grok-4.20-multi-agent-0309', provider: 'xai' }, 'model')).toBe('Grok 4.20 Multi Agent 0309')
+    expect(rowLabel({ key: 'anthropic/claude-fable-5-1', label: 'claude-fable-5-1', provider: 'anthropic' }, 'model', { providers: [{ id: 'anthropic', name: 'Anthropic', source: 'oauth', models: [{ id: 'claude-fable-5-1', name: 'Claude Fable 5.1 (preview)' }] }] })).toBe('Claude Fable 5.1 (preview)')
+    expect(rowLabel({ key: 'local', label: 'This computer' }, 'machine')).toBe('This computer')
     expect(rowLabel({ key: '' }, 'project')).toBe('No project')
     expect(providerLabel('anthropic')).toBe('Anthropic')
+    // A custom endpoint reads by its name, and a deleted one by its id.
+    const inventory = { providers: [{ id: 'custom-live29', name: 'Live29', source: 'custom', models: [] }, { id: 'anthropic', name: 'Claude account', source: 'oauth', models: [] }] }
+    expect(providerLabel('custom-live29', inventory)).toBe('Live29')
+    expect(providerLabel('anthropic', inventory)).toBe('Anthropic')
+    expect(providerLabel('custom-gone', inventory)).toBe('custom-gone')
+    expect(providerLabel('custom-live29')).toBe('custom-live29')
+    // A disconnected endpoint keeps the last name it had, and a live name wins.
+    const former = { ...inventory, former_names: { 'custom-live30': 'Live30', 'custom-live29': 'Old name' } }
+    expect(providerLabel('custom-live30', former)).toBe('Live30')
+    expect(providerLabel('custom-live29', former)).toBe('Live29')
     expect(totalTiles(summary().totals, 'cost')[0]).toEqual({ label: 'API estimate', value: '$12.50' })
     expect(totalTiles(summary().totals, 'tokens').map((tile) => tile.label)).toEqual(['Processed', 'Cached input', 'Uncached input', 'Output', 'Cache hit rate'])
   })
@@ -89,7 +104,7 @@ describe('Usage page', () => {
     const invoke = vi.fn(async () => summary())
     render(UsagePage, { tauri: { invoke }, runtimeList })
     const card = await screen.findByRole('article', { name: 'Anthropic, sam@example.com · max' })
-    expect(invoke).toHaveBeenCalledWith('usage_summary', { machines: [{ id: 'local', name: 'This computer' }, { id: 'box', name: 'Build box' }], body: expect.objectContaining({ range: '7d' }) })
+    expect(invoke).toHaveBeenCalledWith('usage_summary', { machines: [{ id: 'local', name: 'This computer' }, { id: 'box', name: 'Build box' }], body: expect.objectContaining({ range: '7d' }), members: [{ id: 'studio', name: 'Studio' }] })
     expect(within(card).getByRole('heading', { name: 'Anthropic' })).toBeInTheDocument()
     expect(within(card).getAllByText('sam@example.com · max')).toHaveLength(1)
     expect(within(card).queryByRole('img')).not.toBeInTheDocument()
@@ -123,6 +138,15 @@ describe('Usage page', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Build box did not answer. The totals leave it out.')
   })
 
+  it('says the totals count the copies of a silent machine that other machines hold', async () => {
+    const box = { id: 'box', name: 'Build box', state: 'error', error: 'timeout' }
+    const counted = summary({ breakdown: { ...summary().breakdown, machine: [{ key: 'local', label: 'This computer', ...amount(1200, 0.3) }, { key: 'box', label: 'Build box (did not answer)', ...amount(300, 0.1) }] } })
+    expect(failedNote(box, counted)).toBe('Build box did not answer. The totals count the copies of its runs that other machines hold.')
+    expect(failedNote(box, summary())).toBe('Build box did not answer. The totals leave it out.')
+    render(UsagePage, { tauri: { invoke: vi.fn(async () => counted) }, runtimeList })
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Build box did not answer. The totals count the copies of its runs that other machines hold.'))
+  })
+
   it('names a pending folder prompt in place of a silent computer', async () => {
     const machines = [{ id: 'local', name: 'This computer', state: 'error', error: 'timeout' }, { id: 'box', name: 'Build box', state: 'error', error: 'offline' }]
     const folderAccess = { state: 'waiting', folder: 'Documents', message: 'macOS is asking whether Muniment may open your Documents folder. Choose Allow in that prompt, then try again.' }
@@ -145,13 +169,76 @@ describe('Usage page', () => {
     await fireEvent.click(screen.getByRole('radio', { name: 'Tokens' }))
     expect(screen.getByText('15.3M')).toBeInTheDocument()
     expect(screen.getAllByRole('img').some((bar) => bar.getAttribute('aria-label')?.includes('OpenAI'))).toBe(true)
-    expect(screen.getByRole('list', { name: 'Usage by model' })).toHaveTextContent('claude')
+    expect(screen.getByRole('list', { name: 'Usage by model' })).toHaveTextContent('Claude Fable 5.1')
+    expect(screen.getByRole('list', { name: 'Usage by model' })).not.toHaveTextContent('claude-fable-5-1')
     await fireEvent.click(screen.getByRole('radio', { name: 'Agent' }))
     expect(screen.getByRole('list', { name: 'Usage by agent' })).toHaveTextContent('No agent')
     await fireEvent.click(screen.getByRole('radio', { name: 'Cost' }))
     expect(screen.getByText('API estimate', { selector: 'dt' })).toBeInTheDocument()
     await fireEvent.click(screen.getByRole('radio', { name: '30d' }))
     await vi.waitFor(() => expect(invoke).toHaveBeenLastCalledWith('usage_summary', expect.objectContaining({ body: expect.objectContaining({ range: '30d' }) })))
+  })
+
+  it('names a custom endpoint by its name in the provider chart and filter', async () => {
+    const custom = summary({ series: [{ start_ms: NOW, providers: { 'custom-live29': amount(600, 0) } }], providers: ['custom-live29'] })
+    const inventory = { providers: [{ id: 'custom-live29', name: 'Live29', source: 'custom', models: [{ id: 'm' }] }] }
+    render(UsagePage, { tauri: { invoke: vi.fn(async () => custom) }, runtimeList, inventory })
+    await screen.findByRole('article', { name: 'Anthropic, sam@example.com · max' })
+    await fireEvent.click(screen.getByRole('radio', { name: 'Tokens' }))
+    const chart = screen.getByRole('figure', { name: 'Tokens by provider' })
+    expect(within(chart).getByText('Live29')).toBeInTheDocument()
+    expect(chart).not.toHaveTextContent('custom-live29')
+    expect(within(chart).getAllByRole('img').some((bar) => bar.getAttribute('aria-label')?.includes('Live29'))).toBe(true)
+    await fireEvent.click(screen.getByRole('button', { name: /Provider/ }))
+    expect(screen.getByRole('menuitemradio', { name: 'Live29' })).toBeInTheDocument()
+  })
+
+  it('names a disconnected endpoint by its last name in the provider chart and filter', async () => {
+    const custom = summary({ series: [{ start_ms: NOW, providers: { 'custom-live30': amount(600, 0) } }], providers: ['custom-live30'] })
+    const inventory = { providers: [], former_names: { 'custom-live30': 'Live30' } }
+    render(UsagePage, { tauri: { invoke: vi.fn(async () => custom) }, runtimeList, inventory })
+    await screen.findByRole('article', { name: 'Anthropic, sam@example.com · max' })
+    await fireEvent.click(screen.getByRole('radio', { name: 'Tokens' }))
+    const chart = screen.getByRole('figure', { name: 'Tokens by provider' })
+    expect(within(chart).getByText('Live30')).toBeInTheDocument()
+    expect(chart).not.toHaveTextContent('custom-live30')
+    await fireEvent.click(screen.getByRole('button', { name: /Provider/ }))
+    expect(screen.getByRole('menuitemradio', { name: 'Live30' })).toBeInTheDocument()
+  })
+
+  it('keeps its view, range, breakdown and machine when the runtime switch draws the page again', async () => {
+    const invoke = vi.fn(async () => summary())
+    const first = render(UsagePage, { tauri: { invoke }, runtimeList })
+    await screen.findByRole('article', { name: 'Anthropic, sam@example.com · max' })
+    await fireEvent.click(screen.getByRole('radio', { name: 'Tokens' }))
+    await fireEvent.click(screen.getByRole('radio', { name: '30d' }))
+    await fireEvent.click(screen.getByRole('radio', { name: 'Agent' }))
+    first.unmount()
+    // The child runtime answers in the local runtime's place, and the workspace draws a new page.
+    invoke.mockClear()
+    render(UsagePage, { tauri: { invoke }, runtimeList: { runtimes: [{ id: 'local', local: true, kind: 'child' }, ...runtimeList.runtimes.slice(1)] } })
+    expect(screen.getByRole('radio', { name: 'Tokens' })).toBeChecked()
+    expect(screen.getByRole('radio', { name: '30d' })).toBeChecked()
+    expect(await screen.findByRole('list', { name: 'Usage by agent' })).toBeInTheDocument()
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('usage_summary', expect.objectContaining({ body: expect.objectContaining({ range: '30d' }) })))
+    expect(invoke.mock.calls.some(([, args]) => args?.body?.range === '7d')).toBe(false)
+  })
+
+  it('lists a machine that does not answer and counts it from the copies the others hold', async () => {
+    const invoke = vi.fn(async () => summary())
+    render(UsagePage, { tauri: { invoke }, runtimeList })
+    await screen.findByRole('article', { name: 'Anthropic, sam@example.com · max' })
+    await fireEvent.click(screen.getByRole('button', { name: 'Machine: All machines' }))
+    await fireEvent.click(screen.getByRole('menuitemradio', { name: 'Studio (offline)' }))
+    await vi.waitFor(() => expect(invoke).toHaveBeenLastCalledWith('usage_summary', {
+      machines: [{ id: 'local', name: 'This computer' }, { id: 'box', name: 'Build box' }],
+      body: expect.objectContaining({ range: '7d' }),
+      machine: 'studio',
+      members: [{ id: 'studio', name: 'Studio' }],
+    }))
+    await fireEvent.click(screen.getByRole('button', { name: 'Machine: Studio (offline)' }))
+    await fireEvent.click(screen.getByRole('menuitemradio', { name: 'Build box' }))
+    await vi.waitFor(() => expect(invoke).toHaveBeenLastCalledWith('usage_summary', expect.objectContaining({ machines: [{ id: 'local', name: 'This computer' }, { id: 'box', name: 'Build box' }], machine: 'box' })))
   })
 
   it('asks each account again on Refresh, then reads usage', async () => {

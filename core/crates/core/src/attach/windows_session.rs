@@ -330,6 +330,7 @@ where
                     first_frame: Some(&frame),
                     registry,
                     handoff_nonce: None,
+                    ephemeral_credential: false,
                 },
                 desktop_version,
                 deadline.saturating_duration_since(Instant::now()),

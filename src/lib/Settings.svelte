@@ -66,6 +66,9 @@
     onselectruntime = () => {},
     // Called after a permission setting saves, so the composer reads the modes again.
     onpermissions = () => {},
+    // The runtime runs as the app's child, so scheduled agents stop when the app quits.
+    foregroundOnly = null,
+    onopenloginitems = () => {},
   } = $props()
 
   const sections = settingsSections()
@@ -213,6 +216,13 @@
         <Group label="Version">
           <Row title="Muniment" meta={runtimeList?.appVersion ? `v${String(runtimeList.appVersion).replace(/^v/, '')}` : ''} description="Updates install from the title bar, and Machines updates the others." />
         </Group>
+        {#if foregroundOnly}
+          <Group label="Background service">
+            <Row title="Background service" description={foregroundOnly.text}>
+              <Button onclick={onopenloginitems}>{foregroundOnly.control}</Button>
+            </Row>
+          </Group>
+        {/if}
       </SettingsPart>
     {/if}
     {/key}
@@ -223,5 +233,4 @@
   /* Settings takes the thread and rail columns under the title band. The sidebar beside it lists the sections. */
   .settings-layout { grid-row: 2; grid-column: 2 / -1; position: relative; z-index: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
   .settings-path { margin: 2px 0 0; overflow-wrap: anywhere; color: var(--muted); font: var(--text-12) var(--font-mono); }
-  .support { margin: 0; color: var(--muted); font-size: var(--text-13); }
 </style>

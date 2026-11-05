@@ -78,7 +78,7 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = ["N
 objc2-service-management = { version = "0.3.2", default-features = false, features = ["SMAppService", "SMErrors", "objc2", "objc2-foundation", "std"] }
 
 [dev-dependencies]
-muniment-core = { path = "../core/crates/core", features = ["keyring"] }
+muniment-core = { path = "../core/crates/core", features = ["keyring", "test-build"] }
 flate2 = "1"
 keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native", "linux-native"] }
 muniment-attach = { path = "../core/crates/attach", features = ["client"] }

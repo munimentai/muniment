@@ -42,7 +42,8 @@ fn run_started() -> EventEnvelope {
 }
 
 fn journal_path() -> PathBuf {
-    std::env::temp_dir().join(format!("muniment-thread-policy-{}.sqlite3", Uuid::new_v4()))
+    muniment_core::state_root::test_root()
+        .join(format!("muniment-thread-policy-{}.sqlite3", Uuid::new_v4()))
 }
 
 fn thread_for(path: &PathBuf, run_id: &str) -> String {

@@ -14,11 +14,22 @@ pub struct Catalog {
 }
 pub type Cache = BTreeMap<String, Catalog>;
 
+/// The saved catalogs, less any model a turn cannot run on, such as one a
+/// discovery saved before the runtime kept such models out.
 pub fn load(agent: &Path) -> Cache {
-    fs::read(agent.join(CACHE_FILE))
+    let mut cache: Cache = fs::read(agent.join(CACHE_FILE))
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    for (key, catalog) in &mut cache {
+        let provider = key.strip_prefix("provider:").unwrap_or_default();
+        catalog.models.retain(|model| {
+            model["id"]
+                .as_str()
+                .is_none_or(|id| crate::model_catalog::runs_with_tools(provider, id))
+        });
+    }
+    cache
 }
 
 pub fn save(agent: &Path, cache: &Cache) -> std::io::Result<()> {
@@ -157,7 +168,10 @@ pub fn parse(provider: &str, value: &Value) -> Vec<Value> {
         } else {
             id
         };
-        if !valid_id(id) || models.iter().any(|model: &Value| model["id"] == id) {
+        if !valid_id(id)
+            || models.iter().any(|model: &Value| model["id"] == id)
+            || !crate::model_catalog::runs_with_tools(provider, id)
+        {
             continue;
         }
         if provider == "google"
@@ -419,6 +433,39 @@ mod tests {
             .0
             .starts_with("https://pi.dev/"));
     }
+    #[test]
+    fn discovery_and_the_saved_catalog_drop_multi_agent_models() {
+        let body = json!({"models":[
+            {"id":"grok-4.20-multi-agent-0309","output_modalities":["text"]},
+            {"id":"grok-4.20-0309-reasoning","output_modalities":["text"]}
+        ]});
+        let ids: Vec<_> = parse("xai", &body)
+            .iter()
+            .map(|m| m["id"].clone())
+            .collect();
+        assert_eq!(ids, vec![json!("grok-4.20-0309-reasoning")]);
+
+        let agent = std::env::temp_dir().join(format!("provider-models-{}", uuid::Uuid::new_v4()));
+        let mut cache = Cache::new();
+        for key in ["account:a1", "provider:xai"] {
+            cache.insert(
+                key.into(),
+                Catalog {
+                    checked_ms: 1,
+                    models: vec![
+                        json!({"id":"grok-4.20-multi-agent-0309"}),
+                        json!({"id":"grok-4.3"}),
+                    ],
+                },
+            );
+        }
+        save(&agent, &cache).unwrap();
+        for catalog in load(&agent).values() {
+            assert_eq!(catalog.models, vec![json!({"id":"grok-4.3"})]);
+        }
+        fs::remove_dir_all(agent).unwrap();
+    }
+
     #[test]
     fn discoveries_preserve_custom_settings_and_are_idempotent() {
         let mut root = json!({"providers":{"xai":{"headers":{"custom":"keep"},"models":[{"id":"grok-old","contextWindow":42}]}}}).as_object().unwrap().clone();

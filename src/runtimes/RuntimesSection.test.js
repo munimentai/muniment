@@ -68,6 +68,7 @@ describe('Machines page', () => {
     // Remove on the phone's row revokes the pairing.
     await fireEvent.click(within(screen.getByRole('group', { name: 'Phone' })).getByRole('button', { name: 'More for Phone' }))
     await fireEvent.click(screen.getByRole('menuitem', { name: 'Remove' }))
+    expect(screen.getByRole('button', { name: 'Remove' })).toHaveAttribute('data-variant', 'danger')
     await fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
     await waitFor(() => expect(machineRows().map((group) => group.getAttribute('aria-label'))).toEqual(['This computer', 'Studio', 'Build box', 'Windows', 'iOS']))
     expect(await screen.findByText('Removed Phone.')).toBeInTheDocument()
@@ -208,15 +209,28 @@ describe('Machines page', () => {
     await waitFor(() => expect(order).toEqual(['prepare', 'machines', 'prepare', 'count', 'install']))
   })
 
-  it('names this computer as current when no app update waits', async () => {
+  it('says every machine is current when Update all finds nothing to update', async () => {
     const bridge = tauri({
-      runtime_update_all: () => ({ results: [], skipped: [] }),
+      runtime_update_all: () => ({ results: [], skipped: [{ id: buildBox.id, name: 'Build box', reason: 'current' }] }),
       app_update_prepare: () => null,
     })
     render(RuntimesSection, { tauri: bridge, listen })
     await fireEvent.click(await screen.findByRole('button', { name: 'Update all' }))
-    expect(await screen.findByText('Skipped: This computer (already current).')).toBeInTheDocument()
+    expect(await screen.findByText('All machines are current.')).toBeInTheDocument()
+    expect(screen.queryByText(/^Skipped:/)).toBeNull()
     expect(bridge.invoke).not.toHaveBeenCalledWith('app_update_install')
+  })
+
+  it('turns Update all off while only a machine that does not answer is behind', async () => {
+    const behind = { ...studio, updateOffered: true }
+    const bridge = tauri({
+      runtime_list: () => runtimeList([local, behind, { ...buildBox, updateOffered: false }]),
+      runtime_refresh: () => runtimeList([local, behind, { ...buildBox, updateOffered: false }]),
+      app_update_prepare: () => null,
+    })
+    render(RuntimesSection, { tauri: bridge, listen })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Update all' })).toBeDisabled())
+    expect(screen.getByText('Every machine that answers is current.')).toBeInTheDocument()
   })
 
   it('renames and removes a machine from its menu, asking once before removal', async () => {
@@ -557,5 +571,62 @@ describe('Model sharing', () => {
     await fireEvent.click(toggle)
     await waitFor(() => expect(bridge.invoke).toHaveBeenCalledWith('runtime_share_models', { cloud: false }))
     expect(state.shareModels).toBe(false)
+  })
+})
+
+describe('Keychain refusal', () => {
+  it('names what the keychain refused and asks core once more only on Try again', async () => {
+    let declined = true
+    const retries = []
+    const handlers = {
+      app_update_prepare: () => null,
+      agent_request: ({ runtime, operation, body }) => {
+        if (operation !== 'swarm.members') return {}
+        if (runtime !== 'local') return null
+        if (body?.retry_keychain) { retries.push(body); declined = false }
+        return {
+          self: 'core-local',
+          members: [{ runtime_id: 'core-local', runtime_name: 'Laptop', self: true, online: true }],
+          fleet_key: declined ? { state: 'declined', message: 'User canceled the operation.' } : null,
+          keychain: declined ? [{ service: 'ai.muniment.webhook', label: 'webhook secrets', state: 'declined', message: 'User canceled the operation.' }] : [],
+        }
+      },
+    }
+    render(RuntimesSection, { tauri: tauri(handlers), listen })
+    const notice = await screen.findByText(/The keychain refused this computer's fleet key and webhook secrets/)
+    expect(notice).toHaveTextContent('Always Allow')
+    expect(retries).toEqual([])
+    await fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(retries).toEqual([{ retry_keychain: true }]))
+    await waitFor(() => expect(screen.queryByText(/The keychain refused/)).not.toBeInTheDocument())
+  })
+
+  it('shows what the keychain refused with remote access off and retries it', async () => {
+    let declined = true
+    const asked = []
+    const handlers = {
+      app_update_prepare: () => null,
+      agent_request: ({ runtime, operation, body }) => {
+        if (operation !== 'swarm.members' || runtime !== 'local') return {}
+        asked.push(body)
+        // With remote access off core refuses the members view and answers only what the keychain refused.
+        if (!body?.keychain && !body?.retry_keychain) throw new Error('Turn on remote access to see the swarm.')
+        if (body.retry_keychain) declined = false
+        return {
+          self: null,
+          members: [],
+          fleet_key: null,
+          keychain: declined ? [{ service: 'ai.muniment.endpoints', label: 'model endpoint keys', state: 'declined', message: 'User canceled the operation.' }] : [],
+        }
+      },
+    }
+    render(RuntimesSection, { tauri: tauri(handlers), listen })
+    const notice = await screen.findByText(/The keychain refused this computer's model endpoint keys/)
+    expect(notice).toHaveTextContent('Muniment holds them back until you try again.')
+    expect(asked).toContainEqual({ keychain: true })
+    expect(asked).not.toContainEqual({ retry_keychain: true })
+    await fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(asked).toContainEqual({ retry_keychain: true }))
+    await waitFor(() => expect(screen.queryByText(/The keychain refused/)).not.toBeInTheDocument())
   })
 })

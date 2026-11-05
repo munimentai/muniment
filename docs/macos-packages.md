@@ -19,8 +19,22 @@ and rechecks the status. An MDM package cannot register absent users.
 
 An `enabled` status permits a kick-start in that user's `gui/<uid>` domain
 when the attach endpoint is absent. A `requiresApproval` status or registration
-denial leaves the runtime inactive. The app explains the required approval and
-opens System Settings > General > Login Items on request. A `notFound` status
+denial leaves the service inactive, and the app runs the bundled runtime as its
+own child, which stops when the app quits. A `requiresApproval` status writes
+`event=runtime_service_requires_approval` to `runtime.log`. A notice over the
+composer says scheduled agents run only while Muniment is open and opens System
+Settings > General > Login Items on request. launchd starts the service as
+soon as the user turns it on. That runtime finds the child's endpoint live and
+waits for it up to 30 seconds: it binds as soon as the endpoint file goes, and
+connects once every 2 seconds while the file stays. The app reads the `enabled`
+status within a second, waits until no agent run is in progress, stops the
+child, writes `event=runtime_service_handover` and asks launchd to start the
+service, which starts a service runtime that gave up its wait. Turning the
+service off while the app is open makes launchd stop the service runtime. The
+app reads the `requiresApproval` or `notRegistered` status after the lost
+connection, writes `event=runtime_service_requires_approval`, and starts its
+child behind the same notice. An agent run in progress ends with the service,
+and the child marks it interrupted once its lease expires. A `notFound` status
 or another registration error also leaves the service inactive.
 
 `launchd` applies a launch constraint to the bundle's `BundleProgram`.

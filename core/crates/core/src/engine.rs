@@ -7,6 +7,7 @@
 //! frames, Pi session files and Pi settings files.
 
 mod pi_cli;
+mod pi_reuse;
 mod pi_rpc;
 mod thinking;
 mod thread_context;
@@ -25,6 +26,7 @@ pub use pi_cli::{
     is_paste_prompt, parse_model_table, parse_model_thinking, PiModelRow, PiModelThinking,
     PiSignIn, PiSignInSteps, SignInPages, SignInStep,
 };
+pub use pi_reuse::{LaunchKey, PiLaunch, PiReuse, ReuseMiss, REUSE_IDLE_WINDOW};
 pub use pi_rpc::{OpenStage, PiOpen, PiRpcEngine};
 pub use thinking::{
     clamp_thinking_level, reasoning_thinking_levels, startup_thinking_level,

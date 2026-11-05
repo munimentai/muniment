@@ -477,7 +477,8 @@ ${sequence}
 `)
     const result = spawnSync('bash', [script, directory], {
       encoding: 'utf8', timeout: 10_000,
-      env: { ...process.env, FAILED_SPEC: failedSpec, STOP_MODE: stopMode, MUNIMENT_E2E_FINALIZER_TEST_MODE: '0' },
+      // Two polls per signal keep a stuck process case to a few waits on a loaded host.
+      env: { ...process.env, FAILED_SPEC: failedSpec, STOP_MODE: stopMode, MUNIMENT_E2E_FINALIZER_TEST_MODE: '0', MUNIMENT_E2E_STOP_POLLS: '2' },
     })
     return { result, directory, log: fs.readFileSync(path.join(directory, 'cleanup.log'), 'utf8') }
   }
@@ -576,6 +577,8 @@ collect_local_mode_pi_log`, 'bash', directory, data], { encoding: 'utf8' })
     expect(log).not.toContain('session: onboarding')
     expect(log).not.toContain('start-spec: wdio-onboarding.log')
     expect(result.stderr).toContain('Spec process cleanup failed.')
+    // Two specs each poll twice after each of the two signals.
+    expect(log.match(/^wait$/gm)).toHaveLength(8)
   })
 
   it('Accepts an empty process set and immediate process exit.', () => {
@@ -695,6 +698,8 @@ ${sequence}
         ...process.env, FAILED_SPEC: failedSpec, STOP_MODE: stopMode, STUCK_PROCESS: stuckProcess, MUNIMENT_E2E_LAUNCHCTL: 'launchctl',
         MUNIMENT_E2E_OLLAMA_HOST: '192.0.2.5',
         MUNIMENT_E2E_FINALIZER_TEST_MODE: '0', MUNIMENT_E2E_ONBOARDING_ONLY: '0', MUNIMENT_E2E_CLEANUP_ONLY: '0',
+        // Two polls per signal keep a stuck process case to a few waits on a loaded host.
+        MUNIMENT_E2E_STOP_POLLS: '2',
       },
     })
     return { result, directory, log: fs.readFileSync(path.join(directory, 'cleanup.log'), 'utf8') }
@@ -746,6 +751,8 @@ ${sequence}
     expect(log.match(/^session: .+$/gm)).toEqual(['session: local-mode-chat'])
     expect(log).not.toContain('stale-processes')
     expect(result.stderr).toContain('Spec process cleanup failed.')
+    // The first stop waits once, and three specs each poll twice after each of the two signals.
+    expect(log.match(/^wait$/gm)).toHaveLength(13)
   })
 
   it('Checks the same process set during final cleanup.', () => {

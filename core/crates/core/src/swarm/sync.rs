@@ -24,7 +24,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use serde_json::{json, Value};
 
 use super::records::RecordChange;
@@ -143,10 +143,12 @@ pub(super) fn ensure_registration(
     Ok(true)
 }
 
-/// Keeps a registration in the `threads` table unless one is held.
+/// Keeps a registration in the `threads` table unless one is held or this
+/// runtime's journal deleted the thread.
 fn keep_registration(inner: &Inner, registration: &ThreadRegistration) -> Result<bool, String> {
     if registration_valid(registration)
         && self::registration(inner, &registration.thread_id).is_none()
+        && !deleted_here(inner, &registration.thread_id)?
     {
         inner.store.put_record(
             "threads",
@@ -193,6 +195,18 @@ pub(super) fn on_changes(inner: &Inner, changes: &[RecordChange]) -> Result<bool
             keys.push(&change.key);
         }
     }
+    // A thread this runtime's journal deleted stays deleted here, whatever
+    // another member still holds of it.
+    let keys = {
+        let mut storage = storage_lock(&inner.storage)?;
+        let mut kept = Vec::with_capacity(keys.len());
+        for key in keys {
+            if !storage.journal.thread_deleted(key).map_err(journal_error)? {
+                kept.push(key);
+            }
+        }
+        kept
+    };
     if keys.is_empty() {
         return Ok(changed);
     }
@@ -200,7 +214,9 @@ pub(super) fn on_changes(inner: &Inner, changes: &[RecordChange]) -> Result<bool
     let mut plain = Vec::new();
     {
         let mut connection = inner.store.connect()?;
-        let transaction = connection.transaction().map_err(sql)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sql)?;
         for key in keys {
             let registration = super::records::get_with(&transaction, CLASS, key)?
                 .and_then(|record| record.value(REGISTRATION).cloned())
@@ -537,9 +553,17 @@ pub(super) fn delete_copy(inner: &Inner, thread_id: &str, owner: &str) -> Result
     Ok(())
 }
 
-/// Deletes the record of an ordinary thread this runtime owns once its
-/// journal deleted the thread, so every member forgets it.
-fn retire_plain(inner: &Inner, thread_id: &str) -> Result<(), String> {
+/// Whether this runtime's journal deleted the thread.
+fn deleted_here(inner: &Inner, thread_id: &str) -> Result<bool, String> {
+    storage_lock(&inner.storage)?
+        .journal
+        .thread_deleted(thread_id)
+        .map_err(journal_error)
+}
+
+/// Deletes the record of a thread this runtime runs once its journal
+/// deleted the thread, so every member forgets it and deletes its copy.
+fn retire(inner: &Inner, thread_id: &str) -> Result<(), String> {
     inner
         .store
         .delete_record("threads", "thread_id", thread_id)?;
@@ -547,6 +571,31 @@ fn retire_plain(inner: &Inner, thread_id: &str) -> Result<(), String> {
     inner
         .records
         .delete(&origin, inner.now(), CLASS, thread_id, 0, None)?;
+    inner.changed("threads");
+    Ok(())
+}
+
+/// Forgets a registered thread this runtime's journal deleted. A thread
+/// this runtime runs, or whose agent no member runs, is retired for the
+/// whole fleet. A copy of another member's thread leaves this runtime's
+/// registrations, so its owner's events no longer re-create it here.
+fn retire_deleted(
+    inner: &Inner,
+    self_id: &str,
+    registration: &ThreadRegistration,
+) -> Result<(), String> {
+    let primary = thread_primary(inner, registration);
+    if primary.as_deref().is_none_or(|primary| primary == self_id) {
+        crate::runtime_eprintln!(
+            "muniment-runtime: swarm thread retired thread_id={} kind={} reason=deleted_here",
+            registration.thread_id,
+            registration.kind
+        );
+        return retire(inner, &registration.thread_id);
+    }
+    inner
+        .store
+        .delete_record("threads", "thread_id", &registration.thread_id)?;
     inner.changed("threads");
     Ok(())
 }
@@ -835,14 +884,16 @@ pub(super) fn scan_local(inner: &Inner) -> Result<(), String> {
             None => continue,
         };
         let exists = scan_thread(inner, &self_id, thread_id)?;
-        if registration.kind == PLAIN
-            && registration.owner_runtime.as_deref() == Some(self_id.as_str())
-        {
-            if exists {
+        let owned_plain = registration.kind == PLAIN
+            && registration.owner_runtime.as_deref() == Some(self_id.as_str());
+        if exists {
+            if owned_plain {
                 refresh_summary(inner, &self_id, thread_id)?;
-            } else {
-                retire_plain(inner, thread_id)?;
             }
+        } else if owned_plain {
+            retire(inner, thread_id)?;
+        } else if deleted_here(inner, thread_id)? {
+            retire_deleted(inner, &self_id, &registration)?;
         }
     }
     let mut marks = super::lock(&inner.scan);
@@ -951,7 +1002,9 @@ pub(super) fn scan_thread(inner: &Inner, self_id: &str, thread_id: &str) -> Resu
             .thread_events_after(thread_id, mark)
             .map_err(journal_error)?;
     }
-    let transaction = connection.transaction().map_err(sql)?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(sql)?;
     for (run_id, origin, indexed) in new_runs {
         transaction
             .execute(
@@ -1312,15 +1365,21 @@ fn local_provenance(scope: Option<&ReplicaScope>, attach_profile: &str) -> Prove
     }
 }
 
-/// Creates the replica of a registered thread under its own id.
+/// Creates the replica of a registered thread under its own id, at
+/// `created_at`: the time of the first event it holds. A replica created at
+/// the time its events arrive would list as newer than its last message.
 fn ensure_thread(
-    inner: &Inner,
     journal: &mut crate::journal::RunJournal,
     thread_id: &str,
     scope: Option<&ReplicaScope>,
+    created_at: &str,
 ) -> Result<bool, String> {
     if journal.thread_exists(thread_id).map_err(journal_error)? {
         return Ok(true);
+    }
+    // A thread this runtime deleted takes no more events.
+    if journal.thread_deleted(thread_id).map_err(journal_error)? {
+        return Ok(false);
     }
     let Some(scope) = scope else {
         return Ok(false);
@@ -1329,7 +1388,7 @@ fn ensure_thread(
         .create_thread_with_id(
             thread_id,
             &scope.workspace,
-            &inner.now_text(),
+            created_at,
             local_provenance(Some(scope), &scope.attach_profile),
         )
         .map_err(journal_error)?;
@@ -1474,7 +1533,9 @@ fn import_one(
 ) -> Result<Option<Logged>, String> {
     let mut storage = storage_lock(&inner.storage)?;
     let journal = &mut storage.journal;
-    if !ensure_thread(inner, journal, &event.thread_id, scope)? {
+    let now = inner.now_text();
+    let created_at = event.envelope["recorded_at"].as_str().unwrap_or(&now);
+    if !ensure_thread(journal, &event.thread_id, scope, created_at)? {
         return Ok(None);
     }
     let (_, thread_profile) = journal
@@ -1611,7 +1672,7 @@ pub(super) fn post(
     {
         let mut storage = storage_lock(&inner.storage)?;
         let journal = &mut storage.journal;
-        if !ensure_thread(inner, journal, thread_id, scope.as_ref())? {
+        if !ensure_thread(journal, thread_id, scope.as_ref(), &inner.now_text())? {
             return Err("Open Muniment and connect a model before posting.".into());
         }
         let profile = journal
@@ -1663,7 +1724,7 @@ fn append_local(
     let scope = inner.host.replica_scope();
     let mut storage = storage_lock(&inner.storage)?;
     let journal = &mut storage.journal;
-    if !ensure_thread(inner, journal, thread_id, scope.as_ref())? {
+    if !ensure_thread(journal, thread_id, scope.as_ref(), &inner.now_text())? {
         return Err("The thread is not on this runtime.".into());
     }
     let profile = journal

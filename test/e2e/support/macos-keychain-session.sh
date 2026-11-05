@@ -77,7 +77,8 @@ PLIST
 # Register cleanup before bootstrap, which can fail after loading the agent.
 agent_requested=1
 launchctl bootstrap "gui/$session_uid" "$work/agent.plist"
-for (( attempt=0; attempt<300; attempt++ )); do
+# Poll every 0.1 seconds for 30 seconds by default.
+for (( attempt=0; attempt<${MUNIMENT_KEYCHAIN_SETUP_POLLS:-300}; attempt++ )); do
   [[ ! -f "$work/result" ]] || break
   sleep 0.1
 done

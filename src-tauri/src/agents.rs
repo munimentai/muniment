@@ -82,7 +82,9 @@ fn agent_error((error, refusal): Refusal) -> String {
             "This device may not manage agents on that machine. Pair it again with agent access."
                 .into()
         }
-        _ => crate::auth::background_service_error(),
+        // A busy or slow runtime is up, so its line says so and the window
+        // asks again. Only a lost connection reads as unreachable.
+        error => crate::auth::desktop_client_error(error),
     }
 }
 
@@ -140,7 +142,7 @@ pub(crate) fn request_runtime(
     body: Value,
 ) -> Result<Value, String> {
     let attach = app.state::<AttachCompanionState>();
-    forward(runtime, operation, body, |target| {
+    let answer = forward(runtime, operation, body, |target| {
         let session = match target {
             Target::Local => attach.local_client_session_within(AGENT_CONNECT_WAIT),
             Target::Paired(id) => attach.paired_session(id),
@@ -149,7 +151,30 @@ pub(crate) fn request_runtime(
             DesktopClientSession::Connected(client) => Some(client),
             DesktopClientSession::NoSupervisor | DesktopClientSession::Disconnected => None,
         }
+    })?;
+    Ok(if operation == "agent.threads" {
+        without_deleted_threads(answer, &attach.deleted_threads())
+    } else {
+        answer
     })
+}
+
+/// An `agent.threads` answer without the threads this computer deleted,
+/// which another machine can still name under its agent, as the thread
+/// list leaves them out.
+fn without_deleted_threads(
+    mut answer: Value,
+    deleted: &std::collections::HashSet<String>,
+) -> Value {
+    if let Some(threads) = answer.get_mut("threads").and_then(Value::as_array_mut) {
+        threads.retain(|thread| {
+            thread
+                .get("thread_id")
+                .and_then(Value::as_str)
+                .is_none_or(|id| !deleted.contains(id))
+        });
+    }
+    answer
 }
 
 /// The `thread.create` body that starts a thread on the fleet member
@@ -397,6 +422,38 @@ mod tests {
     }
 
     #[test]
+    fn a_busy_runtime_is_not_an_unreachable_one() {
+        let mut local = recorder("local");
+        let paired = recorder("box");
+        for (error, line) in [
+            (
+                ClientError::DesktopBusy,
+                "Muniment is busy with another request. Try again.",
+            ),
+            (
+                ClientError::Timeout,
+                "The background service did not answer in time. Try again.",
+            ),
+            (
+                ClientError::DesktopUnavailable,
+                "Muniment cannot reach its background service.",
+            ),
+        ] {
+            local.refusal = Some((error, None));
+            assert_eq!(
+                forward(
+                    None,
+                    "agent.replays",
+                    serde_json::json!({"id": "a"}),
+                    connect(&local, &paired)
+                )
+                .unwrap_err(),
+                line
+            );
+        }
+    }
+
+    #[test]
     fn a_request_goes_to_the_runtime_it_names() {
         let local = recorder("local");
         let paired = recorder("box");
@@ -599,5 +656,20 @@ mod tests {
         ] {
             assert_eq!(agent_operation(name), Some(operation));
         }
+    }
+
+    #[test]
+    fn an_agents_threads_leave_out_the_threads_deleted_here() {
+        let answer = serde_json::json!({"threads": [
+            {"thread_id": "kept", "title": "Kept", "primary": true},
+            {"thread_id": "gone", "title": "Gone", "primary": false}
+        ]});
+        let deleted = std::collections::HashSet::from(["gone".to_owned()]);
+        assert_eq!(
+            without_deleted_threads(answer, &deleted),
+            serde_json::json!({"threads": [{"thread_id": "kept", "title": "Kept", "primary": true}]})
+        );
+        let other = serde_json::json!({"agents": []});
+        assert_eq!(without_deleted_threads(other.clone(), &deleted), other);
     }
 }

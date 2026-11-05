@@ -383,6 +383,7 @@ fn chat_snapshot_frames_keep_every_tool_and_the_terminal_phase() {
     let event = crate::run_events::ChatEvent {
         run_id: RUN.into(),
         thread_id: Some(profile.thread.clone()),
+        started_at: None,
         phase: "complete".into(),
         text: "Synthetic reply".into(),
         prompt_accepted: true,
@@ -489,6 +490,7 @@ fn the_chat_subscription_carries_sign_in_steps_beside_chat_events() {
     let event = crate::run_events::ChatEvent {
         run_id: RUN.into(),
         thread_id: None,
+        started_at: None,
         phase: "running".into(),
         text: "Synthetic reply".into(),
         prompt_accepted: true,
