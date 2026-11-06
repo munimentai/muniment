@@ -635,6 +635,14 @@ impl ModelService {
                     &data.id,
                 )
             }
+            ModelAction::MemoryFactPurge => {
+                let data: MemoryFactId = parse(data)?;
+                memory::fact_purge(
+                    &self.state_directory,
+                    memory::Scope { agent: data.agent },
+                    &data.id,
+                )
+            }
             ModelAction::MemoryRecallSettings => {
                 parse::<Empty>(data)?;
                 memory::recall_settings(&self.state_directory)
@@ -1464,6 +1472,33 @@ mod tests {
         )
         .unwrap();
         assert!(home.join(format!("memory/facts/{id}.md")).is_file());
+        run(
+            ModelAction::MemoryFactDelete,
+            serde_json::json!({"id": id}),
+            true,
+        )
+        .unwrap();
+        run(
+            ModelAction::MemoryFactPurge,
+            serde_json::json!({"id": id}),
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            run(
+                ModelAction::MemoryDeletedFacts,
+                serde_json::json!({}),
+                false
+            )
+            .unwrap(),
+            serde_json::json!([])
+        );
+        assert!(run(
+            ModelAction::MemoryFactRestore,
+            serde_json::json!({"id": id}),
+            true,
+        )
+        .is_err());
         assert!(reason(
             &run(
                 ModelAction::MemoryFacts,

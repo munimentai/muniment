@@ -669,6 +669,7 @@ export function buildProbeCommandTable(fixtureName) {
     if (command === 'memory_fact_delete') { deletedFacts.push(...savedFacts.filter(f => f.id === payload.id)); savedFacts = savedFacts.filter(f => f.id !== payload.id); return null }
     if (command === 'memory_deleted_facts') return structuredClone(deletedFacts)
     if (command === 'memory_fact_restore') { savedFacts.push(...deletedFacts.filter(f => f.id === payload.id)); deletedFacts = deletedFacts.filter(f => f.id !== payload.id); return null }
+    if (command === 'memory_fact_purge') { deletedFacts = deletedFacts.filter(f => f.id !== payload.id); return null }
     // Suggested changes wait only while Ask before saving is on. The one
     // marked stale fails to apply, as a proposal does when its fact changed.
     if (command === 'memory_pending') return recallSettings?.ask ? structuredClone(pendingChanges.map(({ stale, ...proposal }) => proposal)) : []
@@ -692,6 +693,7 @@ export function buildProbeCommandTable(fixtureName) {
       if (payload.action === 'memory_fact_save') { const fact = JSON.parse(JSON.stringify({ ...payload.fact, id: payload.fact.id || crypto.randomUUID() })); data.facts = [...data.facts.filter(item => item.id !== fact.id), fact]; return fact }
       if (payload.action === 'memory_fact_delete') { data.deleted.push(...data.facts.filter(item => item.id === payload.factId)); data.facts = data.facts.filter(item => item.id !== payload.factId); return null }
       if (payload.action === 'memory_fact_restore') { data.facts.push(...data.deleted.filter(item => item.id === payload.factId)); data.deleted = data.deleted.filter(item => item.id !== payload.factId); return null }
+      if (payload.action === 'memory_fact_purge') { data.deleted = data.deleted.filter(item => item.id !== payload.factId); return null }
     }
     if (command === 'agent_export_template') return true
     // Core's `settings.scope` answers from its protocol fixture on every page.

@@ -2520,7 +2520,7 @@ mod tests {
         let agent = list(&profile).unwrap().agents.remove(0);
         let routine = &agent.routines[0];
         assert_eq!(routine.id, "extract-cc22420970616a65");
-        assert_eq!(routine.name, "Search for recent Tauri news and deliver a…");
+        assert_eq!(routine.name, "Search for recent Tauri news and deliver a");
         assert_eq!(routine.prompt, format!("{cut}."));
         assert!(routine.cut_short);
         // A save that keeps the prompt keeps the mark, and a toggle is no edit.

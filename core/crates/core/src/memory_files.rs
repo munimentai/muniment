@@ -788,6 +788,19 @@ pub fn fact_restore_in(profile: &Path, home: &Path, id: &str) -> Result<(), Stri
     fs::remove_file(source).map_err(|_| "The deleted copy could not be removed.".into())
 }
 
+/// Removes a deleted memory for good: its recovery file goes, and nothing
+/// can restore it.
+pub fn fact_purge(profile: &Path, id: &str) -> Result<(), String> {
+    let _guard = WRITE.lock().map_err(|_| "Memory is busy.")?;
+    let _file_lock = lock(profile)?;
+    fact_path(id)?;
+    let source = checked_path(profile, &format!("memory-trash/{id}.md"))?;
+    if !source.is_file() {
+        return Err("The deleted memory does not exist.".into());
+    }
+    fs::remove_file(source).map_err(|_| "The deleted memory could not be removed.".into())
+}
+
 /// The deepest folder inside `<Home>/memory` fleet sync reads.
 const SYNC_DEPTH: usize = 4;
 
@@ -1043,6 +1056,32 @@ mod tests {
         fact_restore(&profile, &saved.id).unwrap();
         assert_eq!(facts(&profile).unwrap().len(), 1);
         assert!(deleted_facts(&profile).unwrap().is_empty());
+        // A deleted memory removed for good leaves no copy to restore, and
+        // the purge reaches only the recovery folder.
+        fact_delete(&profile, &saved.id).unwrap();
+        assert!(fact_purge(&profile, "../memory-files.lock").is_err());
+        fact_purge(&profile, &saved.id).unwrap();
+        assert!(deleted_facts(&profile).unwrap().is_empty());
+        assert!(facts(&profile).unwrap().is_empty());
+        assert!(!profile
+            .join(format!("memory-trash/{}.md", saved.id))
+            .exists());
+        assert!(fact_restore(&profile, &saved.id).is_err());
+        assert!(fact_purge(&profile, &saved.id).is_err());
+        let active = fact_save(
+            &profile,
+            Fact {
+                id: String::new(),
+                title: "Kept".into(),
+                content: "Stays.".into(),
+                source: "settings".into(),
+                trust: Trust::User,
+                origin: None,
+            },
+        )
+        .unwrap();
+        assert!(fact_purge(&profile, &active.id).is_err());
+        assert_eq!(facts(&profile).unwrap().len(), 1);
         fs::remove_dir_all(root).unwrap();
     }
 

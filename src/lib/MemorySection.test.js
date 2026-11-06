@@ -195,6 +195,27 @@ it('lists deleted facts as compact rows with Restore in the details', async () =
   await waitFor(() => expect(invoke).toHaveBeenCalledWith('memory_fact_restore', { id: 'd1' }))
 })
 
+it('deletes a deleted fact for good only after its confirm', async () => {
+  const invoke = setup(many(2), [{ id: 'd1', title: 'Old fact', content: 'Gone.', source: 'Added in settings', trust: 'user' }, { id: 'd2', title: 'Older fact', content: 'Long gone.', source: 'Added in settings', trust: 'user' }])
+  await screen.findByRole('button', { name: 'Fact 1 Added by you' })
+  await fireEvent.click(screen.getByRole('button', { name: 'Deleted memories' }))
+  const deleted = await screen.findByRole('list', { name: 'Deleted memories' })
+  await fireEvent.click(within(deleted).getByRole('button', { name: 'Old fact Added by you' }))
+  await fireEvent.click(screen.getByRole('button', { name: 'Delete Old fact now' }))
+  expect(invoke).not.toHaveBeenCalledWith('memory_fact_purge', expect.anything())
+  // Cancel keeps the memory and its Restore.
+  await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+  expect(screen.getByRole('button', { name: 'Restore Old fact' })).toBeInTheDocument()
+  await fireEvent.click(screen.getByRole('button', { name: 'Delete Old fact now' }))
+  const confirm = screen.getByRole('button', { name: 'Confirm delete now' })
+  expect(confirm).toHaveAttribute('data-variant', 'danger')
+  await fireEvent.click(confirm)
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('memory_fact_purge', { id: 'd1' }))
+  await waitFor(() => expect(within(deleted).queryByRole('button', { name: 'Old fact Added by you' })).not.toBeInTheDocument())
+  expect(within(deleted).getByRole('button', { name: 'Older fact Added by you' })).toBeInTheDocument()
+  expect(await screen.findByText('Memory deleted for good.')).toBeInTheDocument()
+})
+
 it('adds a memory from a dialog and opens the new fact in the list', async () => {
   const invoke = setup(many(120))
   await screen.findByRole('button', { name: 'Fact 1 Added by you' })

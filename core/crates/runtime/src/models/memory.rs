@@ -74,6 +74,11 @@ pub(super) fn fact_restore(profile: &Path, scope: Scope, id: &str) -> Result<Val
     memory_files::fact_restore_in(&private, &home, id).map(|()| Value::Null)
 }
 
+pub(super) fn fact_purge(profile: &Path, scope: Scope, id: &str) -> Result<Value, String> {
+    let (_, private) = roots(profile, &scope)?;
+    memory_files::fact_purge(&private, id).map(|()| Value::Null)
+}
+
 /// The stored recall settings, or null before the user saves any.
 pub(super) fn recall_settings(profile: &Path) -> Result<Value, String> {
     memory_files::recall_settings_stored(profile)

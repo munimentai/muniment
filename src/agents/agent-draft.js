@@ -65,15 +65,26 @@ export function formProblem(form) {
 // which keeps that draft's id once saved, and the newest one drops is the
 // chat's own change, and it goes. A routine core proposed or the user
 // accepted at an earlier draft's time has its own id, and it stays.
-// A drafted routine keeps its id while its trigger and prompt stay, so a
-// saved routine with that id is the drafted one as the person left it in the
-// profile: on or off, renamed or edited. The saved one goes in its place,
-// unless the newest draft changed it from the earlier draft that named it.
-// A test save sends every drafted routine off.
+// A drafted routine is a saved one as the person left it in the profile, on
+// or off, renamed or edited, when it has the saved one's id, or the saved
+// one's trigger and a prompt with mostly the same words as the saved one or
+// the earlier draft that named it. Core makes the id from the trigger and the
+// prompt, so a draft that rewrites the instructions can give the same routine
+// a new id. The saved one goes in its place, unless the newest draft changed
+// it from the earlier draft with its id. A test save sends every drafted
+// routine off.
 export function draftAgent(form, { saved = null, test = false, projectId = null, earlier = [] } = {}) {
   const before = (routine) => earlier.findLast((other) => other.id === routine.id)
   const redrafted = (routine) => !!before(routine) && draftShape(before(routine)) !== draftShape(routine)
-  const own = (routine) => !test && !!routine.id && !redrafted(routine) ? (saved?.routines ?? []).find((other) => other.id === routine.id && !other.proposed) : null
+  const mine = (saved?.routines ?? []).filter((other) => !other.proposed)
+  const same = (routine, other) => sameTrigger(other.trigger, routine.trigger) && (similar(other.prompt, routine.prompt) || earlier.some((was) => was.id === other.id && similar(was.prompt, routine.prompt)))
+  const taken = new Set()
+  const own = (routine) => {
+    if (test || !routine.id || redrafted(routine)) return null
+    const found = mine.find((other) => other.id === routine.id && !taken.has(other)) ?? mine.find((other) => !taken.has(other) && same(routine, other))
+    if (found) taken.add(found)
+    return found ?? null
+  }
   const drafted = form.routines.map((routine) => own(routine) ?? { ...routine, enabled: test ? false : routine.enabled, proposed: false })
   const named = (routine, list) => list.some((other) => (!!routine.id && other.id === routine.id) || sameTrigger(other.trigger, routine.trigger))
   const drafts = (routine) => !!routine.id && earlier.some((other) => other.id === routine.id)
@@ -101,6 +112,16 @@ export function draftAgent(form, { saved = null, test = false, projectId = null,
 // empty arguments.
 const routineShape = (routine) => JSON.stringify([routine.name ?? '', routine.prompt ?? '', canonical(triggerShape(routine.trigger ?? null)), routine.enabled !== false, !!routine.proposed && routine.enabled === false])
 const draftShape = (routine) => JSON.stringify([routine.name ?? '', routine.prompt ?? '', canonical(triggerShape(routine.trigger ?? null))])
+// Two prompts are alike when at least half of all their words are in both,
+// whatever the case and punctuation.
+const promptWords = (text) => new Set(String(text ?? '').toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])
+function similar(left, right) {
+  const a = promptWords(left)
+  const b = promptWords(right)
+  const both = [...a].filter((word) => b.has(word)).length
+  const all = new Set([...a, ...b]).size
+  return all > 0 && both * 2 >= all
+}
 const sameTrigger = (left, right) => !!left && !!right && JSON.stringify(canonical(triggerShape(left))) === JSON.stringify(canonical(triggerShape(right)))
 function triggerShape(trigger) {
   if (trigger?.kind === 'webhook') {

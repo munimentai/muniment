@@ -176,6 +176,7 @@
     "allow-memory-facts",
     "allow-memory-fact-save",
     "allow-memory-fact-delete",
+    "allow-memory-fact-purge",
     "allow-memory-deleted-facts",
     "allow-memory-fact-restore",
     "allow-memory-pending",

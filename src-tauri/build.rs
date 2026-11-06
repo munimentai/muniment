@@ -163,6 +163,7 @@ const APP_COMMANDS: &[&str] = &[
     "memory_fact_delete",
     "memory_deleted_facts",
     "memory_fact_restore",
+    "memory_fact_purge",
     "memory_pending",
     "memory_pending_apply",
     "memory_pending_dismiss",

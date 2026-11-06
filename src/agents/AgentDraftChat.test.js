@@ -301,6 +301,33 @@ it('rests Save changes on a reopened chat after the profile turns a drafted rout
   expect(body.routines[0].proposed).toBeFalsy()
 })
 
+// A rename in the chat rewrites the instructions, so core drafts the same
+// routine again with a new id and reworded prompt.
+it('keeps a routine the profile turned off when a chat rename drafts it again with a new id, and Save keeps it off with its id', async () => {
+  const { tauri, requests } = runtime()
+  const off = { ...draft.routines[0], enabled: false, last_fired_at: null, last_result: null, next_fire_at: null }
+  const stored = { ...draftAgent(draftForm(draft)), id: 'agent-7', permissions: { mode: 'manual' }, avatar: { style: 'muniment', seed: 'seed' }, routines: [off] }
+  const read = tauri.invoke.getMockImplementation()
+  tauri.invoke.mockImplementation(async (command, payload) => payload.operation === 'agent.read' ? { agent: stored } : read(command, payload))
+  const first = turn('Summarize my inbox')
+  const { rerender } = render(AgentDraftChat, { tauri, agentId: 'agent-7', turns: [first] })
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled())
+  const again = { ...draft.routines[0], id: 'extract-f87b67f26860cc0a', name: 'Summarize the new email in the inbox', prompt: 'Summarize the new email in the inbox.' }
+  const renamed = { ...draft, name: 'Live47 Renamed', instructions: 'As Live47 Renamed, summarize the new email in my inbox and list what needs a reply.', routines: [again] }
+  await rerender({ turns: [first, { ...turn('Rename it Live47 Renamed, keep everything else', { draft: renamed, question: null, via: 'router' }), at: '2026-10-19T10:05:00Z' }] })
+  await fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+  await waitFor(() => expect(requests.some((request) => request.operation === 'agent.save')).toBe(true))
+  const body = requests.find((request) => request.operation === 'agent.save').body.agent
+  expect(body.name).toBe('Live47 Renamed')
+  expect(body.routines).toEqual([off])
+  // The saved agent then reads as the chat's newest draft.
+  expect(sameAgent(draftAgent(draftForm(renamed), { saved: body, earlier: draft.routines }), body)).toBe(true)
+  // A draft that gives the trigger other work is the chat's change: it saves on, in the saved one's place.
+  const recap = { ...again, id: 'extract-77', name: 'Post a recap of the week', prompt: 'Post a recap of the week.' }
+  const changed = draftAgent(draftForm({ ...renamed, routines: [recap] }), { saved: body, earlier: draft.routines })
+  expect(changed.routines).toEqual([{ ...recap, enabled: true, proposed: false }])
+})
+
 it('keeps a profile edit of a drafted routine until the newest draft changes that routine', () => {
   const edited = { ...draft.routines[0], name: 'Morning inbox', enabled: false }
   const saved = { ...draftAgent(draftForm(draft)), id: 'agent-7', routines: [edited] }
